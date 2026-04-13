@@ -1,0 +1,29 @@
+distillation:
+  student_weight: ''
+  teacher_weight: ''
+  alpha_init: 0.45
+  T_max: 6
+  T_min: 1.5
+  warm_epochs: 5
+  w_kd: 0.5
+  w_focal: 0.3
+  w_feat: 0
+  scale_boost: 2
+  focal_gamma: 2
+training:
+  data_yaml: ''
+  device: '0'
+  epochs: 150
+  imgsz: 640
+  batch: -1
+  workers: 8
+  lr0: 0.01
+  lrf: 0.1
+  warmup_epochs: 3
+  mosaic: 0.8
+  mixup: 0.1
+  close_mosaic: 20
+  amp: true
+output:
+  project: runs/distill
+  name: adaptive_kd_v1

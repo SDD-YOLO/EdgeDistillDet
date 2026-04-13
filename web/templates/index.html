@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EdgeDistillDet - 训练控制台</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    
+    <!-- Main Stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <!-- App Bar (Header) -->
+    <header class="md-app-bar">
+        <div class="app-bar-content">
+            <span class="material-icons app-icon">radar</span>
+            <h1 class="app-title">EdgeDistillDet</h1>
+            <span class="app-subtitle">边缘蒸馏训练工作台</span>
+            <div class="app-bar-spacer"></div>
+            
+            <!-- Theme Toggle Button -->
+            <button class="theme-toggle" onclick="toggleTheme()" title="切换明暗主题" aria-label="切换主题">
+                <span class="material-icons icon-sun">light_mode</span>
+                <span class="material-icons icon-moon">dark_mode</span>
+            </button>
+            
+            <div id="connection-status" class="status-indicator online">
+                <span class="status-dot"></span>
+                <span>服务正常</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="md-main">
+        <!-- Tabs Navigation (Pure HTML, no web components) -->
+        <nav class="tab-nav" id="main-tabs" role="tablist">
+            <button class="tab-btn active" role="tab" data-tab="training" onclick="switchTab('training')" aria-selected="true">
+                <span class="material-icons tab-icon">tune</span>
+                训练配置
+            </button>
+            <button class="tab-btn" role="tab" data-tab="metrics" onclick="switchTab('metrics')" aria-selected="false">
+                <span class="material-icons tab-icon">analytics</span>
+                指标监控
+            </button>
+            <button class="tab-btn" role="tab" data-tab="agent" onclick="switchTab('agent')" aria-selected="false">
+                <span class="material-icons tab-icon">smart_toy</span>
+                AI Agent
+            </button>
+        </nav>
+
+        <!-- Tab Panels -->
+        <div class="tab-panels">
+            <!-- ==================== TRAINING CONFIG PANEL ==================== -->
+            <div id="panel-training" class="tab-panel active">
+                
+                <!-- Training Mode Selection & Start Area -->
+                <section class="train-launcher">
+                    <div class="launch-info">
+                        <div class="launch-header">
+                            <h2><span class="material-icons">rocket_launch</span> 训练控制台</h2>
+                            <span id="launch-status-badge" class="badge idle">就绪</span>
+                        </div>
+                        <p class="launch-desc">配置参数后选择训练模式并启动训练任务</p>
+                    </div>
+                    
+                    <div class="launch-modes">
+                        <label class="mode-option selected">
+                            <input type="radio" name="train-mode" value="full" checked>
+                            <div class="mode-card">
+                                <span class="material-icons mode-icon">play_circle</span>
+                                <div class="mode-text">
+                                    <strong>完整蒸馏训练</strong>
+                                    <span>标准知识蒸馏 + 超参优化，推荐首次训练使用</span>
+                                </div>
+                            </div>
+                        </label>
+                        
+                        <label class="mode-option">
+                            <input type="radio" name="train-mode" value="resume">
+                            <div class="mode-card">
+                                <span class="material-icons mode-icon">restart_alt</span>
+                                <div class="mode-text">
+                                    <strong>断点续训</strong>
+                                    <span>从上次检查点恢复训练进度</span>
+                                </div>
+                            </div>
+                        </label>
+                        
+                        <label class="mode-option">
+                            <input type="radio" name="train-mode" value="fast">
+                            <div class="mode-card">
+                                <span class="material-icons mode-icon">bolt</span>
+                                <div class="mode-text">
+                                    <strong>快速验证训练</strong>
+                                    <span>减少 epochs 用于快速验证配置是否正确</span>
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <div class="launch-actions">
+                        <button id="btn-start-training" class="btn-start" onclick="startTraining()">
+                            <span class="material-icons">play_arrow</span>
+                            开始训练
+                        </button>
+                        <button id="btn-stop-training" class="btn-stop" onclick="stopTraining()" disabled>
+                            <span class="material-icons">stop</span>
+                            停止训练
+                        </button>
+                        <button class="md-btn md-btn-tonal" onclick="loadConfig()">
+                            <span class="material-icons">file_open</span>
+                            加载配置
+                        </button>
+                        <button class="md-btn md-btn-outlined" onclick="saveConfig()">
+                            <span class="material-icons">save</span>
+                            保存配置
+                        </button>
+                        <button class="md-btn md-btn-text" onclick="resetForm()">
+                            <span class="material-icons">refresh</span>
+                            重置表单
+                        </button>
+                    </div>
+                </section>
+
+                <div class="panel-grid">
+                    <!-- Left: Config Form -->
+                    <div class="config-section">
+                        <h2 class="section-title">
+                            <span class="material-icons">settings_suggest</span>
+                            蒸馏训练参数
+                        </h2>
+
+                        <!-- Model Weights Card -->
+                        <div class="config-card">
+                            <h3 class="card-header">模型权重</h3>
+                            <div class="form-row">
+                                <div class="form-group flex-2">
+                                    <label>学生模型权重</label>
+                                    <div class="file-input-wrapper">
+                                        <input type="text" id="student-weight" 
+                                               placeholder="选择或输入学生模型 .pt 文件路径"
+                                               class="md-input">
+                                        <label class="file-picker-label" onclick="triggerFilePicker('student-weight', '.pt,.pth')" title="浏览文件">
+                                            <span class="material-icons">folder_open</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="form-group flex-2">
+                                    <label>教师模型权重</label>
+                                    <div class="file-input-wrapper">
+                                        <input type="text" id="teacher-weight" 
+                                               placeholder="选择或输入教师模型 .pt 文件路径"
+                                               class="md-input">
+                                        <label class="file-picker-label" onclick="triggerFilePicker('teacher-weight', '.pt,.pth')" title="浏览文件">
+                                            <span class="material-icons">folder_open</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Distillation Parameters Card -->
+                        <div class="config-card">
+                            <h3 class="card-header">蒸馏核心参数</h3>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="alpha-init">初始 Alpha 权重</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="alpha-init" min="0.2" max="0.8" step="any" value="0.5"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="alpha-init-val">0.50</span>
+                                    </div>
+                                    <small class="hint">动态调节范围 0.2 ~ 0.8</small>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="t-max">温度上限 T_max</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="t-max" min="2" max="10" step="any" value="6"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="t-max-val">6.0</span>
+                                    </div>
+                                    <small class="hint">余弦退火温度上限</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="t-min">温度下限 T_min</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="t-min" min="0.5" max="4" step="any" value="1.5"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="t-min-val">1.5</span>
+                                    </div>
+                                    <small class="hint">余弦退火温度下限</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="warm-epochs">预热轮数</label>
+                                    <input type="number" id="warm-epochs" value="5" min="0" max="20" 
+                                           class="md-input">
+                                    <small class="hint">预热期间仅任务损失，不进行蒸馏</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="w-kd">KD 损失权重 w_kd</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="w-kd" min="0" max="1" step="any" value="0.5"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="w-kd-val">0.50</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="w-focal">Focal KD 权重 w_focal</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="w-focal" min="0" max="1" step="any" value="0.3"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="w-focal-val">0.30</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="w-feat">特征对齐权重 w_feat</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="w-feat" min="0" max="1" step="any" value="0"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="w-feat-val">0.00</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="scale-boost">小目标增强系数</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="scale-boost" min="1" max="5" step="any" value="2"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="scale-boost-val">2.0</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="focal-gamma">Focal Gamma 参数</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="focal-gamma" min="0.5" max="5" step="any" value="2"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="focal-gamma-val">2.0</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Training Hyperparameters Card -->
+                        <div class="config-card">
+                            <h3 class="card-header">训练超参数</h3>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="data-yaml">数据集配置文件</label>
+                                    <div class="file-input-wrapper">
+                                        <input type="text" id="data-yaml" 
+                                               placeholder="选择或输入 data.yaml 路径"
+                                               class="md-input">
+                                        <label class="file-picker-label" onclick="triggerFilePicker('data-yaml', '.yaml')" title="浏览文件">
+                                            <span class="material-icons">folder_open</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="device">设备</label>
+                                    <select id="device" class="md-select">
+                                        <option value="0">GPU 0</option>
+                                        <option value="1">GPU 1</option>
+                                        <option value="cpu">CPU</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="epochs">训练轮数 Epochs</label>
+                                    <input type="number" id="epochs" value="150" min="1" max="1000" 
+                                           class="md-input">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="imgsz">图像尺寸 imgsz</label>
+                                    <select id="imgsz" class="md-select">
+                                        <option value="320">320</option>
+                                        <option value="416">416</option>
+                                        <option value="512">512</option>
+                                        <option value="640" selected>640</option>
+                                        <option value="1280">1280</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="batch-size">Batch Size</label>
+                                    <input type="number" id="batch-size" value="-1" 
+                                           class="md-input">
+                                    <small class="hint">-1 为自动选择</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="workers">数据加载线程数</label>
+                                    <input type="number" id="workers" value="8" min="0" max="32" 
+                                           class="md-input">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="lr0">初始学习率 lr0</label>
+                                    <input type="number" id="lr0" value="0.01" step="0.001" 
+                                           class="md-input">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="lrf">最终学习率因子 lrf</label>
+                                    <input type="number" id="lrf" value="0.1" step="0.01" 
+                                           class="md-input">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="warmup-lr-epochs">学习率预热轮数</label>
+                                    <input type="number" id="warmup-lr-epochs" value="3" min="0" max="10" step="0.5"
+                                           class="md-input">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="mosaic">Mosaic 增强概率</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="mosaic" min="0" max="1" step="any" value="0.8"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="mosaic-val">0.80</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="mixup">Mixup 增强概率</label>
+                                    <div class="slider-with-value">
+                                        <input type="range" id="mixup" min="0" max="0.5" step="any" value="0.1"
+                                               class="md-slider" oninput="updateSliderValue(this)">
+                                        <span class="slider-value" id="mixup-val">0.10</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="close-mosaic">关闭 Mosaic 的 epoch</label>
+                                    <input type="number" id="close-mosaic" value="20" min="0" max="100"
+                                           class="md-input">
+                                    <small class="hint">数据增强强度随 epoch 递减</small>
+                                </div>
+
+                                <div class="form-group switch-group">
+                                    <label>AMP 混合精度训练</label>
+                                    <label class="md-switch">
+                                        <input type="checkbox" id="amp" checked>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Output Config Card -->
+                        <div class="config-card">
+                            <h3 class="card-header">输出配置</h3>
+                            <div class="form-grid cols-2">
+                                <div class="form-group">
+                                    <label for="project">项目目录</label>
+                                    <input type="text" id="project" value="runs/distill" class="md-input">
+                                </div>
+                                <div class="form-group">
+                                    <label for="run-name">运行名称</label>
+                                    <input type="text" id="run-name" value="adaptive_kd_v1" class="md-input">
+                                </div>
+                            </div>
+                        </div>
+
+
+                    </div>
+
+                    <!-- Right: Training Log Panel -->
+                    <div class="log-section">
+                        <div class="log-card">
+                            <div class="log-header">
+                                <h3>
+                                    <span class="material-icons">terminal</span>
+                                    训练日志
+                                </h3>
+                                <div class="log-controls">
+                                    <span id="train-status-badge" class="badge idle">空闲</span>
+                                    <button class="btn-icon-sm" onclick="clearLogs()" title="清空日志">
+                                        <span class="material-icons">delete_outline</span>
+                                    </button>
+                                    <button class="btn-icon-sm" onclick="toggleAutoScroll()" id="autoscroll-btn" title="自动滚动">
+                                        <span class="material-icons">vertical_align_bottom</span>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- Progress Bar -->
+                            <div id="training-progress" class="progress-container" style="display: none;">
+                                <div class="progress-bar-wrapper">
+                                    <div class="progress-bar" id="progress-bar"></div>
+                                </div>
+                                <div class="progress-info">
+                                    <span id="epoch-info">Epoch: - / -</span>
+                                    <span id="elapsed-time">耗时: --:--:--</span>
+                                </div>
+                            </div>
+
+                            <!-- Log Output -->
+                            <div id="log-container" class="log-container">
+                                <div class="log-line info">[系统] 等待开始训练...</div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Stats Cards -->
+                        <div class="quick-stats" id="quick-stats" style="display: none;">
+                            <div class="stat-card">
+                                <span class="stat-label">当前 Loss</span>
+                                <span class="stat-value" id="stat-loss">--</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">mAP50</span>
+                                <span class="stat-value" id="stat-map50">--</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">mAP50-95</span>
+                                <span class="stat-value" id="stat-map95">--</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">学习率</span>
+                                <span class="stat-value" id="stat-lr">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==================== METRICS MONITOR PANEL ==================== -->
+            <div id="panel-metrics" class="tab-panel">
+                <div class="metrics-toolbar">
+                    <div class="toolbar-left">
+                        <button class="md-btn md-btn-outlined" onclick="refreshMetrics()">
+                            <span class="material-icons">refresh</span>
+                            刷新数据
+                        </button>
+                        <select id="metrics-source" class="md-select" onchange="loadMetricsData()">
+                            <option value="">选择数据源...</option>
+                        </select>
+                    </div>
+                    <div class="toolbar-right">
+                        <div class="chip-group">
+                            <button class="chip active" onclick="setChartType('loss')">损失</button>
+                            <button class="chip" onclick="setChartType('accuracy')">精度</button>
+                            <button class="chip" onclick="setChartType('lr')">学习率</button>
+                            <button class="chip" onclick="setChartType('all')">全部</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Overview Stats -->
+                <div class="metrics-overview" id="metrics-overview">
+                    <div class="overview-card">
+                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-success), #4CAF50);">
+                            <span class="material-icons">trending_up</span>
+                        </div>
+                        <div class="overview-info">
+                            <span class="overview-label">最佳 mAP@50</span>
+                            <span class="overview-value" id="ov-map50">--</span>
+                        </div>
+                    </div>
+                    <div class="overview-card">
+                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-primary), #9C27B0);">
+                            <span class="material-icons">speed</span>
+                        </div>
+                        <div class="overview-info">
+                            <span class="overview-label">推理 FPS (GPU)</span>
+                            <span class="overview-value" id="ov-fps">--</span>
+                        </div>
+                    </div>
+                    <div class="overview-card">
+                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-warning), #FF9800);">
+                            <span class="material-icons">memory</span>
+                        </div>
+                        <div class="overview-info">
+                            <span class="overview-label">模型参数量</span>
+                            <span class="overview-value" id="ov-params">--</span>
+                        </div>
+                    </div>
+                    <div class="overview-card">
+                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-info), #2196F3);">
+                            <span class="material-icons">timer</span>
+                        </div>
+                        <div class="overview-info">
+                            <span class="overview-label">训练总耗时</span>
+                            <span class="overview-value" id="ov-time">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="charts-grid">
+                    <div class="chart-card wide">
+                        <div class="chart-header">
+                            <h3>训练损失曲线</h3>
+                            <div class="chart-actions">
+                                <select id="loss-range-select" class="md-select mini-select" onchange="updateLossRange()">
+                                    <option value="all">全部 Epochs</option>
+                                    <option value="last30">最近 30</option>
+                                    <option value="last10">最近 10</option>
+                                </select>
+                                <button class="btn-icon-sm" onclick="exportChart('loss-chart')">
+                                    <span class="material-icons">download</span>
+                                </button>
+                                <button class="btn-icon-sm" onclick="zoomChart('loss-chart')">
+                                    <span class="material-icons">fullscreen</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="chart-body">
+                            <canvas id="loss-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3>mAP 曲线</h3>
+                            <div class="chart-actions">
+                                <button class="btn-icon-sm" onclick="exportChart('map-chart')">
+                                    <span class="material-icons">download</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="chart-body">
+                            <canvas id="map-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3>学习率变化</h3>
+                            <div class="chart-actions">
+                                <button class="btn-icon-sm" onclick="exportChart('lr-chart')">
+                                    <span class="material-icons">download</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="chart-body">
+                            <canvas id="lr-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card wide">
+                        <div class="chart-header">
+                            <h3>蒸馏指标 (Alpha/Temperature 动态变化)</h3>
+                            <div class="chart-actions">
+                                <button class="btn-icon-sm" onclick="exportChart('distill-chart')">
+                                    <span class="material-icons">download</span>
+                                </button>
+                                <button class="btn-icon-sm" onclick="zoomChart('distill-chart')">
+                                    <span class="material-icons">fullscreen</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="chart-body">
+                            <canvas id="distill-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>Precision-Recall 曲线</h3></div>
+                        <div class="chart-body"><canvas id="pr-chart"></canvas></div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>各类别性能分布</h3></div>
+                        <div class="chart-body"><canvas id="class-chart"></canvas></div>
+                    </div>
+
+                    <div class="chart-card full-width">
+                        <div class="chart-header">
+                            <h3>训练结果摘要</h3>
+                            <div class="chart-actions">
+                                <button class="md-btn md-btn-tonal sm-btn" onclick="exportTable()">
+                                    <span class="material-icons">table_chart</span>
+                                    导出表格
+                                </button>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table id="results-table" class="md-table">
+                                <thead>
+                                    <tr>
+                                        <th>指标</th>
+                                        <th>最佳值</th>
+                                        <th>最终值</th>
+                                        <th>改善幅度</th>
+                                        <th>趋势</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="results-tbody">
+                                    <tr><td colspan="5" class="empty-hint">暂无数据，请先完成一次训练</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="auto-refresh-bar">
+                    <label class="auto-refresh-label">
+                        <input type="checkbox" id="auto-refresh-toggle" onchange="toggleAutoRefresh(this)">
+                        自动刷新图表数据
+                    </label>
+                    <span class="auto-refresh-interval" id="refresh-timer">--</span>
+                </div>
+            </div>
+
+            <!-- ==================== AGENT PANEL ==================== -->
+            <div id="panel-agent" class="tab-panel">
+                <div class="agent-layout">
+                    <!-- Agent Action Sidebar -->
+                    <div class="agent-sidebar">
+                        <h3 class="sidebar-title">
+                            <span class="material-icons">auto_awesome</span>
+                            Agent 功能面板
+                        </h3>
+                        
+                        <div class="agent-actions-list">
+                            <div class="agent-action-card" onclick="callAgentAction('auto_tune')">
+                                <span class="material-icons action-icon">tune</span>
+                                <div class="action-info">
+                                    <span class="action-name">自动超参数调优</span>
+                                    <span class="action-desc">基于贝叶斯优化自动搜索最优参数组合</span>
+                                </div>
+                                <span class="material-icons arrow">chevron_right</span>
+                            </div>
+
+                            <div class="agent-action-card" onclick="callAgentAction('analyze_result')">
+                                <span class="material-icons action-icon">insights</span>
+                                <div class="action-info">
+                                    <span class="action-name">训练结果分析</span>
+                                    <span class="action-desc">深度分析训练曲线、异常点与改进建议</span>
+                                </div>
+                                <span class="material-icons arrow">chevron_right</span>
+                            </div>
+
+                            <div class="agent-action-card" onclick="callAgentAction('suggest_config')">
+                                <span class="material-icons action-icon">lightbulb</span>
+                                <div class="action-info">
+                                    <span class="action-name">智能配置推荐</span>
+                                    <span class="action-desc">根据数据集特征自动生成最优配置</span>
+                                </div>
+                                <span class="material-icons arrow">chevron_right</span>
+                            </div>
+
+                            <div class="agent-action-card" onclick="callAgentAction('compare_models')">
+                                <span class="material-icons action-icon">compare_arrows</span>
+                                <div class="action-info">
+                                    <span class="action-name">模型对比分析</span>
+                                    <span class="action-desc">多维度对比不同模型的性能差异</span>
+                                </div>
+                                <span class="material-icons arrow">chevron_right</span>
+                            </div>
+
+                            <div class="agent-note">
+                                <span class="material-icons">info</span>
+                                <span>扩展入口保留在接口层，UI 默认仅展示可用功能。</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Agent Interaction Area -->
+                    <div class="agent-main">
+                        <div class="agent-chat-panel">
+                            <div class="chat-header">
+                                <h3>
+                                    <span class="material-icons">chat</span>
+                                    Agent 对话窗口
+                                </h3>
+                                <div class="chat-controls">
+                                    <button class="btn-icon-sm" onclick="clearAgentChat()">
+                                        <span class="material-icons">delete_sweep</span>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div id="agent-chat-messages" class="chat-messages">
+                                <div class="chat-message agent">
+                                    <div class="message-avatar agent-avatar">
+                                        <span class="material-icons">smart_toy</span>
+                                    </div>
+                                    <div class="message-content">
+                                        <p>你好！我是 EdgeDistillDet AI Agent。</p>
+                                        <p>我可以帮助你：</p>
+                                        <ul>
+                                            <li>自动调优超参数</li>
+                                            <li>分析训练结果并提供建议</li>
+                                            <li>根据数据集智能推荐配置</li>
+                                            <li>对比多个模型的表现</li>
+                                        </ul>
+                                        <p>请在左侧选择一个功能开始，或直接输入你的问题。</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="chat-input-area">
+                                <div class="chat-input-wrapper">
+                                    <textarea id="agent-input" placeholder="输入消息或问题..." rows="1" autocomplete="off" aria-label="聊天输入"></textarea>
+                                    <button class="md-btn md-btn-filled primary send-btn" id="agent-send-btn" type="button">
+                                        <span class="material-icons">send</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Agent Status Panel -->
+                        <div class="agent-status-panel">
+                            <div class="status-header">
+                                <h4>Agent 状态与输出</h4>
+                            </div>
+                            <div id="agent-output" class="agent-output">
+                                <pre id="agent-output-content">// Agent 输出将显示在这里
+// 可用于显示:
+// - 参数调优进度
+// - 分析报告 JSON
+// - 推荐配置预览
+// - 模型对比表格</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Hidden file input for native file picker -->
+    <input type="file" id="hidden-file-input" style="position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none;width:0;height:0;" tabindex="-1" aria-hidden="true">
+
+    <!-- JavaScript -->
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/training.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/metrics.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/agent.js') }}"></script>
+</body>
+</html>

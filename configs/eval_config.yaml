@@ -1,0 +1,32 @@
+# ============================================================
+# EdgeDistillDet — 多设备评估配置
+# configs/eval_config.yaml
+# ============================================================
+
+evaluation:
+  # 待评估权重列表（支持多模型对比）
+  weight_paths:
+    - "F:\Drone_dataset\weight\v5n_native.pt"
+    - "F:\Drone_dataset\weight\26n_ov5.pt"
+
+  test_yaml:    "F:/Drone_dataset/test_data.yaml"
+  imgsz:        640
+
+  # GPU 推理参数
+  run_gpu:      true
+  gpu_batch:    4
+  gpu_repeat:   50           # 重复推理次数（越多 FPS 越稳定）
+
+  # CPU 推理参数
+  run_cpu:      true
+  cpu_batch:    1
+  cpu_repeat:   10
+
+  # 边缘效能评分参考 FPS（GPU 用 30，CPU/边缘用 5）
+  fps_ref:      30.0
+
+  # 用于 FPS 测试的样本数量
+  sample_count: 10
+
+output:
+  csv_path:     "outputs/eval_result.csv"

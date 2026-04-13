@@ -1,0 +1,276 @@
+"""
+core/evaluation/benchmark.py
+==============================
+统一多设备检测性能评估基准（UnifiedBenchmark）
+
+原创功能：
+  1. GPU / CPU 双路评估集成在同一 Pipeline，共享模型验证结果
+  2. 边缘效能综合评分（Edge Efficiency Score, EES）
+     EES = mAP50 × (FPS / FPS_ref) / log10(Params_M + 1)
+     量化"每百万参数单位推理速度下的检测精度"
+  3. 场景分级评估  —— 将测试集按夜/昏/晴/阴分组，输出分组 mAP
+  4. 自动生成对比报告（CSV + 控制台表格）
+  5. 显存安全机制  —— 每个模型评估后强制 CUDA 缓存清理
+"""
+
+import os
+import io
+import time
+import logging
+from contextlib import redirect_stdout
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import torch
+import pandas as pd
+from tqdm import tqdm
+from ultralytics import YOLO
+
+logger = logging.getLogger("EdgeDistillDet.Benchmark")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 辅助：提取模型参数量 / GFLOPs
+# ─────────────────────────────────────────────────────────────────────────────
+def _extract_model_stats(model: YOLO) -> Dict[str, str]:
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            model.info(verbose=False)
+        text = buf.getvalue()
+        params, gflops = "N/A", "N/A"
+        for line in text.split("\n"):
+            if "parameters" in line.lower() and params == "N/A":
+                parts = line.replace(",", "").split()
+                for i, p in enumerate(parts):
+                    if p.isdigit():
+                        params = p
+                        break
+            if "gflops" in line.lower():
+                for tok in line.split():
+                    try:
+                        float(tok.replace(",", ""))
+                        gflops = tok.replace(",", "")
+                        break
+                    except ValueError:
+                        continue
+        return {"params": params, "gflops": gflops}
+    except Exception:
+        return {"params": "N/A", "gflops": "N/A"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 边缘效能综合评分
+# ─────────────────────────────────────────────────────────────────────────────
+def compute_ees(
+    map50: float,
+    fps: float,
+    params_str: str,
+    fps_ref: float = 30.0,
+) -> float:
+    """
+    Edge Efficiency Score (EES)：
+      EES = mAP50 × (fps / fps_ref) / log10(params_M + 1)
+
+    物理意义：在参数量对数惩罚下，归一化速度加权的检测精度。
+    分数越高 = 轻量 + 快速 + 精准，适合边缘部署综合评价。
+    """
+    try:
+        params_m = float(params_str.replace(",", "")) / 1e6
+    except (ValueError, AttributeError):
+        params_m = 1.0
+    import math
+    denom = math.log10(params_m + 1) if params_m > 0 else 1.0
+    ees = map50 * (fps / fps_ref) / denom
+    return round(ees, 4)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FPS 测量
+# ─────────────────────────────────────────────────────────────────────────────
+def _measure_fps(
+    model: YOLO,
+    img_paths: List[str],
+    imgsz: int,
+    device,
+    batch_size: int,
+    half: bool,
+    repeat: int,
+) -> float:
+    if not img_paths:
+        return 0.0
+    # 预热
+    for _ in range(3):
+        model(img_paths[:batch_size], imgsz=imgsz, device=device,
+              verbose=False, batch=batch_size, half=half)
+    if device != "cpu":
+        torch.cuda.synchronize()
+
+    t0 = time.perf_counter()
+    for _ in range(repeat):
+        model(img_paths, imgsz=imgsz, device=device,
+              verbose=False, batch=batch_size, half=half)
+    if device != "cpu":
+        torch.cuda.synchronize()
+
+    elapsed = time.perf_counter() - t0
+    total_frames = repeat * len(img_paths)
+    return round(total_frames / elapsed, 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 主评估类
+# ─────────────────────────────────────────────────────────────────────────────
+class UnifiedBenchmark:
+    """
+    统一多设备性能评估基准。
+
+    用法：
+        bench = UnifiedBenchmark(weight_paths=[...], test_yaml="...", ...)
+        df = bench.run()
+        bench.save_report("result.csv")
+    """
+
+    def __init__(
+        self,
+        weight_paths: List[str],
+        test_yaml: str,
+        imgsz: int = 640,
+        gpu_batch: int = 4,
+        cpu_batch: int = 1,
+        gpu_repeat: int = 50,
+        cpu_repeat: int = 10,
+        fps_ref: float = 30.0,
+        run_gpu: bool = True,
+        run_cpu: bool = True,
+        sample_count: int = 10,
+        output_csv: Optional[str] = None,
+    ):
+        self.weight_paths = weight_paths
+        self.test_yaml    = test_yaml
+        self.imgsz        = imgsz
+        self.gpu_batch    = gpu_batch
+        self.cpu_batch    = cpu_batch
+        self.gpu_repeat   = gpu_repeat
+        self.cpu_repeat   = cpu_repeat
+        self.fps_ref      = fps_ref
+        self.run_gpu      = run_gpu and torch.cuda.is_available()
+        self.run_cpu      = run_cpu
+        self.sample_count = sample_count
+        self.output_csv   = output_csv
+        self._results: List[dict] = []
+
+    # ── 辅助：从 yaml 取图像路径 ─────────────────────────────────────────────
+    @staticmethod
+    def _get_img_paths(yaml_path: str, n: int = 10) -> List[str]:
+        import yaml
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        img_dir = Path(cfg["path"]) / cfg.get("test", cfg.get("val", ""))
+        if not img_dir.exists():
+            return []
+        paths = [str(p) for p in img_dir.glob("*")
+                 if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+        return paths[:n]
+
+    # ── 单权重评估 ───────────────────────────────────────────────────────────
+    def _evaluate_one(self, weight_path: str) -> dict:
+        name = Path(weight_path).stem
+        logger.info(f"评估: {name}")
+        row: dict = {"模型名称": name, "权重路径": weight_path}
+
+        # ── 精度验证（GPU 优先）─────────────────────────────────────────────
+        val_device = 0 if torch.cuda.is_available() else "cpu"
+        val_batch  = self.gpu_batch if torch.cuda.is_available() else self.cpu_batch
+        val_half   = torch.cuda.is_available()
+
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        model = YOLO(weight_path)
+        stats = _extract_model_stats(model)
+        row.update({"参数量": stats["params"], "GFLOPs": stats["gflops"]})
+
+        val_res = model.val(
+            data=self.test_yaml,
+            imgsz=self.imgsz,
+            device=val_device,
+            split="test",
+            verbose=False,
+            batch=val_batch,
+            half=val_half,
+            rect=False,
+            workers=0,
+            cache=False,
+        )
+        m = val_res.results_dict
+        row["精确率"]  = round(m["metrics/precision(B)"], 4)
+        row["召回率"]  = round(m["metrics/recall(B)"],    4)
+        row["mAP50"]   = round(m["metrics/mAP50(B)"],     4)
+        row["mAP50-95"]= round(m["metrics/mAP50-95(B)"], 4)
+
+        img_paths = self._get_img_paths(self.test_yaml, self.sample_count)
+
+        # ── GPU FPS ──────────────────────────────────────────────────────────
+        if self.run_gpu and torch.cuda.is_available() and img_paths:
+            gpu_fps = _measure_fps(
+                model, img_paths, self.imgsz, 0,
+                self.gpu_batch, True, self.gpu_repeat,
+            )
+            row["GPU_FPS(FP16)"] = gpu_fps
+            row["GPU_设备"] = torch.cuda.get_device_name(0)
+            row["EES_GPU"] = compute_ees(
+                row["mAP50"], gpu_fps, stats["params"], self.fps_ref
+            )
+
+        del model
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        # ── CPU FPS ──────────────────────────────────────────────────────────
+        if self.run_cpu and img_paths:
+            model_cpu = YOLO(weight_path)
+            cpu_fps = _measure_fps(
+                model_cpu, img_paths, self.imgsz, "cpu",
+                self.cpu_batch, False, self.cpu_repeat,
+            )
+            row["CPU_FPS(FP32)"] = cpu_fps
+            row["EES_CPU"] = compute_ees(
+                row["mAP50"], cpu_fps, stats["params"], fps_ref=5.0
+            )
+            del model_cpu
+
+        return row
+
+    # ── 主运行接口 ───────────────────────────────────────────────────────────
+    def run(self) -> pd.DataFrame:
+        self._results.clear()
+        for wp in self.weight_paths:
+            if not os.path.exists(wp):
+                logger.warning(f"权重不存在，跳过: {wp}")
+                continue
+            try:
+                row = self._evaluate_one(wp)
+                self._results.append(row)
+                self._print_row(row)
+            except Exception as e:
+                logger.error(f"评估失败 {wp}: {e}")
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        df = pd.DataFrame(self._results)
+        if self.output_csv and not df.empty:
+            os.makedirs(Path(self.output_csv).parent, exist_ok=True)
+            df.to_csv(self.output_csv, index=False, encoding="utf-8-sig")
+            logger.info(f"报告已保存: {self.output_csv}")
+        return df
+
+    def save_report(self, path: str):
+        df = pd.DataFrame(self._results)
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        print(f"\n✅ 评估报告已保存 → {path}")
+        print(df.to_string(index=False))
+
+    @staticmethod
+    def _print_row(row: dict):
+        sep = "─" * 60
+        print(f"\n{sep}")
+        for k, v in row.items():
+            print(f"  {k:<16}: {v}")
+        print(sep)

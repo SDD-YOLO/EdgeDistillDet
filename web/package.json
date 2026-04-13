@@ -1,0 +1,13 @@
+{
+  "name": "edgedistilldet-webui",
+  "version": "1.0.0",
+  "description": "EdgeDistillDet Web UI with Material Design",
+  "main": "app.py",
+  "scripts": {
+    "start": "python app.py"
+  },
+  "dependencies": {
+    "flask": "^3.0.0",
+    "flask-cors": "^4.0.0"
+  }
+}

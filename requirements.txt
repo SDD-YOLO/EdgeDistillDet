@@ -1,0 +1,16 @@
+# EdgeDistillDet 依赖清单
+# pip install -r requirements.txt
+
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.2.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# Web UI 依赖
+flask>=3.0.0
+flask-cors>=4.0.0
