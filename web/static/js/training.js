@@ -55,6 +55,8 @@ async function startTraining() {
 
     try {
         setTrainingButtonsState(true);
+        // 触发按钮加载动画
+        if (typeof Animations !== 'undefined') Animations.TrainingButtonAnim.setState('loading');
 
         // Save config first then start training.
         await API.post('/api/config/save', { name: 'distill_config.yaml', config });
@@ -70,6 +72,44 @@ async function startTraining() {
         updateTrainUI('running');
         showToast('训练任务已启动', 'success');
 
+        // 启动蒸馏流动画
+        if (typeof Animations !== 'undefined') Animations.DistillFlowCanvas.start();
+        
+        // 启用进度条条纹动画
+        if (typeof Animations !== 'undefined') {
+            Animations.ProgressBar.setStripesActive('progress-bar', true);
+        }
+        
+        // 连接 WebSocket 实时通信（如果可用）
+        if (typeof Animations !== 'undefined' && typeof Animations.RealTimeSocket !== 'undefined') {
+            Animations.RealTimeSocket.on('epoch_end', (data) => {
+                if (typeof updateEpochProgress === 'function') {
+                    updateEpochProgress(data.epoch, data.total_epochs);
+                    if (typeof Animations !== 'undefined') {
+                        Animations.ProgressBar.update('progress-bar', data.epoch, data.total_epochs);
+                        if (data.metrics) {
+                            if (data.metrics.mAP50) Animations.CountUpAnim.animateStat('stat-map50', data.metrics.mAP50);
+                            if (data.metrics.box_loss) Animations.CountUpAnim.animateStat('stat-loss', data.metrics.box_loss);
+                        }
+                    }
+                }
+            });
+            Animations.RealTimeSocket.on('distill_update', (data) => {
+                if (typeof Animations !== 'undefined' && data.alpha !== undefined) {
+                    Animations.DistillFlowCanvas.setAlpha(data.alpha);
+                    Animations.DistillFlowCanvas.setKDLoss(data.kd_loss || 3.0);
+                }
+            });
+            Animations.RealTimeSocket.on('complete', () => {
+                if (typeof Animations !== 'undefined') {
+                    Animations.TrainingButtonAnim.setState('success');
+                    Animations.Celebration.trigger({ message: '训练完成!' });
+                    Animations.DistillFlowCanvas.stop();
+                    Animations.ProgressBar.setStripesActive('progress-bar', false);
+                }
+            });
+        }
+
         // Connect SSE for real-time log streaming
         connectSSELogStream();
 
@@ -77,6 +117,7 @@ async function startTraining() {
     } catch (e) {
         setTrainingButtonsState(false);
         updateTrainUI('idle');
+        if (typeof Animations !== 'undefined') Animations.TrainingButtonAnim.setState('error');
     }
 }
 
@@ -91,6 +132,17 @@ async function stopTraining() {
     try {
         await API.post('/api/train/stop');
         disconnectSSELogStream();
+        // 清理动画状态
+        if (typeof Animations !== 'undefined') {
+            Animations.TrainingButtonAnim.setState('idle');
+            Animations.DistillFlowCanvas.stop();
+            Animations.ProgressBar.setStripesActive('progress-bar', false);
+            if (typeof Animations.RealTimeSocket !== 'undefined') {
+                Animations.RealTimeSocket.off('epoch_end');
+                Animations.RealTimeSocket.off('distill_update');
+                Animations.RealTimeSocket.off('complete');
+            }
+        }
         updateTrainUI('stopped');
         addLogLine('[系统] 训练已被用户停止', 'warning');
         showToast('训练已停止', 'info');
@@ -112,6 +164,15 @@ function connectSSELogStream() {
         if (evt.data === '[DONE]') {
             disconnectSSELogStream();
             addLogLine('[系统] 日志流传输完成', 'success');
+            // 触发训练完成庆祝动画
+            if (typeof Animations !== 'undefined') {
+                Animations.TrainingButtonAnim.setState('success');
+                setTimeout(() => {
+                    Animations.Celebration.trigger({ message: '训练完成!' });
+                }, 300);
+                // 停止蒸馏流动画
+                Animations.DistillFlowCanvas.stop();
+            }
             return;
         }
 
@@ -314,7 +375,23 @@ function updateEpochProgress(current, total) {
 
 function updateStat(elementId, value) {
     const el = document.getElementById(elementId);
-    if (el) el.textContent = value;
+    if (!el) return;
+
+    // 使用 CountUp 数字滚动动画
+    if (typeof Animations !== 'undefined' && !Animations.prefersReducedMotion) {
+        const numValue = parseFloat(value);
+        if (!isNaN(numValue)) {
+            // 判断是上升还是下降来决定高亮颜色
+            const prevVal = parseFloat(el.dataset.currentValue || el.textContent) || 0;
+            el.classList.remove('highlight-up', 'highlight-down');
+            void el.offsetWidth; // 触发 reflow
+            el.classList.add(numValue > prevVal && elementId.includes('map') ? 'highlight-up' :
+                             numValue < prevVal && !elementId.includes('map') ? 'highlight-up' : '');
+            Animations.CountUpAnim.animateStat(elementId, value);
+            return;
+        }
+    }
+    el.textContent = value;
 }
 
 // ==================== UI Updates ====================

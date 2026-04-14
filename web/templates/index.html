@@ -373,6 +373,13 @@
                                     <input type="text" id="run-name" value="adaptive_kd_v1" class="md-input">
                                 </div>
                             </div>
+
+                            <!-- Data Augmentation Preview -->
+                            <h3 class="card-header" style="margin-top:14px;">数据增强预览</h3>
+                            <p style="font-size:11px;color:var(--md-on-surface-variant);margin:0 0 10px;">
+                                点击或悬停查看变换效果序列
+                            </p>
+                            <div id="aug-preview-container" class="aug-preview-container"></div>
                         </div>
 
 
@@ -550,8 +557,9 @@
                         </div>
                     </div>
 
-                    <div class="chart-card wide">
-                        <div class="chart-header">
+                    <div class="chart-card wide" id="card-distill-flow">
+                        <div id="distill-flow-canvas" class="distill-flow-container"></div>
+                        <div class="chart-header" style="margin-top:0;">
                             <h3>蒸馏指标 (Alpha/Temperature 动态变化)</h3>
                             <div class="chart-actions">
                                 <button class="btn-icon-sm" onclick="exportChart('distill-chart')">
@@ -742,8 +750,58 @@
     <!-- JavaScript -->
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
     <script src="{{ url_for('static', filename='js/training.js') }}"></script>
     <script src="{{ url_for('static', filename='js/metrics.js') }}"></script>
     <script src="{{ url_for('static', filename='js/agent.js') }}"></script>
+
+    <!-- Initialize Animation System on DOM Ready -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化所有动画（含日志搜索、WebSocket自动连接）
+            Animations.initAll({
+                enableLogSearch: true,
+                enableWebSocket: true
+            });
+
+            // Initialize distillation flow canvas
+            Animations.DistillFlowCanvas.init('distill-flow-canvas');
+            // Initialize augmentation preview
+            Animations.AugmentationPreview.init('aug-preview-container');
+
+            // Hook into tab switching for chart animations
+            const origSwitchTab = typeof switchTab === 'function' ? switchTab : null;
+            if (origSwitchTab) {
+                window.switchTab = function(tabId) {
+                    origSwitchTab(tabId);
+                    if (tabId === 'metrics' && !Animations.DistillFlowCanvas.running) {
+                        Animations.DistillFlowCanvas.start();
+                    }
+                    // 切换到训练面板时初始化日志搜索增强
+                    if (tabId === 'training') {
+                        setTimeout(() => Animations.LogEnhancer.init('log-container'), 100);
+                    }
+                };
+            }
+
+            // WebSocket 状态指示器联动
+            if (typeof Animations.RealTimeSocket !== 'undefined') {
+                Animations.RealTimeSocket.onStateChange(function(stateInfo) {
+                    const statusEl = document.getElementById('connection-status');
+                    if (!statusEl) return;
+                    statusEl.className = `status-indicator ${stateInfo.state === 'connected' ? 'training' : stateInfo.state === 'sse' ? 'online' : 'online'}`;
+                    const dot = statusEl.querySelector('.status-dot');
+                    if (dot) dot.className = `status-dot ws-status-dot ${stateInfo.state}`;
+                    const label = statusEl.querySelector('span:last-child');
+                    if (label) {
+                        const labels = { connected: '实时连接', connecting: '连接中...', disconnected: '服务正常', error: '连接异常', sse: 'SSE模式' };
+                        label.textContent = labels[stateInfo.state] || stateInfo.state;
+                    }
+                });
+            }
+
+            console.log('[EdgeDistillDet] Animation system initialized. All 7 animation effects + WebSocket layer + Enhanced components loaded.');
+        });
+    </script>
 </body>
 </html>

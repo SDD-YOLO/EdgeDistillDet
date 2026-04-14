@@ -1373,6 +1373,511 @@ body {
     }
 }
 
+/* ==================== Animation System Styles ==================== */
+
+/* ---- 1. Page Load Stagger Animation Targets ---- */
+.anim-stagger-target {
+    will-change: opacity, transform;
+}
+
+/* ---- 2. Training Button State Animations ---- */
+.btn-state-loading {
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2.5px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.btn-check-icon {
+    font-size: 18px !important;
+    animation: checkBounceIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes checkBounceIn {
+    0%   { transform: scale(0) rotate(-45deg); opacity: 0; }
+    50%  { transform: scale(1.25) rotate(10deg); opacity: 1; }
+    70%  { transform: scale(0.95) rotate(-3deg); }
+    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+.btn-success-flash {
+    background: var(--md-success) !important;
+    animation: successPulse 2s ease-in-out;
+}
+
+@keyframes successPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(31, 122, 59, 0.55); }
+    20%  { box-shadow: 0 0 0 12px rgba(31, 122, 59, 0), 0 0 0 4px rgba(31, 122, 59, 0.3); }
+    40%  { box-shadow: 0 0 0 16px rgba(31, 122, 59, 0), 0 0 0 6px rgba(31, 122, 59, 0.15); }
+    60%  { box-shadow: 0 0 0 20px rgba(31, 122, 59, 0); }
+    100% { box-shadow: none; }
+}
+
+.btn-error-shake {
+    animation: errorShake 0.5s ease-in-out;
+}
+
+@keyframes errorShake {
+    0%, 100% { transform: translateX(0); }
+    15%      { transform: translateX(-6px); }
+    30%      { transform: translateX(6px); }
+    45%      { transform: translateX(-4px); }
+    60%      { transform: translateX(4px); }
+    75%      { transform: translateX(-2px); }
+    90%      { transform: translateX(2px); }
+}
+
+/* ---- 3. Chart Gradient Fill Enhancement ---- */
+.chart-body canvas {
+    will-change: auto;
+}
+
+.chart-body:hover canvas {
+    transition: filter 0.3s ease;
+}
+
+/* ---- 4. Distillation Flow Canvas Container ---- */
+#distill-flow-canvas,
+.distill-flow-container {
+    width: 100%;
+    min-height: 180px;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 15% 50%, rgba(103, 80, 164, 0.06), transparent 35%),
+        radial-gradient(circle at 85% 50%, rgba(0, 106, 107, 0.06), transparent 35%),
+        var(--md-surface);
+    border: 1px solid var(--md-outline-variant);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+    position: relative;
+}
+
+#distill-canvas {
+    display: block;
+    width: 100%;
+    will-change: contents;
+}
+
+/* ---- 5. CountUp Number Animation ---- */
+.stat-value.animating,
+.overview-value.animating {
+    will-change: contents;
+    transition: color 0.25s ease;
+}
+
+.stat-value.highlight-up {
+    animation: numberFlashUp 0.6s ease;
+    color: var(--md-success) !important;
+}
+
+@keyframes numberFlashUp {
+    0%   { text-shadow: 0 0 8px rgba(31, 122, 59, 0.5); transform: translateY(-2px) scale(1.05); }
+    100% { text-shadow: none; transform: none; }
+}
+
+.stat-value.highlight-down {
+    animation: numberFlashDown 0.6s ease;
+    color: var(--md-warning) !important;
+}
+
+@keyframes numberFlashDown {
+    0%   { text-shadow: 0 0 8px rgba(160, 95, 0, 0.5); transform: translateY(-2px) scale(1.05); }
+    100% { text-shadow: none; transform: none; }
+}
+
+/* ---- 6. Celebration / Confetti Overlay ---- */
+#celebration-canvas {
+    pointer-events: none !important;
+}
+
+#celebration-flash {
+    animation: celebrationFlash 1.5s ease-out forwards;
+}
+
+@keyframes celebrationFlash {
+    0%   { opacity: 0; }
+    15%  { opacity: 1; }
+    50%  { opacity: 0.6; }
+    100% { opacity: 0; }
+}
+
+#celebration-badge {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    z-index: 10000;
+    pointer-events: none;
+    transform: translate(-50%, -50%) scale(0.3);
+    opacity: 0;
+    transition: transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 0.4s ease;
+}
+
+#celebration-badge.show {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+}
+
+#celebration-badge.hiding {
+    transform: translate(-50%, -50%) scale(0.8);
+    opacity: 0;
+    transition: transform 0.35s ease-in, opacity 0.3s ease;
+}
+
+.celebration-badge-inner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 18px 32px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #00D4AA, #00B894);
+    color: #fff;
+    font-family: 'Plus Jakarta Sans', 'Noto Sans SC', sans-serif;
+    font-size: 17px;
+    font-weight: 700;
+    box-shadow:
+        0 8px 32px rgba(0, 212, 170, 0.4),
+        0 2px 8px rgba(0, 0, 0, 0.15);
+    letter-spacing: 0.02em;
+}
+
+.celebration-badge-inner .badge-icon {
+    font-size: 26px;
+    animation: badgeRotate 3s ease-in-out infinite;
+}
+
+@keyframes badgeRotate {
+    0%, 100% { transform: rotate(-8deg); }
+    50%      { transform: rotate(8deg); }
+}
+
+.celebration-badge-inner .badge-text {
+    white-space: nowrap;
+}
+
+/* ==================== Enhanced Component Styles (Prompt 4 & 5) ==================== */
+
+/* ---- Enhanced Progress Bar (Striped + Complete Flash) ---- */
+.progress-bar-wrapper.stripes-active .progress-bar {
+    background-image: linear-gradient(
+        45deg,
+        rgba(255,255,255,0.1) 25%,
+        transparent 25%,
+        transparent 50%,
+        rgba(255,255,255,0.1) 50%,
+        rgba(255,255,255,0.1) 75%,
+        transparent 75%,
+        transparent
+    );
+    background-size: 20px 20px;
+    animation: progressStripes 0.8s linear infinite;
+}
+
+@keyframes progressStripes {
+    from { background-position: 0 0; }
+    to   { background-position: 40px 0; }
+}
+
+.progress-bar-wrapper.progress-near-complete .progress-bar {
+    background: linear-gradient(90deg, var(--md-success), #4ADE80, var(--md-success));
+    background-size: 200% 100%;
+    animation: progressNearComplete 1.5s ease infinite;
+}
+
+@keyframes progressNearComplete {
+    0%, 100% { background-position: 0% 50%; }
+    50%      { background-position: 100% 50%; }
+}
+
+.progress-bar-wrapper.progress-complete .progress-bar {
+    background: var(--md-success);
+    animation: progressFlash 2s ease;
+}
+
+@keyframes progressFlash {
+    0%   { box-shadow: 0 0 8px rgba(31,122,59,0.5); }
+    30%  { box-shadow: 0 0 24px rgba(31,122,59,0.7); }
+    60%  { box-shadow: 0 0 12px rgba(31,122,59,0.4); }
+    100% { box-shadow: none; }
+}
+
+/* ---- Log Toolbar (Search / Filter / Copy) ---- */
+.log-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.log-search-input {
+    flex: 1;
+    min-width: 140px;
+    height: 32px;
+    padding: 6px 12px;
+    border: 1px solid var(--md-outline-variant);
+    border-radius: var(--radius-sm);
+    background: var(--md-surface);
+    color: var(--md-on-surface);
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.log-search-input:focus {
+    border-color: var(--md-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-primary) 24%, transparent);
+}
+
+.log-search-input::placeholder {
+    color: var(--md-on-surface-variant);
+}
+
+.log-filter-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.log-filter-btn {
+    font-size: 10px !important;
+    padding: 4px 8px !important;
+}
+
+.log-copy-btn {
+    width: 28px !important;
+    height: 28px !important;
+}
+
+.log-counter {
+    font-size: 10px;
+    color: var(--md-on-surface-variant);
+    text-align: right;
+    padding: 3px 6px 0 0;
+    display: block;
+}
+
+/* ---- Distillation Flow Canvas Interaction Hints ---- */
+.distill-flow-container::after {
+    content: '点击暂停/继续 · 滚轮缩放';
+    position: absolute;
+    bottom: 2px;
+    right: 8px;
+    font-size: 9px;
+    color: var(--md-on-surface-variant);
+    opacity: 0.45;
+    pointer-events: none;
+    transition: opacity 0.2s;
+}
+
+.distill-flow-container:hover::after {
+    opacity: 0.75;
+}
+
+/* ---- WebSocket Connection Status Indicator ---- */
+.ws-status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.ws-status-dot.connected     { background: var(--md-success); box-shadow: 0 0 6px rgba(31,122,59,0.5); animation: wsPulse 2s infinite; }
+.ws-status-dot.connecting   { background: var(--md-warning); animation: wsBlink 0.8s infinite; }
+.ws-status-dot.disconnected{ background: var(--md-outline-variant); }
+.ws-status-dot.error        { background: var(--md-error); }
+.ws-status-dot.sse          { background: var(--md-info); }
+
+@keyframes wsPulse {
+    0%, 100% { box-shadow: 0 0 6px rgba(31,122,59,0.5); }
+    50%      { box-shadow: 0 0 12px rgba(31,122,59,0.3); }
+}
+
+@keyframes wsBlink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+}
+
+/* ---- Data Augmentation Preview ---- */
+#aug-preview-container,
+.aug-preview-container {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 14px;
+    border-radius: var(--radius-md);
+    background: var(--md-surface-variant);
+    cursor: pointer;
+    user-select: none;
+    overflow: hidden;
+    transition: box-shadow 0.3s ease, border-color 0.3s ease;
+    border: 1px dashed var(--md-outline-variant);
+    min-width: 150px;
+}
+
+.aug-preview-container:hover {
+    border-color: var(--md-primary);
+    box-shadow: 0 4px 16px rgba(0, 106, 107, 0.12);
+}
+
+.aug-preview-image {
+    width: 120px;
+    height: 80px;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    will-change: transform, filter;
+}
+
+.aug-label {
+    font-size: 11px;
+    color: var(--md-on-surface-variant);
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--md-primary-container);
+    color: var(--md-on-primary-container);
+    transition: all 0.25s ease;
+    min-width: 72px;
+    text-align: center;
+}
+
+/* ---- General Performance Optimizations ---- */
+@media (prefers-reduced-motion: reduce) {
+    .btn-spinner,
+    .btn-success-flash,
+    .btn-error-shake,
+    .btn-check-icon,
+    .stat-value.highlight-up,
+    .stat-value.highlight-down,
+    .celebration-badge-inner .badge-icon,
+    #celebration-flash,
+    .anim-stagger-target,
+    .progress-bar-wrapper.stripes-active .progress-bar,
+    .progress-bar-wrapper.progress-near-complete .progress-bar,
+    .progress-bar-wrapper.progress-complete .progress-bar,
+    .ws-status-dot.connected {
+        animation: none !important;
+        transition: none !important;
+    }
+
+    .progress-bar-wrapper.stripes-active .progress-bar {
+        background-image: none;
+    }
+
+    #celebration-badge {
+        transition: none !important;
+        transform: translate(-50%, -50%) scale(1) !important;
+        opacity: 1 !important;
+    }
+
+    .aug-preview-image {
+        transition: none !important;
+    }
+}
+
+/* ---- Quick Stats Card Entrance Animation (used by PageLoad) ---- */
+.quick-stats .stat-card {
+    will-change: opacity, transform;
+}
+
+.quick-stats .stat-card:nth-child(1) { transition-delay: 0ms; }
+.quick-stats .stat-card:nth-child(2) { transition-delay: 80ms; }
+.quick-stats .stat-card:nth-child(3) { transition-delay: 160ms; }
+.quick-stats .stat-card:nth-child(4) { transition-delay: 240ms; }
+
+/* Overview Cards stagger delay */
+.metrics-overview .overview-card:nth-child(1) { transition-delay: 0ms; }
+.metrics-overview .overview-card:nth-child(2) { transition-delay: 80ms; }
+.metrics-overview .overview-card:nth-child(3) { transition-delay: 160ms; }
+.metrics-overview .overview-card:nth-child(4) { transition-delay: 240ms; }
+
+/* Log line entrance animation */
+.log-line {
+    animation: logLineSlideIn 0.25s ease-out both;
+}
+
+@keyframes logLineSlideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* Toast enhanced animation */
+.toast {
+    will-change: opacity, transform;
+    animation: toastSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes toastSlideUp {
+    from { opacity: 0; transform: translateY(16px) scale(0.96); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* Chip click ripple effect */
+.chip {
+    position: relative;
+    overflow: hidden;
+}
+
+.chip::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    transform: translate(-50%, -50%);
+    transition: width 0.4s ease, height 0.4s ease;
+}
+
+.chip:active::after {
+    width: 200px;
+    height: 200px;
+}
+
+/* Mode card hover glow effect */
+.mode-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.mode-option:hover .mode-card {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 106, 107, 0.12);
+}
+
+.mode-option.selected .mode-card {
+    animation: modeCardSelect 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modeCardSelect {
+    from { transform: scale(0.95); }
+    to   { transform: scale(1); }
+}
+
 @media (max-width: 900px) {
     :root {
         --content-padding: 14px;

@@ -247,10 +247,21 @@ function loadSampleData() {
     charts.lrChart.update('none');
 
     charts.distillChart.data.labels = epochs;
-    charts.distillChart.data.datasets[0].data = epochs.map(i => 0.5+0.25*Math.sin(i*0.1)*Math.exp(-i*0.008));
-    charts.distillChart.data.datasets[1].data = epochs.map(i => 6-4.5*(1-Math.cos(Math.PI*i/100))/2);
-    charts.distillChart.data.datasets[2].data = genDecay(3.0, 0.045, 0.2);
+    const alphaData = epochs.map(i => 0.5+0.25*Math.sin(i*0.1)*Math.exp(-i*0.008));
+    const tempData = epochs.map(i => 6-4.5*(1-Math.cos(Math.PI*i/100))/2);
+    const kdLossData = genDecay(3.0, 0.045, 0.2);
+    charts.distillChart.data.datasets[0].data = alphaData;
+    charts.distillChart.data.datasets[1].data = tempData;
+    charts.distillChart.data.datasets[2].data = kdLossData;
     charts.distillChart.update('none');
+
+    // 同步蒸馏流动画数据
+    if (typeof Animations !== 'undefined') {
+        const lastAlpha = alphaData[alphaData.length - 1];
+        const lastKDLoss = kdLossData[kdLossData.length - 1];
+        Animations.DistillFlowCanvas.setAlpha(lastAlpha);
+        Animations.DistillFlowCanvas.setKDLoss(lastKDLoss);
+    }
 
     // PR curve sample
     if (charts.prChart) {
@@ -282,7 +293,14 @@ function updateOverviewStats() {
     };
     Object.entries(stats).forEach(([id, value]) => {
         const el = document.getElementById(id);
-        if (el) el.textContent = value;
+        if (el) {
+            // 使用数字滚动动画更新概览统计
+            if (typeof Animations !== 'undefined' && !Animations.prefersReducedMotion) {
+                Animations.CountUpAnim.animateStat(id, value);
+            } else {
+                el.textContent = value;
+            }
+        }
     });
 }
 
