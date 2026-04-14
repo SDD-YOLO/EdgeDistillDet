@@ -17,10 +17,13 @@ import sys
 import json
 import re
 import time
+import csv
 import yaml
 import subprocess
 import threading
 import queue
+from datetime import datetime
+from pathlib import Path
 from flask import Flask, jsonify, request, Response, send_from_directory, render_template
 from flask_cors import CORS
 
@@ -60,23 +63,286 @@ training_status = {
 }
 
 
+def _resolve_project_path(project: str) -> Path:
+    project_path = Path(project)
+    if not project_path.is_absolute():
+        project_path = (Path(BASE_DIR) / project_path).resolve()
+    else:
+        project_path = project_path.resolve()
+    if not str(project_path).startswith(str(Path(BASE_DIR).resolve())):
+        raise ValueError('项目目录必须在仓库根目录下')
+    return project_path
+
+
+def _list_resume_candidates(project_path: Path):
+    candidates = []
+    if not project_path.exists() or not project_path.is_dir():
+        return candidates
+    for run_dir in sorted(project_path.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not run_dir.is_dir():
+            continue
+        checkpoint_files = []
+        for rel_path, label in [
+            ('last.pt', 'last.pt'),
+            ('weights/last.pt', 'weights/last.pt'),
+            ('weights/best.pt', 'weights/best.pt')
+        ]:
+            candidate = run_dir / rel_path
+            if candidate.exists():
+                checkpoint_files.append((candidate, label))
+        if not checkpoint_files:
+            continue
+        checkpoint_path, checkpoint_label = checkpoint_files[0]
+        candidates.append({
+            'name': run_dir.name,
+            'project': str(Path(project_path).relative_to(Path(BASE_DIR))) if Path(BASE_DIR) in project_path.parents or project_path == Path(BASE_DIR) else str(project_path),
+            'dir': str(Path(run_dir).relative_to(Path(BASE_DIR))) if Path(BASE_DIR) in run_dir.parents else str(run_dir),
+            'display_name': f"{run_dir.name} — {datetime.fromtimestamp(run_dir.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')} ({checkpoint_label})",
+            'checkpoint': str(Path(checkpoint_path).relative_to(Path(BASE_DIR))) if Path(BASE_DIR) in checkpoint_path.parents else str(checkpoint_path),
+            'checkpoint_name': checkpoint_label,
+            'modified_time': run_dir.stat().st_mtime
+        })
+    return candidates
+
+
+def _load_yaml_file(path: Path):
+    last_exception = None
+    for encoding in ('utf-8', 'utf-8-sig', 'cp936', 'gbk', 'latin1'):
+        try:
+            with open(path, 'r', encoding=encoding) as f:
+                return yaml.safe_load(f)
+        except UnicodeDecodeError as e:
+            last_exception = e
+            continue
+        except Exception:
+            raise
+    raise UnicodeDecodeError('utf-8', b'', 0, 1, f'Failed to decode {path} using fallback encodings')
+
+try:
+    from utils.edge_profiler import EdgeProfiler
+except Exception:
+    EdgeProfiler = None
+
+
+def _as_float(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _resolve_model_path(run_dir: Path):
+    args_file = run_dir / 'args.yaml'
+    if not args_file.exists():
+        return None
+    try:
+        payload = _load_yaml_file(args_file)
+    except Exception:
+        return None
+    model_value = payload.get('model')
+    if not model_value:
+        return None
+    path = Path(model_value)
+    if not path.is_absolute():
+        path = (run_dir / path).resolve()
+    return path if path.exists() else None
+
+
+def _estimate_model_params(model_path: Path):
+    try:
+        import importlib
+        import torch
+
+        def torch_load_checkpoint(path):
+            try:
+                return torch.load(str(path), map_location='cpu')
+            except Exception:
+                pass
+
+            try:
+                if hasattr(torch.serialization, 'safe_globals'):
+                    safe_globals = []
+                    ul_spec = importlib.util.find_spec('ultralytics')
+                    if ul_spec:
+                        ul = importlib.import_module('ultralytics')
+                        if hasattr(ul, 'nn') and hasattr(ul.nn, 'tasks') and hasattr(ul.nn.tasks, 'DetectionModel'):
+                            safe_globals.append(ul.nn.tasks.DetectionModel)
+                    if safe_globals:
+                        with torch.serialization.safe_globals(safe_globals):
+                            return torch.load(str(path), map_location='cpu', weights_only=False)
+                return torch.load(str(path), map_location='cpu', weights_only=False)
+            except Exception:
+                return None
+
+        raw = torch_load_checkpoint(model_path)
+        if raw is None:
+            return None
+
+        state_dict = None
+        if hasattr(raw, 'state_dict'):
+            state_dict = raw.state_dict()
+        elif isinstance(raw, dict):
+            if 'model' in raw and isinstance(raw['model'], dict):
+                state_dict = raw['model']
+            elif 'model' in raw and hasattr(raw['model'], 'state_dict'):
+                state_dict = raw['model'].state_dict()
+            elif 'state_dict' in raw and isinstance(raw['state_dict'], dict):
+                state_dict = raw['state_dict']
+            elif 'state_dict' in raw and hasattr(raw['state_dict'], 'state_dict'):
+                state_dict = raw['state_dict'].state_dict()
+            elif all(hasattr(v, 'numel') for v in raw.values()):
+                state_dict = raw
+
+        if not isinstance(state_dict, dict):
+            return None
+
+        total_params = 0
+        for value in state_dict.values():
+            if hasattr(value, 'numel'):
+                total_params += int(value.numel())
+        return total_params / 1e6 if total_params > 0 else None
+    except Exception:
+        return None
+
+
+def _estimate_model_gflops(model_path: Path):
+    """通过 ultralytics YOLO.info() 返回值获取 GFLOPs，用于 FPS 回退估算。"""
+    try:
+        from ultralytics import YOLO
+        _model = YOLO(str(model_path))
+        info = _model.info(verbose=False)
+        del _model
+        if isinstance(info, (list, tuple)) and len(info) >= 2:
+            gflops = float(info[1])
+            if gflops > 0:
+                return gflops
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_run_stats(run_dir: Path):
+    model_path = _resolve_model_path(run_dir)
+    if model_path is None:
+        return {'ov-fps': '--', 'ov-params': '--'}
+
+    try:
+        if EdgeProfiler is not None:
+            profiler = EdgeProfiler(str(model_path), target_device='gpu')
+            result = profiler.run_full_profile()
+            return {
+                'ov-fps': f"{result.theoretical_fps_fp16:.0f}",
+                'ov-params': f"{result.params_m:.1f}"
+            }
+    except Exception:
+        pass
+
+    # EdgeProfiler 失败时的回退：单独计算参数量和 FPS
+    params_m = _estimate_model_params(model_path)
+    fps_str = '--'
+
+    # 尝试通过 ultralytics 独立获取 GFLOPs 并计算理论 FPS（GPU FP16 基准）
+    gflops = _estimate_model_gflops(model_path)
+    if gflops is None and params_m is not None:
+        # 粗略估算：YOLO 系列模型 GFLOPs ≈ params_m * 2（640px 输入典型值）
+        gflops = params_m * 2.0
+    if gflops is not None and gflops > 0:
+        # 参考 RTX 3060 FP16 规格：13 TOPS，利用率 60%
+        gpu_tops_fp16 = 13.0
+        efficiency = 0.6
+        fps = (gpu_tops_fp16 * 1e12 * efficiency) / (gflops * 1e9)
+        fps_str = f"{fps:.0f}"
+
+    return {
+        'ov-fps': fps_str if fps_str != '--' else 'N/A',
+        'ov-params': f"{params_m:.1f}" if params_m is not None else '--'
+    }
+
+
+def _load_csv_summary(path: Path):
+    try:
+        with open(path, 'r', encoding='utf-8', newline='') as f:
+            reader = csv.DictReader(f)
+            rows = [row for row in reader]
+        return list(reader.fieldnames or []), rows
+    except Exception:
+        return [], []
+
+
+def _summarize_series(rows, key, better='higher'):
+    values = [_as_float(row.get(key)) for row in rows if row.get(key) is not None]
+    values = [v for v in values if v is not None]
+    if not values:
+        return None
+    final = values[-1]
+    best = max(values) if better == 'higher' else min(values)
+    diff = final - best
+    sign = '+' if diff >= 0 else '-'
+    improvement = f"{sign}{abs(diff) * 100:.2f}%"
+    return {
+        'best': best,
+        'final': final,
+        'improvement': improvement,
+        'trend': 'down' if better == 'lower' else 'up'
+    }
+
+
+def _build_metric_series(rows, columns, run_dir):
+    chart = {
+        'epochs': [],
+        'train_losses': {'box_loss': [], 'cls_loss': [], 'dfl_loss': []},
+        'map_series': {'map50': [], 'map50_95': []},
+        'lr_series': {'pg0': [], 'pg1': [], 'pg2': []},
+        'distill_series': {},
+        'pr_curve': None,
+        'class_performance': None
+    }
+    for row in rows:
+        epoch = _as_float(row.get('epoch'))
+        if epoch is None:
+            continue
+        chart['epochs'].append(int(epoch))
+        chart['train_losses']['box_loss'].append(_as_float(row.get('train/box_loss')) or 0)
+        chart['train_losses']['cls_loss'].append(_as_float(row.get('train/cls_loss')) or 0)
+        chart['train_losses']['dfl_loss'].append(_as_float(row.get('train/dfl_loss')) or 0)
+        chart['map_series']['map50'].append(_as_float(row.get('metrics/mAP50(B)')) or 0)
+        chart['map_series']['map50_95'].append(_as_float(row.get('metrics/mAP50-95(B)')) or 0)
+        chart['lr_series']['pg0'].append(_as_float(row.get('lr/pg0')) or 0)
+        chart['lr_series']['pg1'].append(_as_float(row.get('lr/pg1')) or 0)
+        chart['lr_series']['pg2'].append(_as_float(row.get('lr/pg2')) or 0)
+        if 'distill/alpha' in row or 'distill/temperature' in row or 'distill/kd_loss' in row:
+            chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [_as_float(row.get('distill/alpha')) or 0]
+            chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [_as_float(row.get('distill/temperature')) or 0]
+            chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [_as_float(row.get('distill/kd_loss')) or 0]
+    return chart
+
+
 @app.route('/')
 def index():
-    """渲染模板（Flask已正确配置template_folder和static_folder）"""
-    try:
-        return render_template('index.html')
-    except Exception as e:
-        # 降级：如果模板查找失败，尝试手动替换 url_for
-        import re
-        with open(TEMPLATE_FILE, 'r', encoding='utf-8') as f:
-            html = f.read()
-        # 手动将 {{ url_for('static', filename=...) }} 替换为 /static/...
-        def _url_for_replace(match):
-            fname = match.group(1).strip().strip("'\"")
-            return f'/static/{fname}'
-        html = re.sub(r"url_for\('static',\s*filename\s*=\s*'([^']+)'\)", _url_for_replace, html)
-        html = re.sub(r'url_for\("static",\s*filename\s*=\s*"([^"]+)"\)', _url_for_replace, html)
-        return html
+    """读取HTML并手动替换Jinja2模板变量（完全绕过Flask模板查找机制）"""
+    with open(TEMPLATE_FILE, 'r', encoding='utf-8') as f:
+        html = f.read()
+
+    # 替换 {{ url_for('static', filename='xxx') }}  => /static/xxx
+    # 替换 {{ url_for("static", filename="xxx") }}  => /static/xxx
+    def replace_static_url(m):
+        fname = m.group(1)
+        return '/static/' + fname
+
+    # 单引号形式: url_for('static', filename='...')
+    html = re.sub(
+        r"\{\{\s*url_for\(\s*'static'\s*,\s*filename\s*=\s*'([^']+)'\s*\)\s*\}\}",
+        replace_static_url,
+        html
+    )
+    # 双引号形式: url_for("static", filename="...")
+    html = re.sub(
+        r'\{\{\s*url_for\(\s*"static"\s*,\s*filename\s*=\s*"([^"]+)"\s*\)\s*\}\}',
+        replace_static_url,
+        html
+    )
+
+    return html
 
 
 @app.route('/api/configs', methods=['GET'])
@@ -85,8 +351,10 @@ def get_configs():
     configs = {}
     for fname in os.listdir(config_dir):
         if fname.endswith('.yaml'):
-            with open(os.path.join(config_dir, fname), 'r', encoding='utf-8') as fp:
-                configs[fname] = yaml.safe_load(fp)
+            try:
+                configs[fname] = _load_yaml_file(os.path.join(config_dir, fname))
+            except Exception as e:
+                configs[fname] = {"_error": str(e)}
     return jsonify({"status": "ok", "configs": configs})
 
 
@@ -95,8 +363,7 @@ def get_config(config_name):
     config_path = os.path.join(BASE_DIR, 'configs', config_name)
     if not os.path.exists(config_path):
         return jsonify({"error": f"配置文件不存在: {config_name}"}), 404
-    with open(config_path, 'r', encoding='utf-8') as f:
-        cfg = yaml.safe_load(f)
+    cfg = _load_yaml_file(config_path)
     return jsonify({"status": "ok", "config": cfg})
 
 
@@ -122,7 +389,8 @@ def start_training():
     data = request.json or {}
     config_name = data.get('config', 'distill_config.yaml')
     mode = data.get('mode', 'full')
-    if mode not in {'full', 'resume', 'fast'}:
+    checkpoint = data.get('checkpoint')
+    if mode not in {'full', 'resume'}:
         return jsonify({"error": f"不支持的训练模式: {mode}"}), 400
 
     config_path = os.path.join(BASE_DIR, 'configs', config_name)
@@ -140,16 +408,24 @@ def start_training():
                     pass
 
             main_py = os.path.join(BASE_DIR, 'main.py')
+            cmd = [sys.executable, main_py, 'train', '--config', config_path]
+            if mode == 'resume':
+                if checkpoint:
+                    checkpoint_path = Path(checkpoint)
+                    if not checkpoint_path.is_absolute():
+                        checkpoint_path = (Path(BASE_DIR) / checkpoint_path).resolve()
+                    cmd.extend(['--resume', str(checkpoint_path)])
+                else:
+                    cmd.append('--resume')
             training_process = subprocess.Popen(
-                [sys.executable, main_py, 'train', '--config', config_path],
+                cmd,
                 cwd=BASE_DIR,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                bufsize=1,
-                newline='\n'
+                bufsize=1
             )
 
             training_status["pid"] = training_process.pid
@@ -232,6 +508,22 @@ def get_training_status():
     })
 
 
+@app.route('/api/train/resume_candidates', methods=['GET'])
+def get_resume_candidates():
+    project = request.args.get('project', 'runs/distill') or 'runs/distill'
+    try:
+        project_path = _resolve_project_path(project)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    candidates = _list_resume_candidates(project_path)
+    return jsonify({
+        "status": "ok",
+        "project": str(Path(project_path).relative_to(Path(BASE_DIR))) if Path(BASE_DIR) in project_path.parents or project_path == Path(BASE_DIR) else str(project_path),
+        "candidates": candidates
+    })
+
+
 @app.route('/api/train/logs', methods=['GET'])
 def get_training_logs():
     offset = request.args.get('offset', 0, type=int)
@@ -289,23 +581,36 @@ def get_metrics():
     runs_dir = os.path.join(BASE_DIR, 'runs')
     metrics_data = []
     if os.path.exists(runs_dir):
-        import pandas as pd
         for root, dirs, files in os.walk(runs_dir):
-            csv_files = [f for f in files if f.endswith('.csv')]
-            csv_files.sort(key=lambda f: os.path.getmtime(os.path.join(root, f)), reverse=True)
-            for fname in csv_files[:10]:
-                try:
-                    fpath = os.path.join(root, fname)
-                    df = pd.read_csv(fpath)
-                    metrics_data.append({
-                        "name": fname.replace('.csv', ''),
-                        "path": os.path.relpath(fpath, BASE_DIR),
-                        "columns": list(df.columns),
-                        "rows": len(df),
-                        "preview": df.tail(5).to_dict(orient='records')
-                    })
-                except Exception:
-                    pass
+            for d in dirs:
+                if d.startswith('exp'):
+                    run_dir = os.path.join(root, d)
+                    result_path = os.path.join(run_dir, 'results.csv')
+                    has_results = os.path.exists(result_path)
+                    display_name = f"{d} @ {datetime.fromtimestamp(os.path.getmtime(run_dir)).strftime('%Y-%m-%d %H:%M:%S')}"
+                    if not has_results:
+                        display_name += ' (无结果)'
+                    entry = {
+                        "name": d,
+                        "display_name": display_name,
+                        "dir": os.path.relpath(run_dir, BASE_DIR),
+                        "has_results": has_results,
+                        "path": os.path.relpath(result_path, BASE_DIR) if has_results else ''
+                    }
+                    if has_results:
+                        try:
+                            import pandas as pd
+                            df = pd.read_csv(result_path)
+                            entry["columns"] = list(df.columns)
+                            entry["rows"] = len(df)
+                        except Exception:
+                            entry["columns"] = []
+                            entry["rows"] = 0
+                    else:
+                        entry["columns"] = []
+                        entry["rows"] = 0
+                    metrics_data.append(entry)
+        metrics_data.sort(key=lambda item: os.path.getmtime(os.path.join(BASE_DIR, item['dir'])), reverse=True)
     distill_logs = []
     if os.path.exists(runs_dir):
         for root, dirs, files in os.walk(runs_dir):
@@ -313,11 +618,52 @@ def get_metrics():
                 os.path.relpath(os.path.join(root, f), BASE_DIR)
                 for f in files if f == 'distill_log.json'
             )
-    return jsonify({
+
+    selected_path = request.args.get('source', '').strip()
+    selected_data = None
+    if selected_path:
+        target = (Path(BASE_DIR) / selected_path).resolve()
+        if target.exists() and target.is_file() and target.suffix == '.csv' and str(target).startswith(str(Path(BASE_DIR).resolve())):
+            columns, rows = _load_csv_summary(target)
+            if rows:
+                chart_series = _build_metric_series(rows, columns, target.parent)
+                summary_metrics = {
+                    'box_loss': _summarize_series(rows, 'train/box_loss', better='lower'),
+                    'cls_loss': _summarize_series(rows, 'train/cls_loss', better='lower'),
+                    'dfl_loss': _summarize_series(rows, 'train/dfl_loss', better='lower'),
+                    'map50': _summarize_series(rows, 'metrics/mAP50(B)', better='higher'),
+                    'map50_95': _summarize_series(rows, 'metrics/mAP50-95(B)', better='higher'),
+                    'precision': _summarize_series(rows, 'metrics/precision(B)', better='higher'),
+                    'recall': _summarize_series(rows, 'metrics/recall(B)', better='higher')
+                }
+                total_time = None
+                for row in reversed(rows):
+                    total_time = _as_float(row.get('time'))
+                    if total_time is not None:
+                        break
+
+                run_stats = _estimate_run_stats(target.parent)
+                selected_data = {
+                    'source': selected_path,
+                    'columns': columns,
+                    'rows': len(rows),
+                    'chart_series': chart_series,
+                    'summary_metrics': {k: v for k, v in summary_metrics.items() if v is not None},
+                    'overview_stats': {
+                        'ov-map50': f"{(summary_metrics['map50']['best'] * 100):.2f}%" if summary_metrics.get('map50') else '--',
+                        **run_stats,
+                        'ov-time': (lambda seconds: f"{int(seconds // 60)}m {int(seconds % 60)}s" if seconds is not None else '--')(_as_float(total_time))
+                    }
+                }
+
+    response = {
         "status": "ok",
         "csv_metrics": metrics_data,
         "distill_logs": distill_logs
-    })
+    }
+    if selected_data:
+        response.update(selected_data)
+    return jsonify(response)
 
 
 @app.route('/api/agent', methods=['GET', 'POST'])
@@ -374,11 +720,45 @@ def browse_files():
         return jsonify({"error": str(e)}), 400
 
 
-# ============ 静态文件路由 ============
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    return send_from_directory(STATIC_DIR, filename)
+@app.route('/api/output/check', methods=['GET'])
+def check_output_name():
+    project = request.args.get('project', 'runs/distill') or 'runs/distill'
+    try:
+        project_path = Path(project)
+        if not project_path.is_absolute():
+            project_path = (Path(BASE_DIR) / project_path).resolve()
+        else:
+            project_path = project_path.resolve()
 
+        base_path = Path(BASE_DIR).resolve()
+        if base_path not in project_path.parents and project_path != base_path:
+            return jsonify({"error": "项目目录必须在仓库根目录下"}), 400
+
+        existing_names = []
+        if project_path.exists() and project_path.is_dir():
+            for item in project_path.iterdir():
+                if item.is_dir():
+                    existing_names.append(item.name)
+
+        exp_numbers = [-1]
+        for name in existing_names:
+            match = re.fullmatch(r'exp(\d*)', name)
+            if match:
+                exp_numbers.append(int(match.group(1) or 0))
+
+        next_exp = 'exp1'
+        if exp_numbers:
+            next_index = max(exp_numbers) + 1
+            next_exp = f'exp{next_index}'
+
+        return jsonify({
+            "status": "ok",
+            "project": str(project_path.relative_to(base_path)) if base_path in project_path.parents or project_path == base_path else str(project_path),
+            "existing_names": existing_names,
+            "next_exp_name": next_exp
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 if __name__ == '__main__':
     print("\n  Starting server at http://localhost:5000")

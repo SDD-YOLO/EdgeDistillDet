@@ -105,18 +105,17 @@ class AdaptiveKDTrainer(DetectionTrainer):
         super().__init__(cfg, overrides, _callbacks)
         self.teacher_model = None
 
-        # 从 overrides 读取自定义参数
-        ov = overrides or {}
-        self._teacher_path   = ov.get("teacher_path", "")
-        self._warm_epochs    = int(ov.get("warm_epochs", 5))
-        self._w_kd           = float(ov.get("w_kd", 0.5))
-        self._w_focal        = float(ov.get("w_focal", 0.3))
-        self._w_feat         = float(ov.get("w_feat", 0.0))
-        self._T_max          = float(ov.get("T_max", 6.0))
-        self._T_min          = float(ov.get("T_min", 1.5))
-        self._alpha_init     = float(ov.get("kd_alpha_init", 0.5))
-        self._scale_boost    = float(ov.get("scale_boost", 2.0))
-        self._focal_gamma    = float(ov.get("focal_gamma", 2.0))
+        # 默认值（会在 setup_model 中从 model._kd_params 更新）
+        self._teacher_path   = ""
+        self._warm_epochs    = 5
+        self._w_kd           = 0.5
+        self._w_focal        = 0.3
+        self._w_feat         = 0.0
+        self._T_max          = 6.0
+        self._T_min          = 1.5
+        self._alpha_init     = 0.5
+        self._scale_boost    = 2.0
+        self._focal_gamma    = 2.0
 
         self._alpha_scheduler: Optional[AdaptiveAlphaScheduler] = None
         self._temp_scheduler:  Optional[CosineTemperatureScheduler] = None
@@ -131,6 +130,21 @@ class AdaptiveKDTrainer(DetectionTrainer):
     # ── 模型初始化 ──────────────────────────────────────────────────────────
     def setup_model(self):
         super().setup_model()
+
+        # 从模型对象上读取蒸馏参数（新版 ultralytics 兼容）
+        kd_source = getattr(self.model, '_kd_params', None) if hasattr(self, 'model') else None
+        if kd_source and isinstance(kd_source, dict):
+            self._teacher_path   = kd_source.get("teacher_path", self._teacher_path)
+            self._warm_epochs    = int(kd_source.get("warm_epochs", self._warm_epochs))
+            self._w_kd           = float(kd_source.get("w_kd", self._w_kd))
+            self._w_focal        = float(kd_source.get("w_focal", self._w_focal))
+            self._w_feat         = float(kd_source.get("w_feat", self._w_feat))
+            self._T_max          = float(kd_source.get("T_max", self._T_max))
+            self._T_min          = float(kd_source.get("T_min", self._T_min))
+            self._alpha_init     = float(kd_source.get("kd_alpha_init", self._alpha_init))
+            self._scale_boost    = float(kd_source.get("scale_boost", self._scale_boost))
+            self._focal_gamma    = float(kd_source.get("focal_gamma", self._focal_gamma))
+
         self._load_teacher()
         self._init_distill_components()
 

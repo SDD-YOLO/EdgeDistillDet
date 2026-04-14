@@ -122,11 +122,31 @@ class EdgeProfiler:
         try:
             from ultralytics import YOLO
             model = YOLO(self.weight_path)
+            params_m, gflops = 1.0, 1.0
+
+            # 优先尝试现代 ultralytics (>=8.x) 直接返回 (nparams, gflops) 元组
+            try:
+                info_result = model.info(verbose=False)
+                if isinstance(info_result, (list, tuple)) and len(info_result) >= 2:
+                    n_params = float(info_result[0])
+                    g = float(info_result[1])
+                    if n_params > 1000:
+                        params_m = n_params / 1e6
+                    if g > 0:
+                        gflops = g
+                    del model
+                    return {"params_m": params_m, "gflops": gflops}
+            except Exception:
+                pass
+
+            # 回退：捕获 stdout 解析（旧版 ultralytics 行为）
             buf = io.StringIO()
             with redirect_stdout(buf):
-                model.info(verbose=False)
+                try:
+                    model.info(verbose=False)
+                except Exception:
+                    pass
             text = buf.getvalue()
-            params_m, gflops = 1.0, 1.0
             for line in text.split("\n"):
                 if "parameters" in line.lower():
                     for tok in line.replace(",", "").split():

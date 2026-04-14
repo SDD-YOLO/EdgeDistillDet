@@ -157,6 +157,10 @@ body {
     font-size: 20px;
 }
 
+.material-icons {
+    vertical-align: middle;
+}
+
 .theme-toggle .icon-moon {
     display: none;
 }
@@ -243,12 +247,84 @@ body {
 }
 
 .train-launcher {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
     background: color-mix(in srgb, var(--md-surface) 85%, var(--md-primary-container) 15%);
     border: 1px solid var(--md-outline-variant);
     border-radius: var(--radius-lg);
     padding: 20px;
     margin-bottom: 20px;
     box-shadow: var(--shadow-1);
+}
+
+.launcher-grid {
+    display: none;
+}
+
+.launcher-main {
+    display: grid;
+    gap: 16px;
+}
+
+.launcher-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    width: 100%;
+    max-width: none;
+    align-items: stretch;
+}
+
+.launch-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.launch-actions .btn-start,
+.launch-actions .btn-stop,
+.launch-actions .md-btn,
+.launch-actions .md-btn-text {
+    justify-content: center;
+}
+
+.launcher-side-card {
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 12px;
+    min-height: 0;
+    padding-top: 14px;
+}
+
+.launcher-side-card .card-header {
+    margin-bottom: 8px;
+}
+
+.launcher-side-card .form-row {
+    margin: 0;
+    padding: 0;
+}
+
+.form-row.stacked-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+}
+
+.form-row.compact-row {
+    grid-template-columns: 1fr;
+    gap: 16px;
+}
+
+.launcher-side-card .form-row {
+    margin-bottom: 0;
+}
+
+.launcher-side-card .form-group {
+    min-width: 0;
 }
 
 .launch-header {
@@ -273,7 +349,7 @@ body {
 
 .launch-modes {
     display: grid;
-    grid-template-columns: repeat(3, minmax(180px, 1fr));
+    grid-template-columns: 1fr;
     gap: 10px;
     margin-bottom: 12px;
 }
@@ -285,6 +361,25 @@ body {
 
 .mode-option input[type="radio"] {
     display: none;
+}
+
+.mode-option.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.mode-option.disabled .mode-card,
+.mode-option.disabled .mode-card * {
+    pointer-events: none;
+}
+
+.config-card.disabled-panel {
+    opacity: 0.65;
+    pointer-events: none;
+}
+
+.config-card.disabled-panel .hint {
+    color: var(--md-on-surface-variant);
 }
 
 .mode-card {
@@ -391,6 +486,7 @@ body {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 18px;
+    align-items: stretch;
 }
 
 .config-section,
@@ -398,6 +494,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: 14px;
+    min-height: 0;
 }
 
 .section-title {
@@ -464,6 +561,10 @@ body {
 .hint {
     font-size: 11px;
     color: var(--md-on-surface-variant);
+}
+
+.hint.warning {
+    color: var(--md-warning) !important;
 }
 
 .md-input,
@@ -561,6 +662,7 @@ body {
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 8px;
+    align-items: center;
 }
 
 .file-picker-label {
@@ -717,7 +819,8 @@ body {
     width: 18px;
     height: 18px;
     left: 3px;
-    top: 3px;
+    top: 50%;
+    transform: translateY(-50%);
     border-radius: 50%;
     background: #fff;
     transition: transform 0.3s ease;
@@ -730,14 +833,15 @@ body {
 }
 
 .md-switch:has(input:checked)::after {
-    transform: translateX(18px);
+    transform: translate(18px, -50%);
 }
 
 .log-card {
-    min-height: 500px;
+    min-height: 0;
     flex: 1;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .log-header {
@@ -822,7 +926,7 @@ body {
 .progress-bar {
     height: 100%;
     width: 0;
-    background: linear-gradient(90deg, var(--md-primary), color-mix(in srgb, var(--md-primary) 70%, #fff));
+    background: var(--md-primary);
     transition: width 0.25s ease;
 }
 
@@ -835,20 +939,37 @@ body {
 }
 
 .log-container {
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: 100%;
     border-radius: var(--radius-md);
     background: var(--log-bg);
     color: var(--log-text);
-    font-family: 'Consolas', 'Roboto Mono', monospace;
+    font-family: 'Consolas', 'Courier New', 'Roboto Mono', monospace;
     font-size: 12px;
+    line-height: 1.25;
     padding: 10px;
-    overflow: auto;
-    min-height: 300px;
+    overflow-y: auto;
+    overflow-x: auto;
 }
 
 .log-line {
     margin-bottom: 2px;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    white-space: pre-wrap;
     word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.log-line.logo {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    margin: 0;
+    padding: 0;
+    line-height: 1.0;
 }
 
 .log-line.info { color: #8dc3ff; }
@@ -1037,6 +1158,34 @@ body {
     color: var(--md-on-surface-variant);
 }
 
+.metrics-empty {
+    display: grid;
+    place-items: center;
+    min-height: 240px;
+    border: 1px dashed var(--md-outline-variant);
+    border-radius: 16px;
+    padding: 28px;
+    background: var(--md-surface-container-low);
+    color: var(--md-on-surface-variant);
+    text-align: center;
+}
+
+.metrics-empty .empty-placeholder {
+    display: grid;
+    gap: 12px;
+    align-items: center;
+    justify-items: center;
+}
+
+.metrics-empty .empty-placeholder .material-icons {
+    font-size: 44px;
+    color: var(--md-primary);
+}
+
+.hidden {
+    display: none !important;
+}
+
 .trend-icon {
     font-weight: 700;
 }
@@ -1080,7 +1229,8 @@ body {
     width: 16px;
     height: 16px;
     left: 2px;
-    top: 2px;
+    top: 50%;
+    transform: translateY(-50%);
     border-radius: 50%;
     background: #fff;
     transition: transform 0.3s ease;
@@ -1091,7 +1241,7 @@ body {
 }
 
 .auto-refresh-label input[type="checkbox"]:checked::before {
-    transform: translateX(16px);
+    transform: translate(16px, -50%);
 }
 
 .auto-refresh-interval {
@@ -1448,31 +1598,6 @@ body {
     transition: filter 0.3s ease;
 }
 
-/* ---- 4. Distillation Flow Canvas Container ---- */
-#distill-flow-canvas,
-.distill-flow-container {
-    width: 100%;
-    min-height: 180px;
-    border-radius: var(--radius-md);
-    overflow: hidden;
-    background:
-        radial-gradient(circle at 15% 50%, rgba(103, 80, 164, 0.06), transparent 35%),
-        radial-gradient(circle at 85% 50%, rgba(0, 106, 107, 0.06), transparent 35%),
-        var(--md-surface);
-    border: 1px solid var(--md-outline-variant);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 14px;
-    position: relative;
-}
-
-#distill-canvas {
-    display: block;
-    width: 100%;
-    will-change: contents;
-}
-
 /* ---- 5. CountUp Number Animation ---- */
 .stat-value.animating,
 .overview-value.animating {
@@ -1574,29 +1699,11 @@ body {
 
 /* ---- Enhanced Progress Bar (Striped + Complete Flash) ---- */
 .progress-bar-wrapper.stripes-active .progress-bar {
-    background-image: linear-gradient(
-        45deg,
-        rgba(255,255,255,0.1) 25%,
-        transparent 25%,
-        transparent 50%,
-        rgba(255,255,255,0.1) 50%,
-        rgba(255,255,255,0.1) 75%,
-        transparent 75%,
-        transparent
-    );
-    background-size: 20px 20px;
-    animation: progressStripes 0.8s linear infinite;
-}
-
-@keyframes progressStripes {
-    from { background-position: 0 0; }
-    to   { background-position: 40px 0; }
+    background: var(--md-primary);
 }
 
 .progress-bar-wrapper.progress-near-complete .progress-bar {
-    background: linear-gradient(90deg, var(--md-success), #4ADE80, var(--md-success));
-    background-size: 200% 100%;
-    animation: progressNearComplete 1.5s ease infinite;
+    background: var(--md-success);
 }
 
 @keyframes progressNearComplete {
@@ -1606,14 +1713,6 @@ body {
 
 .progress-bar-wrapper.progress-complete .progress-bar {
     background: var(--md-success);
-    animation: progressFlash 2s ease;
-}
-
-@keyframes progressFlash {
-    0%   { box-shadow: 0 0 8px rgba(31,122,59,0.5); }
-    30%  { box-shadow: 0 0 24px rgba(31,122,59,0.7); }
-    60%  { box-shadow: 0 0 12px rgba(31,122,59,0.4); }
-    100% { box-shadow: none; }
 }
 
 /* ---- Log Toolbar (Search / Filter / Copy) ---- */
@@ -1817,6 +1916,8 @@ body {
 /* Log line entrance animation */
 .log-line {
     animation: logLineSlideIn 0.25s ease-out both;
+    word-break: normal;
+    overflow-wrap: normal;
 }
 
 @keyframes logLineSlideIn {

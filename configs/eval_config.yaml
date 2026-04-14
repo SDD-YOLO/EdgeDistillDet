@@ -6,8 +6,8 @@
 evaluation:
   # 待评估权重列表（支持多模型对比）
   weight_paths:
-    - "F:\Drone_dataset\weight\v5n_native.pt"
-    - "F:\Drone_dataset\weight\26n_ov5.pt"
+    - "F:/Drone_dataset/weight/v5n_native.pt"
+    - "F:/Drone_dataset/weight/26n_ov5.pt"
 
   test_yaml:    "F:/Drone_dataset/test_data.yaml"
   imgsz:        640

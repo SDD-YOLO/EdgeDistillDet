@@ -8,10 +8,17 @@ const AppState = {
     autoScroll: true,
     logPollInterval: null,
     statusPollInterval: null,
+    elapsedIntervalId: null,
+    lastTrainingStatus: null,
     logOffset: 0,
     metricsInitialized: false,
+    useSSE: false,
     filePickerTarget: null,      // 当前文件选择器目标输入ID
-    filePickerAccept: null       // 当前文件选择器accept属性
+    filePickerAccept: null,      // 当前文件选择器accept属性
+    filePickerDirectory: false,   // 当前文件选择器是否为目录选择
+    filePickerDefaultPath: '',    // 当前文件选择器打开时的默认路径
+    resumeCandidates: [],
+    selectedResumeCandidate: null
 };
 
 // ==================== API Helper ====================
@@ -35,6 +42,48 @@ const API = {
     get(url) { return this.request(url); },
     post(url, body) { return this.request(url, { method: 'POST', body: JSON.stringify(body) }); }
 };
+
+let configAutoSaveTimer = null;
+
+function queueConfigAutoSave() {
+    if (configAutoSaveTimer) {
+        clearTimeout(configAutoSaveTimer);
+    }
+    configAutoSaveTimer = setTimeout(() => {
+        saveConfig({ silent: true }).catch(() => {});
+    }, 800);
+}
+
+function initConfigAutoSave() {
+    const inputs = document.querySelectorAll('.config-section input, .config-section select');
+    inputs.forEach(input => {
+        if (input.type === 'file') return;
+        const eventName = input.type === 'range' || input.type === 'checkbox' ? 'input' : 'change';
+        input.addEventListener(eventName, () => {
+            queueConfigAutoSave();
+        });
+    });
+}
+
+function initRunNameValidation() {
+    const projectEl = document.getElementById('project');
+    const runNameEl = document.getElementById('run-name');
+    if (projectEl) {
+        projectEl.addEventListener('change', () => {
+            refreshRunNameSuggestion({ forceDefault: true });
+            if (getCurrentTrainMode() === 'resume') {
+                refreshResumeCandidates({ selectFirst: false }).catch(() => {});
+            }
+            AppState.selectedResumeCandidate = null;
+        });
+    }
+    if (runNameEl) {
+        runNameEl.addEventListener('blur', () => {
+            refreshRunNameSuggestion({ forceDefault: false });
+            AppState.selectedResumeCandidate = null;
+        });
+    }
+}
 
 // ==================== Toast Notifications ====================
 function showToast(message, type = 'info') {
@@ -126,8 +175,8 @@ function managePolling() {
     AppState.statusPollInterval = setInterval(() => checkTrainingStatus(), 2000);
     checkTrainingStatus();
 
-    // Poll logs more frequently on training tab
-    if (AppState.currentTab === 'training') {
+    // Poll logs only when SSE is unavailable
+    if (AppState.currentTab === 'training' && !AppState.useSSE) {
         AppState.logPollInterval = setInterval(() => fetchTrainingLogs(), 1200);
         fetchTrainingLogs();
     }
@@ -245,14 +294,40 @@ function editSliderValue(slider, valueEl) {
  * @param {string} targetId - 目标文本输入框ID
  * @param {string} accept - 文件类型限制，如 '.pt,.pth'
  */
-function triggerFilePicker(targetId, accept = '') {
+function triggerFilePicker(targetId, accept = '', directory = false) {
     AppState.filePickerTarget = targetId;
     AppState.filePickerAccept = accept;
+    AppState.filePickerDirectory = directory;
+
+    const targetEl = document.getElementById(targetId);
+    const currentPath = targetEl && targetEl.value.trim() ? targetEl.value.trim() : '';
+    AppState.filePickerDefaultPath = currentPath || targetEl?.placeholder || '';
+
+    const wrapper = targetEl?.closest('.file-input-wrapper');
+    const label = wrapper?.querySelector('.file-picker-label');
+    if (label) {
+        label.title = currentPath
+            ? `浏览文件 - 当前路径: ${currentPath}`
+            : `浏览文件 - 默认路径: ${AppState.filePickerDefaultPath}`;
+    }
+
     const hiddenInput = document.getElementById('hidden-file-input');
     if (hiddenInput) {
         hiddenInput.accept = accept;
+        hiddenInput.dataset.startPath = AppState.filePickerDefaultPath;
+        if (directory) {
+            hiddenInput.setAttribute('webkitdirectory', '');
+            hiddenInput.setAttribute('directory', '');
+        } else {
+            hiddenInput.removeAttribute('webkitdirectory');
+            hiddenInput.removeAttribute('directory');
+        }
         hiddenInput.click(); // 触发文件选择对话框
     }
+}
+
+function triggerDirectoryPicker(targetId) {
+    triggerFilePicker(targetId, '', true);
 }
 
 /**
@@ -281,8 +356,14 @@ function handleFileSelect(fileInputOrTargetId, targetId) {
     
     if (fileInput.files && fileInput.files.length > 0) {
         const file = fileInput.files[0];
-        // Use webkitRelativePath for full path if available, otherwise use name
-        const filePath = file.webkitRelativePath || file.name;
+        const isDirectory = !!AppState.filePickerDirectory;
+        let filePath = file.webkitRelativePath || file.name;
+        if (isDirectory && file.webkitRelativePath) {
+            const parts = file.webkitRelativePath.split('/');
+            if (parts.length > 1) {
+                filePath = parts[0];
+            }
+        }
         const targetEl = document.getElementById(actualTargetId);
         if (targetEl) {
             targetEl.value = filePath;
@@ -290,13 +371,16 @@ function handleFileSelect(fileInputOrTargetId, targetId) {
             targetEl.style.borderColor = 'var(--md-success)';
             setTimeout(() => { targetEl.style.borderColor = ''; }, 1500);
         }
-        showToast(`已选择文件: ${file.name}`, 'success');
+        showToast(isDirectory ? `已选择目录: ${filePath}` : `已选择文件: ${file.name}`, 'success');
         
-        // 重置隐藏输入以便可以选择相同文件再次触发change事件
+        // 重置隐藏输入以便可以选择相同文件/目录再次触发change事件
         fileInput.value = '';
+        fileInput.removeAttribute('webkitdirectory');
+        fileInput.removeAttribute('directory');
         // 清除状态
         AppState.filePickerTarget = null;
         AppState.filePickerAccept = null;
+        AppState.filePickerDirectory = false;
     }
 }
 
@@ -413,9 +497,192 @@ async function loadDefaultConfig() {
     try {
         const data = await API.get('/api/config/distill_config.yaml');
         populateForm(data.config);
+        await refreshRunNameSuggestion({ forceDefault: true });
     } catch (e) {
         console.log('使用默认配置');
+        await refreshRunNameSuggestion({ forceDefault: true });
     }
+}
+
+async function getProjectRunInfo(project) {
+    try {
+        const params = new URLSearchParams({ project });
+        return await API.get(`/api/output/check?${params.toString()}`);
+    } catch (error) {
+        console.warn('无法获取运行名称提示', error);
+        return null;
+    }
+}
+
+function isDefaultRunName(name) {
+    const normalized = (name || '').trim();
+    return normalized === '' || normalized === 'adaptive_kd_v1' || normalized === 'adaptive_kd';
+}
+
+function updateRunNameHint(project, runName, info) {
+    const hintEl = document.getElementById('run-name-hint');
+    if (!hintEl || !info) return;
+    if (runName && info.existing_names?.includes(runName)) {
+        hintEl.textContent = `目录已存在：${project}/${runName}，请修改名称以避免覆盖。`;
+        hintEl.classList.add('warning');
+    } else {
+        hintEl.textContent = `建议输出目录: ${project}/${info.next_exp_name}`;
+        hintEl.classList.remove('warning');
+    }
+}
+
+async function refreshRunNameSuggestion(options = {}) {
+    const projectEl = document.getElementById('project');
+    const runNameEl = document.getElementById('run-name');
+    if (!projectEl || !runNameEl) return null;
+
+    const project = projectEl.value.trim() || 'runs/distill';
+    const currentName = runNameEl.value.trim();
+    const info = await getProjectRunInfo(project);
+    if (!info) return null;
+
+    if (options.forceDefault || isDefaultRunName(currentName)) {
+        const suggested = info.next_exp_name || 'exp1';
+        if (!currentName || isDefaultRunName(currentName)) {
+            runNameEl.value = suggested;
+        }
+    }
+
+    updateRunNameHint(project, runNameEl.value.trim(), info);
+    if (getCurrentTrainMode() === 'resume') {
+        await refreshResumeCandidates({ selectFirst: true });
+    }
+    return info;
+}
+
+async function getResumeCandidates(project) {
+    try {
+        const params = new URLSearchParams({ project });
+        return await API.get(`/api/train/resume_candidates?${params.toString()}`);
+    } catch (error) {
+        console.warn('获取续训候选失败', error);
+        return { status: 'error', candidates: [] };
+    }
+}
+
+function renderResumeCandidates(candidates) {
+    const container = document.getElementById('resume-candidate-panel');
+    const select = document.getElementById('resume-run-select');
+    const hint = document.getElementById('resume-run-hint');
+
+    if (!select || !hint || !container) return;
+    select.innerHTML = '';
+    select.disabled = false;
+
+    if (!candidates.length) {
+        select.disabled = true;
+        hint.textContent = '请先在项目目录下完成一次训练，生成 last.pt 或 weights/last.pt。';
+        return;
+    }
+
+    candidates.forEach((item, index) => {
+        const option = document.createElement('option');
+        option.value = String(index);
+        option.textContent = item.display_name;
+        select.appendChild(option);
+    });
+    hint.textContent = '可选择已有运行继续训练。选择后会自动填充项目目录与运行名称。';
+}
+
+async function refreshResumeCandidates(options = {}) {
+    const projectEl = document.getElementById('project');
+    if (!projectEl) return [];
+
+    const project = projectEl.value.trim() || 'runs/distill';
+    const result = await getResumeCandidates(project);
+    const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+    AppState.resumeCandidates = candidates;
+
+    renderResumeCandidates(candidates);
+    if (options.selectFirst && candidates.length) {
+        const select = document.getElementById('resume-run-select');
+        if (select) {
+            select.selectedIndex = 0;
+            applySelectedResumeCandidate(candidates[0]);
+        }
+    }
+    return candidates;
+}
+
+function setResumePanelEnabled(enabled) {
+    const container = document.getElementById('resume-candidate-panel');
+    const select = document.getElementById('resume-run-select');
+    const hint = document.getElementById('resume-run-hint');
+    if (container) {
+        container.classList.toggle('disabled-panel', !enabled);
+    }
+    if (select) {
+        select.disabled = !enabled;
+    }
+    if (hint) {
+        hint.textContent = enabled
+            ? '可选择已有运行继续训练。选择后会自动填充项目目录与运行名称。'
+            : '请选择“断点续训”模式以启用续训历史选择。';
+    }
+}
+
+function applySelectedResumeCandidate(candidate) {
+    AppState.selectedResumeCandidate = candidate;
+    if (!candidate) {
+        return;
+    }
+    const projectEl = document.getElementById('project');
+    const runNameEl = document.getElementById('run-name');
+    const hint = document.getElementById('run-name-hint');
+    if (projectEl) {
+        projectEl.value = candidate.project;
+    }
+    if (runNameEl) {
+        runNameEl.value = candidate.name;
+    }
+    if (hint) {
+        hint.textContent = `当前续训候选：${candidate.display_name}`;
+        hint.classList.remove('warning');
+    }
+}
+
+function handleResumeCandidateChange() {
+    const select = document.getElementById('resume-run-select');
+    if (!select || select.disabled) return;
+    const selectedIndex = Number(select.value);
+    if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= AppState.resumeCandidates.length) {
+        AppState.selectedResumeCandidate = null;
+        return;
+    }
+    const candidate = AppState.resumeCandidates[selectedIndex];
+    applySelectedResumeCandidate(candidate);
+}
+
+function clearResumeSelection() {
+    AppState.selectedResumeCandidate = null;
+    const select = document.getElementById('resume-run-select');
+    if (select) {
+        select.selectedIndex = 0;
+    }
+}
+
+function updateResumePanelState(mode) {
+    if (mode === 'resume') {
+        setResumePanelEnabled(true);
+        refreshResumeCandidates({ selectFirst: false }).catch(() => {});
+    } else {
+        setResumePanelEnabled(false);
+        clearResumeSelection();
+    }
+}
+
+async function validateRunNameBeforeStart(project, runName) {
+    const info = await getProjectRunInfo(project);
+    if (!info) return true;
+    if (runName && info.existing_names?.includes(runName)) {
+        return confirm(`运行名称“${runName}”已存在于 ${project}，可能会覆盖已存在结果。是否继续启动训练？`);
+    }
+    return true;
 }
 
 async function loadConfig() {
@@ -436,25 +703,49 @@ async function loadConfig() {
     }
 }
 
-async function saveConfig() {
+async function saveConfig(options = {}) {
+    const silent = options.silent === true;
     try {
         const config = getConfigFromForm();
         const name = 'distill_config.yaml';
         await API.post('/api/config/save', { name, config });
-        showToast('配置已保存', 'success');
+        if (!silent) {
+            showToast('配置已保存', 'success');
+        }
     } catch (e) {
-        showToast('保存配置失败', 'error');
+        if (!silent) {
+            showToast('保存配置失败', 'error');
+        }
     }
 }
 
 function resetForm() {
-    if (confirm('确定要重置所有参数到默认值吗?')) {
-        loadDefaultConfig();
-        showToast('表单已重置', 'info');
+    if (!confirm('确定要重置所有参数到最近保存的配置吗?')) {
+        return;
     }
+
+    API.get('/api/config/recent')
+        .then(result => {
+            populateForm(result.config);
+            showToast(`已从最近保存的配置重置表单: ${result.name || '最近配置'}`, 'success');
+        })
+        .catch(() => {
+            showToast('重置失败：未能读取最近保存的配置', 'error');
+        });
 }
 
 // ==================== Training Mode Selection Enhancement ====================
+function setTrainingModeSelectionEnabled(enabled) {
+    const modeOptions = document.querySelectorAll('.mode-option');
+    modeOptions.forEach(option => {
+        const radioInput = option.querySelector('input[type="radio"]');
+        if (!radioInput) return;
+
+        radioInput.disabled = !enabled;
+        option.classList.toggle('disabled', !enabled);
+    });
+}
+
 function initTrainingModeSelection() {
     const modeOptions = document.querySelectorAll('.mode-option');
     if (!modeOptions.length) return;
@@ -465,15 +756,20 @@ function initTrainingModeSelection() {
         if (!radioInput) return;
 
         option.addEventListener('click', function() {
+            if (radioInput.disabled) return;
             radioInput.checked = true;
             radioInput.dispatchEvent(new Event('change', { bubbles: true }));
         });
         
         radioInput.addEventListener('change', function() {
+            if (radioInput.disabled) {
+                return;
+            }
             if (this.checked) {
                 modeOptions.forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
                 updateTrainingModeStatus(this.value);
+                updateResumePanelState(this.value);
             }
         });
     });
@@ -482,6 +778,7 @@ function initTrainingModeSelection() {
     const defaultSelected = document.querySelector('.mode-option.selected input[type="radio"]');
     if (defaultSelected) {
         updateTrainingModeStatus(defaultSelected.value);
+        updateResumePanelState(defaultSelected.value);
     }
 }
 
@@ -491,8 +788,7 @@ function updateTrainingModeStatus(mode) {
     
     const modeLabels = {
         'full': '完整蒸馏模式',
-        'resume': '断点续训模式',
-        'fast': '快速验证模式'
+        'resume': '断点续训模式'
     };
     
     statusBadge.textContent = modeLabels[mode] || '就绪';
@@ -511,7 +807,12 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDefaultConfig();
     initFilePicker();
     initTrainingModeSelection();
+    initConfigAutoSave();
+    initRunNameValidation();
     managePolling();
+    if (typeof adjustLogContainerHeight === 'function') {
+        adjustLogContainerHeight();
+    }
 });
 
 window.addEventListener('beforeunload', () => {

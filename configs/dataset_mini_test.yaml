@@ -1,0 +1,9 @@
+# 最小测试数据集 - 仅用于验证训练流程
+path: ../datasets/mini_test
+train: images/train
+val: images/val
+
+nc: 2
+names:
+  - car
+  - person

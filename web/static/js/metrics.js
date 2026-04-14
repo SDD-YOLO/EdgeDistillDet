@@ -5,6 +5,12 @@
 let currentChartType = 'loss';
 const charts = {};
 window.charts = charts;
+const MetricsState = {
+    sources: [],
+    currentSource: '',
+    currentData: null,
+    initialized: false
+};
 let autoRefreshIntervalId = null;
 let refreshCountdownIntervalId = null;
 let refreshSecondsLeft = 30;
@@ -211,8 +217,7 @@ function initCharts() {
         });
     } catch(e) {}
 
-    loadSampleData();
-    updateOverviewStats();
+    refreshMetrics(false);
 }
 
 // Helper to create rgba from hex
@@ -223,84 +228,138 @@ function transparentize(hex, alpha) {
 }
 
 // ==================== Sample Data ====================
-function loadSampleData() {
-    const epochs = Array.from({ length: 100 }, (_, i) => i + 1);
-    const genDecay = (s, r, n=0.05) => epochs.map((_,i) => s * Math.exp(-r*i) * (1+(Math.random()-0.5)*n));
-    const genRise = (t, r, n=0.03) => epochs.map((_,i) => t*(1-Math.exp(-r*i))*(1+(Math.random()-0.5)*n));
+function _showMetricsHidden(selector, hidden = true) {
+    const el = document.getElementById(selector);
+    if (!el) return;
+    el.classList.toggle('hidden', hidden);
+}
 
-    charts.lossChart.data.labels = epochs;
-    charts.lossChart.data.datasets[0].data = genDecay(2.5, 0.04, 0.15);
-    charts.lossChart.data.datasets[1].data = genDecay(2.8, 0.03, 0.18);
-    charts.lossChart.data.datasets[2].data = genDecay(1.8, 0.035, 0.12);
-    charts.lossChart.update('none');
+function showMetricsNoData(message = '暂无训练结果可展示。请先执行训练，并刷新后查看指标监控。') {
+    _showMetricsHidden('metrics-empty', false);
+    _showMetricsHidden('metrics-content', true);
+    const tbody = document.getElementById('results-tbody');
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-hint">${message}</td></tr>`;
+    }
+    updateOverviewStats();
+    Object.values(charts).forEach(chart => {
+        if (!chart || !chart.data) return;
+        chart.data.labels = [];
+        chart.data.datasets.forEach(ds => { ds.data = []; });
+        chart.update('none');
+    });
+    document.getElementById('auto-refresh-toggle')?.checked && stopAutoRefreshLoop();
+}
 
-    charts.mapChart.data.labels = epochs;
-    charts.mapChart.data.datasets[0].data = genRise(0.92, 0.04, 0.05);
-    charts.mapChart.data.datasets[1].data = genRise(0.68, 0.035, 0.06);
-    charts.mapChart.update('none');
+function showMetricsPanel() {
+    _showMetricsHidden('metrics-empty', true);
+    _showMetricsHidden('metrics-content', false);
+}
 
-    charts.lrChart.data.labels = epochs;
-    const baseLr = 0.01;
-    charts.lrChart.data.datasets[0].data = epochs.map((_,i) => baseLr*0.5*(1+Math.cos(Math.PI*i/100)));
-    charts.lrChart.data.datasets[1].data = epochs.map((_,i) => baseLr*0.1*0.5*(1+Math.cos(Math.PI*i/100)));
-    charts.lrChart.data.datasets[2].data = epochs.map((_,i) => baseLr*0.01*0.5*(1+Math.cos(Math.PI*i/100)));
-    charts.lrChart.update('none');
-
-    charts.distillChart.data.labels = epochs;
-    const alphaData = epochs.map(i => 0.5+0.25*Math.sin(i*0.1)*Math.exp(-i*0.008));
-    const tempData = epochs.map(i => 6-4.5*(1-Math.cos(Math.PI*i/100))/2);
-    const kdLossData = genDecay(3.0, 0.045, 0.2);
-    charts.distillChart.data.datasets[0].data = alphaData;
-    charts.distillChart.data.datasets[1].data = tempData;
-    charts.distillChart.data.datasets[2].data = kdLossData;
-    charts.distillChart.update('none');
-
-    // 同步蒸馏流动画数据
-    if (typeof Animations !== 'undefined') {
-        const lastAlpha = alphaData[alphaData.length - 1];
-        const lastKDLoss = kdLossData[kdLossData.length - 1];
-        Animations.DistillFlowCanvas.setAlpha(lastAlpha);
-        Animations.DistillFlowCanvas.setKDLoss(lastKDLoss);
+function renderMetricsSource(data) {
+    if (!data || !data.chart_series || !Array.isArray(data.chart_series.epochs) || !data.chart_series.epochs.length) {
+        return showMetricsNoData();
     }
 
-    // PR curve sample
-    if (charts.prChart) {
-        const recall = Array.from({length: 100}, (_, i) => i/99);
-        const precision = recall.map(r => 0.95 * Math.pow(r, -0.05) * (1-Math.exp(-10*r)) + (Math.random()-0.5)*0.02);
-        charts.prChart.data.labels = recall.map(r => r.toFixed(2));
-        charts.prChart.data.datasets[0].data = precision.map(p => Math.min(Math.max(p, 0.3), 1));
+    showMetricsPanel();
+    const { epochs, train_losses, map_series, lr_series, distill_series, pr_curve, class_performance } = data.chart_series;
+
+    if (charts.lossChart) {
+        charts.lossChart.data.labels = epochs;
+        charts.lossChart.data.datasets[0].data = train_losses.box_loss || [];
+        charts.lossChart.data.datasets[1].data = train_losses.cls_loss || [];
+        charts.lossChart.data.datasets[2].data = train_losses.dfl_loss || [];
+        charts.lossChart.update('none');
+        charts.lossChart._originalLabels = [...epochs];
+        charts.lossChart.data.datasets.forEach(ds => ds._originalData = [...ds.data]);
+    }
+
+    if (charts.mapChart) {
+        charts.mapChart.data.labels = epochs;
+        charts.mapChart.data.datasets[0].data = map_series.map50 || [];
+        charts.mapChart.data.datasets[1].data = map_series.map50_95 || [];
+        charts.mapChart.update('none');
+        charts.mapChart._originalLabels = [...epochs];
+        charts.mapChart.data.datasets.forEach(ds => ds._originalData = [...ds.data]);
+    }
+
+    if (charts.lrChart) {
+        charts.lrChart.data.labels = epochs;
+        charts.lrChart.data.datasets[0].data = lr_series.pg0 || [];
+        charts.lrChart.data.datasets[1].data = lr_series.pg1 || [];
+        charts.lrChart.data.datasets[2].data = lr_series.pg2 || [];
+        charts.lrChart.update('none');
+        charts.lrChart._originalLabels = [...epochs];
+        charts.lrChart.data.datasets.forEach(ds => ds._originalData = [...ds.data]);
+    }
+
+    const distillCard = document.getElementById('card-distill-flow');
+    if (distillCard) {
+        const hasDistill = distill_series && Object.values(distill_series).some(arr => Array.isArray(arr) && arr.length);
+        distillCard.style.display = hasDistill ? '' : 'none';
+    }
+    if (charts.distillChart) {
+        charts.distillChart.data.labels = epochs;
+        charts.distillChart.data.datasets[0].data = distill_series?.alpha || [];
+        charts.distillChart.data.datasets[1].data = distill_series?.temperature || [];
+        charts.distillChart.data.datasets[2].data = distill_series?.kd_loss || [];
+        charts.distillChart.update('none');
+    }
+
+    const prCard = document.getElementById('pr-chart')?.closest('.chart-card');
+    if (prCard) {
+        const hasPr = pr_curve && Array.isArray(pr_curve.recall) && pr_curve.recall.length;
+        prCard.style.display = hasPr ? '' : 'none';
+    }
+    if (charts.prChart && data.chart_series.pr_curve) {
+        charts.prChart.data.labels = data.chart_series.pr_curve.recall.map(r => r.toFixed(2));
+        charts.prChart.data.datasets[0].data = data.chart_series.pr_curve.precision || [];
         charts.prChart.update('none');
     }
 
-    updateResultsTable({
-        box_loss: { best: 0.3421, final: 0.3589, improvement: '+4.9%', trend: 'down' },
-        cls_loss: { best: 0.2876, final: 0.3012, improvement: '+4.7%', trend: 'down' },
-        dfl_loss: { best: 0.8923, final: 0.9145, improvement: '+2.5%', trend: 'down' },
-        map50: { best: 0.9234, final: 0.9187, improvement: '-0.51%', trend: 'up' },
-        map50_95: { best: 0.6845, final: 0.6789, improvement: '-0.82%', trend: 'up' },
-        precision: { best: 0.8678, final: 0.8590, improvement: '-1.02%', trend: 'stable' },
-        recall: { best: 0.8234, final: 0.8156, improvement: '-0.95%', trend: 'stable' },
-    });
+    const classCard = document.getElementById('class-chart')?.closest('.chart-card');
+    if (classCard) {
+        const hasClass = class_performance && Array.isArray(class_performance.labels) && class_performance.labels.length;
+        classCard.style.display = hasClass ? '' : 'none';
+    }
+    if (charts.classChart && data.chart_series.class_performance) {
+        charts.classChart.data.labels = data.chart_series.class_performance.labels;
+        charts.classChart.data.datasets[0].data = data.chart_series.class_performance.map || [];
+        charts.classChart.data.datasets[1].data = data.chart_series.class_performance.recall || [];
+        charts.classChart.update('none');
+    }
+
+    updateOverviewStats(data.overview_stats);
+    updateResultsTable(data.summary_metrics || {});
+}
+
+function loadSampleData() {
+    // intentionally no-op: metrics visualization now depends on actual training outputs.
 }
 
 // ==================== Overview Stats ====================
-function updateOverviewStats() {
-    const stats = {
-        'ov-map50': '92.34%',
-        'ov-fps': '125 fps',
-        'ov-params': '3.2M',
-        'ov-time': '4h 23m'
+function updateOverviewStats(stats = {}) {
+    const defaults = {
+        'ov-map50': '--',
+        'ov-fps': '--',
+        'ov-params': '--',
+        'ov-time': '--'
     };
-    Object.entries(stats).forEach(([id, value]) => {
+    const values = { ...defaults, ...stats };
+    Object.entries(values).forEach(([id, value]) => {
         const el = document.getElementById(id);
-        if (el) {
-            // 使用数字滚动动画更新概览统计
-            if (typeof Animations !== 'undefined' && !Animations.prefersReducedMotion) {
-                Animations.CountUpAnim.animateStat(id, value);
-            } else {
-                el.textContent = value;
+        if (!el) return;
+        const rawValue = typeof value === 'string' ? value.trim() : value;
+        const numericValue = Number(rawValue);
+        if (typeof Animations !== 'undefined' && !Animations.prefersReducedMotion && rawValue !== '--' && !Number.isNaN(numericValue)) {
+            try {
+                Animations.CountUpAnim.animateStat(id, numericValue);
+                return;
+            } catch (error) {
+                console.warn('CountUpAnim failed for', id, error);
             }
         }
+        el.textContent = rawValue === '--' ? '--' : String(value);
     });
 }
 
@@ -457,21 +516,61 @@ async function refreshMetrics(showMessage = true) {
         if (!selector) return;
 
         const currentValue = selector.value;
-        selector.innerHTML = '<option value="">选择数据源...</option>';
-        data.csv_metrics.forEach(m => {
+        selector.innerHTML = '';
+        MetricsState.sources = data.csv_metrics || [];
+        MetricsState.currentSource = '';
+
+        if (!MetricsState.sources.length) {
             const opt = document.createElement('option');
-            opt.value = m.name; opt.textContent = `${m.name} (${m.rows} 行)`;
+            opt.value = '';
+            opt.textContent = '暂无训练结果可选';
+            selector.appendChild(opt);
+            showMetricsNoData('尚未检测到训练结果，请先训练模型并刷新。');
+            return;
+        }
+
+        MetricsState.sources.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.has_results ? m.path : '';
+            opt.textContent = m.display_name || m.name;
+            if (!m.has_results) {
+                opt.disabled = true;
+            }
             selector.appendChild(opt);
         });
-        if (currentValue) selector.value = currentValue;
+
+        const preferred = MetricsState.sources.some(m => m.has_results && m.path === currentValue)
+            ? currentValue
+            : MetricsState.sources.find(m => m.has_results)?.path || '';
+        selector.value = preferred;
+        if (preferred) {
+            MetricsState.currentSource = preferred;
+            await loadMetricsData();
+        }
         if (showMessage) showToast('指标数据已刷新', 'success');
-    } catch(e) { /* use sample */ }
+    } catch (e) {
+        showMetricsNoData('指标加载失败，请检查训练结果路径或后端服务。');
+        console.error(e);
+    }
 }
 
 async function loadMetricsData() {
-    const source = document.getElementById('metrics-source').value;
-    if (!source) return;
-    showToast(`正在加载 ${source} 的数据...`, 'info');
+    const selector = document.getElementById('metrics-source');
+    const source = selector?.value || MetricsState.currentSource;
+    if (!source) {
+        return showMetricsNoData();
+    }
+    showToast(`正在加载训练结果数据...`, 'info');
+    try {
+        const data = await API.get(`/api/metrics?source=${encodeURIComponent(source)}`);
+        MetricsState.currentSource = source;
+        MetricsState.currentData = data;
+        renderMetricsSource(data);
+        showToast(`已加载数据源：${source}`, 'success');
+    } catch (e) {
+        showMetricsNoData('加载训练结果失败，请稍后重试。');
+        console.error(e);
+    }
 }
 
 // ==================== Chart Type Filter ====================

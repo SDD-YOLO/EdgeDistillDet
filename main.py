@@ -34,7 +34,7 @@ BANNER = r"""
 
 def cmd_train(args):
     from scripts.train_with_distill import run_distill_training
-    run_distill_training(args.config)
+    run_distill_training(args.config, resume=args.resume)
 
 
 def cmd_eval(args):
@@ -65,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_train = sub.add_parser("train", help="启动自适应知识蒸馏训练")
     p_train.add_argument("--config", default="configs/distill_config.yaml",
                          help="蒸馏训练配置文件路径")
+    p_train.add_argument("--resume", nargs='?', const='auto', default=None,
+                         help="断点续训，传递 checkpoint 路径或使用 auto 自动续训")
 
     # --- eval ---
     p_eval = sub.add_parser("eval", help="运行多设备综合性能评估")
@@ -87,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
-    print(BANNER)
+    print(BANNER, flush=True)
     parser = build_parser()
     args = parser.parse_args()
 
@@ -99,7 +101,7 @@ def main():
         "profile": cmd_profile,
     }
     dispatch[args.command](args)
-    print(f"\n✅ 任务完成，总耗时 {time.time() - t0:.1f}s")
+    print(f"\n[完成] 任务完成，总耗时 {time.time() - t0:.1f}s")
 
 
 if __name__ == "__main__":

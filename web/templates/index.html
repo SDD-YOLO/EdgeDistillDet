@@ -12,7 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     
     <!-- Main Stylesheet -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
     <!-- App Bar (Header) -->
@@ -61,70 +61,91 @@
                 
                 <!-- Training Mode Selection & Start Area -->
                 <section class="train-launcher">
-                    <div class="launch-info">
-                        <div class="launch-header">
-                            <h2><span class="material-icons">rocket_launch</span> 训练控制台</h2>
-                            <span id="launch-status-badge" class="badge idle">就绪</span>
+                    <div class="launcher-left">
+                        <div class="launch-info">
+                            <div class="launch-header">
+                                <h2><span class="material-icons">rocket_launch</span> 训练控制台</h2>
+                                <span id="launch-status-badge" class="badge idle">就绪</span>
+                            </div>
+                            <p class="launch-desc">配置参数后选择训练模式并启动训练任务</p>
                         </div>
-                        <p class="launch-desc">配置参数后选择训练模式并启动训练任务</p>
-                    </div>
-                    
-                    <div class="launch-modes">
-                        <label class="mode-option selected">
-                            <input type="radio" name="train-mode" value="full" checked>
-                            <div class="mode-card">
-                                <span class="material-icons mode-icon">play_circle</span>
-                                <div class="mode-text">
-                                    <strong>完整蒸馏训练</strong>
-                                    <span>标准知识蒸馏 + 超参优化，推荐首次训练使用</span>
-                                </div>
-                            </div>
-                        </label>
                         
-                        <label class="mode-option">
-                            <input type="radio" name="train-mode" value="resume">
-                            <div class="mode-card">
-                                <span class="material-icons mode-icon">restart_alt</span>
-                                <div class="mode-text">
-                                    <strong>断点续训</strong>
-                                    <span>从上次检查点恢复训练进度</span>
+                        <div class="launch-modes">
+                            <label class="mode-option selected">
+                                <input type="radio" name="train-mode" value="full" checked>
+                                <div class="mode-card">
+                                    <span class="material-icons mode-icon">play_circle</span>
+                                    <div class="mode-text">
+                                        <strong>完整蒸馏训练</strong>
+                                        <span>标准知识蒸馏 + 超参优化，推荐首次训练使用</span>
+                                    </div>
                                 </div>
-                            </div>
-                        </label>
-                        
-                        <label class="mode-option">
-                            <input type="radio" name="train-mode" value="fast">
-                            <div class="mode-card">
-                                <span class="material-icons mode-icon">bolt</span>
-                                <div class="mode-text">
-                                    <strong>快速验证训练</strong>
-                                    <span>减少 epochs 用于快速验证配置是否正确</span>
+                            </label>
+                            
+                            <label class="mode-option">
+                                <input type="radio" name="train-mode" value="resume">
+                                <div class="mode-card">
+                                    <span class="material-icons mode-icon">restart_alt</span>
+                                    <div class="mode-text">
+                                        <strong>断点续训</strong>
+                                        <span>从上次检查点恢复训练进度</span>
+                                    </div>
                                 </div>
-                            </div>
-                        </label>
+                            </label>
+                        </div>
+
+                        <div class="launch-actions">
+                            <button id="btn-start-training" class="btn-start" onclick="startTraining()">
+                                <span class="material-icons">play_arrow</span>
+                                开始训练
+                            </button>
+                            <button id="btn-stop-training" class="btn-stop" onclick="stopTraining()" disabled>
+                                <span class="material-icons">stop</span>
+                                停止训练
+                            </button>
+                            <button class="md-btn md-btn-tonal" onclick="loadConfig()">
+                                <span class="material-icons">file_open</span>
+                                加载配置
+                            </button>
+                            <button class="md-btn md-btn-outlined" onclick="saveConfig()">
+                                <span class="material-icons">save</span>
+                                保存配置
+                            </button>
+                            <button class="md-btn md-btn-text" onclick="resetForm()">
+                                <span class="material-icons">refresh</span>
+                                重置表单
+                            </button>
+                        </div>
                     </div>
-                    
-                    <div class="launch-actions">
-                        <button id="btn-start-training" class="btn-start" onclick="startTraining()">
-                            <span class="material-icons">play_arrow</span>
-                            开始训练
-                        </button>
-                        <button id="btn-stop-training" class="btn-stop" onclick="stopTraining()" disabled>
-                            <span class="material-icons">stop</span>
-                            停止训练
-                        </button>
-                        <button class="md-btn md-btn-tonal" onclick="loadConfig()">
-                            <span class="material-icons">file_open</span>
-                            加载配置
-                        </button>
-                        <button class="md-btn md-btn-outlined" onclick="saveConfig()">
-                            <span class="material-icons">save</span>
-                            保存配置
-                        </button>
-                        <button class="md-btn md-btn-text" onclick="resetForm()">
-                            <span class="material-icons">refresh</span>
-                            重置表单
-                        </button>
+                    <div class="launcher-side">
+                        <div class="config-card launcher-side-card">
+                            <h3 class="card-header">输出配置</h3>
+                            <div class="form-row stacked-row">
+                                <div class="form-group">
+                                    <label for="project">项目目录</label>
+                                    <div class="file-input-wrapper">
+                                        <input type="text" id="project" value="runs/distill" class="md-input" placeholder="选择或输入项目目录">
+                                        <label class="file-picker-label" onclick="triggerDirectoryPicker('project')" title="浏览目录">
+                                            <span class="material-icons">folder_open</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="run-name">运行名称</label>
+                                    <input type="text" id="run-name" class="md-input" placeholder="建议运行名称（如 exp1）">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="config-card launcher-side-card" id="resume-candidate-panel">
+                            <h3 class="card-header">续训历史</h3>
+                            <div class="form-row stacked-row">
+                                <div class="form-group">
+                                    <label for="resume-run-select">请选择历史运行</label>
+                                    <select id="resume-run-select" class="md-select" onchange="handleResumeCandidateChange()"></select>
+                                    <small class="hint" id="resume-run-hint">可选择已有运行继续训练。选择后会自动填充项目目录与运行名称。</small>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -360,27 +381,6 @@
                             </div>
                         </div>
 
-                        <!-- Output Config Card -->
-                        <div class="config-card">
-                            <h3 class="card-header">输出配置</h3>
-                            <div class="form-grid cols-2">
-                                <div class="form-group">
-                                    <label for="project">项目目录</label>
-                                    <input type="text" id="project" value="runs/distill" class="md-input">
-                                </div>
-                                <div class="form-group">
-                                    <label for="run-name">运行名称</label>
-                                    <input type="text" id="run-name" value="adaptive_kd_v1" class="md-input">
-                                </div>
-                            </div>
-
-                            <!-- Data Augmentation Preview -->
-                            <h3 class="card-header" style="margin-top:14px;">数据增强预览</h3>
-                            <p style="font-size:11px;color:var(--md-on-surface-variant);margin:0 0 10px;">
-                                点击或悬停查看变换效果序列
-                            </p>
-                            <div id="aug-preview-container" class="aug-preview-container"></div>
-                        </div>
 
 
                     </div>
@@ -398,6 +398,9 @@
                                     <button class="btn-icon-sm" onclick="clearLogs()" title="清空日志">
                                         <span class="material-icons">delete_outline</span>
                                     </button>
+                                    <button class="btn-icon-sm" onclick="downloadLogs()" title="下载日志">
+                                        <span class="material-icons">download</span>
+                                    </button>
                                     <button class="btn-icon-sm" onclick="toggleAutoScroll()" id="autoscroll-btn" title="自动滚动">
                                         <span class="material-icons">vertical_align_bottom</span>
                                     </button>
@@ -412,6 +415,7 @@
                                 <div class="progress-info">
                                     <span id="epoch-info">Epoch: - / -</span>
                                     <span id="elapsed-time">耗时: --:--:--</span>
+                                    <span id="expected-time">预计总耗时: --:--:--</span>
                                 </div>
                             </div>
 
@@ -452,9 +456,7 @@
                             <span class="material-icons">refresh</span>
                             刷新数据
                         </button>
-                        <select id="metrics-source" class="md-select" onchange="loadMetricsData()">
-                            <option value="">选择数据源...</option>
-                        </select>
+                        <select id="metrics-source" class="md-select" onchange="loadMetricsData()"></select>
                     </div>
                     <div class="toolbar-right">
                         <div class="chip-group">
@@ -466,6 +468,14 @@
                     </div>
                 </div>
 
+                <div id="metrics-empty" class="metrics-empty hidden">
+                    <div class="empty-placeholder">
+                        <span class="material-icons">analytics</span>
+                        <p>暂无训练结果可展示。请先执行训练，并刷新后查看指标监控。</p>
+                    </div>
+                </div>
+
+                <div id="metrics-content">
                 <!-- Quick Overview Stats -->
                 <div class="metrics-overview" id="metrics-overview">
                     <div class="overview-card">
@@ -558,7 +568,6 @@
                     </div>
 
                     <div class="chart-card wide" id="card-distill-flow">
-                        <div id="distill-flow-canvas" class="distill-flow-container"></div>
                         <div class="chart-header" style="margin-top:0;">
                             <h3>蒸馏指标 (Alpha/Temperature 动态变化)</h3>
                             <div class="chart-actions">
@@ -620,6 +629,7 @@
                         自动刷新图表数据
                     </label>
                     <span class="auto-refresh-interval" id="refresh-timer">--</span>
+                </div>
                 </div>
             </div>
 
@@ -748,24 +758,22 @@
     <input type="file" id="hidden-file-input" style="position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none;width:0;height:0;" tabindex="-1" aria-hidden="true">
 
     <!-- JavaScript -->
-    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/training.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/metrics.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/agent.js') }}"></script>
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/animations.js"></script>
+    <script src="/static/js/training.js"></script>
+    <script src="/static/js/metrics.js"></script>
+    <script src="/static/js/agent.js"></script>
 
     <!-- Initialize Animation System on DOM Ready -->
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // 初始化所有动画（含日志搜索、WebSocket自动连接）
+            // 初始化所有动画（含日志搜索）；当前后端未提供 /ws/training WebSocket 路由，因此禁用自动 WebSocket 连接
             Animations.initAll({
                 enableLogSearch: true,
-                enableWebSocket: true
+                enableWebSocket: false
             });
 
-            // Initialize distillation flow canvas
-            Animations.DistillFlowCanvas.init('distill-flow-canvas');
             // Initialize augmentation preview
             Animations.AugmentationPreview.init('aug-preview-container');
 
@@ -774,9 +782,6 @@
             if (origSwitchTab) {
                 window.switchTab = function(tabId) {
                     origSwitchTab(tabId);
-                    if (tabId === 'metrics' && !Animations.DistillFlowCanvas.running) {
-                        Animations.DistillFlowCanvas.start();
-                    }
                     // 切换到训练面板时初始化日志搜索增强
                     if (tabId === 'training') {
                         setTimeout(() => Animations.LogEnhancer.init('log-container'), 100);
