@@ -311,8 +311,8 @@ function renderMetricsSource(data) {
         const hasPr = pr_curve && Array.isArray(pr_curve.recall) && pr_curve.recall.length;
         prCard.style.display = hasPr ? '' : 'none';
     }
-    if (charts.prChart && data.chart_series.pr_curve) {
-        charts.prChart.data.labels = data.chart_series.pr_curve.recall.map(r => r.toFixed(2));
+    if (charts.prChart && data.chart_series.pr_curve && Array.isArray(data.chart_series.pr_curve.recall)) {
+        charts.prChart.data.labels = data.chart_series.pr_curve.recall.map(r => Number(r).toFixed(2));
         charts.prChart.data.datasets[0].data = data.chart_series.pr_curve.precision || [];
         charts.prChart.update('none');
     }

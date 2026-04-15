@@ -1,162 +1,395 @@
 """
 scripts/train_with_distill.py
 ==============================
-自适应知识蒸馏训练脚本（入口）
+自适应知识蒸馏训练脚本 — 完整重写版
 
-读取 distill_config.yaml → 构建 AdaptiveKDTrainer → 启动训练 → 保存蒸馏日志
+改进：
+  1. 整洁的结构化日志输出（无冗余 banner）
+  2. 完整的训练流程：warm-up → 蒸馏 → 自动验证评估
+  3. 训练完成后自动运行 benchmark 评估
+  4. 蒸馏日志和结果统一保存
+  5. 所有输出到 stderr，由 web 后端统一处理
 """
 
 import os
+import sys
 import json
 import logging
+import io
+import re
 from pathlib import Path
 from typing import Optional
+from contextlib import redirect_stdout, redirect_stderr, contextmanager
 
 import yaml
 from ultralytics import YOLO
 
 from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("EdgeDistillDet.TrainScript")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 日志系统 — 统一输出到 stderr，格式整洁
+# ═══════════════════════════════════════════════════════════════════════════════
+class _CleanLogHandler(logging.Handler):
+    """整洁格式化日志输出到 stderr"""
+    def __init__(self):
+        super().__init__()
+        self.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)-5s | %(message)s",
+            datefmt="%H:%M:%S"
+        ))
+    
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            print(msg, file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+
+# 清除根 logger 的已有 handler，避免重复输出
+root_logger = logging.getLogger()
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# 创建主 logger — 简洁名称
+logger = logging.getLogger("DistillTrain")
+logger.setLevel(logging.INFO)
+logger.addHandler(_CleanLogHandler())
+logger.propagate = False
+
+# 配置 ultralytics 日志
+ultralytics_logger = logging.getLogger("ultralytics")
+ultralytics_logger.setLevel(logging.WARNING)
+for handler in ultralytics_logger.handlers[:]:
+    ultralytics_logger.removeHandler(handler)
+ultralytics_logger.addHandler(_CleanLogHandler())
+ultralytics_logger.propagate = False
+
+
+def _summarize_model_arch(model: YOLO) -> str:
+    """提取模型架构摘要"""
+    try:
+        m = model.model
+        n_layers = len(list(m.modules()))
+        total_params = sum(p.numel() for p in m.parameters())
+        
+        mod_counts = {}
+        for mod in m.modules():
+            tn = type(mod).__name__
+            if tn not in ("Module", "Sequential", "ModuleList", "Conv2d", "BatchNorm2d", "SiLU", "Concat"):
+                short = tn.split(".")[-1]
+                mod_counts[short] = mod_counts.get(short, 0) + 1
+        
+        parts = [f"{c}×{n}" for n, c in sorted(mod_counts.items(), key=lambda x: -x[1])]
+        params_m = f"{total_params / 1e6:.2f}M" if total_params > 1e6 else f"{total_params:,}"
+        return f"Model: {n_layers} layers | {params_m} params | {', '.join(parts)}"
+    except Exception:
+        return ""
+
+
+class _NullIO(io.TextIOBase):
+    def write(self, _):
+        return len(_) if _ else 0
+    def flush(self):
+        pass
+
+
+_NULL_IO = _NullIO()
+
+
+@contextmanager
+def _suppress_ultralytics_output():
+    """临时抑制 ultralytics 的 stdout/stderr 输出"""
+    with redirect_stdout(_NULL_IO), redirect_stderr(_NULL_IO):
+        yield
 
 
 def find_resume_checkpoint(project: str, name: str) -> Optional[Path]:
+    """查找可恢复的检查点"""
     run_dir = Path(project) / name
     candidates = [
         run_dir / 'last.pt',
         run_dir / 'weights' / 'last.pt',
         run_dir / 'weights' / 'best.pt',
     ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    if run_dir.exists():
-        pt_files = sorted(run_dir.rglob('*.pt'), key=lambda p: p.stat().st_mtime, reverse=True)
-        if pt_files:
-            return pt_files[0]
-
-    normalized = str(run_dir).replace('\\', '/').lstrip('./')
-    root = Path.cwd()
-    for pattern in ['**/last.pt', '**/weights/last.pt', '**/weights/best.pt']:
-        for candidate in sorted(root.rglob(pattern), key=lambda p: p.stat().st_mtime, reverse=True):
-            candidate_rel = str(candidate.relative_to(root)).replace('\\', '/')
-            if normalized in candidate_rel:
-                return candidate
-
+    for p in candidates:
+        if p.exists():
+            return p
     return None
 
 
-def run_distill_training(config_path: str, resume: Optional[str] = None):
-    """从配置文件启动自适应蒸馏训练。"""
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-
-    distill_cfg = cfg.get("distillation", {})
-    train_cfg   = cfg.get("training", {})
-    output_cfg  = cfg.get("output", {})
-
-    student_path = distill_cfg.get("student_weight", "")
-    teacher_path = distill_cfg.get("teacher_weight", "")
-
-    if not os.path.exists(student_path):
-        raise FileNotFoundError(f"学生模型权重不存在: {student_path}")
-    if not os.path.exists(teacher_path):
-        raise FileNotFoundError(f"教师模型权重不存在: {teacher_path}")
-
-    logger.info(f"学生模型: {student_path}")
-    logger.info(f"教师模型: {teacher_path}")
-
-    student_model = YOLO(student_path)
-
-    # 蒸馏参数（存储在模型对象上，不传入 train_args 避免新版ultralytics校验报错）
-    kd_params = {
-        "teacher_path":   teacher_path,
-        "kd_alpha_init":  distill_cfg.get("alpha_init", 0.5),
-        "T_max":          distill_cfg.get("T_max", 6.0),
-        "T_min":          distill_cfg.get("T_min", 1.5),
-        "warm_epochs":    distill_cfg.get("warm_epochs", 5),
-        "w_kd":           distill_cfg.get("w_kd", 0.5),
-        "w_focal":        distill_cfg.get("w_focal", 0.3),
-        "w_feat":         distill_cfg.get("w_feat", 0.0),
-        "scale_boost":    distill_cfg.get("scale_boost", 2.0),
-        "focal_gamma":    distill_cfg.get("focal_gamma", 2.0),
-    }
-    # 挂载到模型对象上，AdaptiveKDTrainer 从这里读取
-    student_model._kd_params = kd_params
-
-    # 仅包含标准 YOLO 训练参数
+def run_distill_training(config_path: str, resume: str = ""):
+    """
+    运行完整的蒸馏训练流程
+    
+    流程：
+      1. 加载配置和学生模型
+      2. 初始化蒸馏组件（教师模型 + 损失函数 + 调度器）
+      3. 执行训练（warm-up → 蒸馏阶段）
+      4. 自动保存蒸馏日志
+      5. 可选：自动运行评估
+    
+    Args:
+        config_path: YAML 配置文件路径
+        resume: 'auto' 或指定 checkpoint 路径
+    """
+    config_path = Path(config_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+    
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    distill_cfg = config.get('distillation', {})
+    train_cfg = config.get('training', {})
+    output_cfg = config.get('output', {})
+    
+    # ══════════════════════════════════════════════════════════════════════
+    # 阶段 1：配置信息输出（简洁版）
+    # ══════════════════════════════════════════════════════════════════════
+    logger.info(f"配置文件: {config_path}")
+    logger.info("=" * 56)
+    
+    _PROJECT_ROOT = Path(config_path).resolve().parent.parent  # configs/ -> 项目根目录
+    
+    def _resolve_weight(path_str):
+        """解析权重路径：绝对路径直接使用，相对路径相对于项目根目录"""
+        p = Path(path_str)
+        if p.is_absolute():
+            return p
+        candidate = (_PROJECT_ROOT / p).resolve()
+        return candidate if candidate.exists() else p
+    
+    # 加载学生模型
+    student_weight = distill_cfg.get('student_weight', 'yolov8n.pt')
+    student_weight = str(_resolve_weight(student_weight))
+    if not Path(student_weight).exists():
+        raise FileNotFoundError(f"学生模型不存在: {student_weight}")
+    
+    logger.info(f"学生模型: {student_weight}")
+    
+    with _suppress_ultralytics_output():
+        student_model = YOLO(student_weight)
+    
+    arch_summary = _summarize_model_arch(student_model)
+    if arch_summary:
+        logger.info(f"  {arch_summary}")
+    
+    # 设置蒸馏参数
+    teacher_weight_raw = distill_cfg.get('teacher_weight', '')
+    teacher_weight = str(_resolve_weight(teacher_weight_raw)) if teacher_weight_raw else ''
+    
+    AdaptiveKDTrainer.set_kd_params(
+        teacher_path=teacher_weight,
+        alpha_init=float(distill_cfg.get('alpha_init', 0.5)),
+        T_max=float(distill_cfg.get('T_max', 6.0)),
+        T_min=float(distill_cfg.get('T_min', 1.5)),
+        warm_epochs=int(distill_cfg.get('warm_epochs', 5)),
+        w_kd=float(distill_cfg.get('w_kd', 0.5)),
+        w_focal=float(distill_cfg.get('w_focal', 0.3)),
+        w_feat=float(distill_cfg.get('w_feat', 0.0)),
+        scale_boost=float(distill_cfg.get('scale_boost', 2.0)),
+        focal_gamma=float(distill_cfg.get('focal_gamma', 2.0)),
+    )
+    
+    total_epochs = int(train_cfg.get('epochs', 10))
+    warm_epochs = int(distill_cfg.get('warm_epochs', 5))
+    
+    logger.info("蒸馏训练器: AdaptiveKDTrainer")
+    logger.info("-" * 56)
+    logger.info(f"  epochs={total_epochs} | warmup={warm_epochs} | "
+               f"α={distill_cfg.get('alpha_init', 0.5)} | "
+               f"T:[{distill_cfg.get('T_max', 6.0)}→{distill_cfg.get('T_min', 1.5)}]")
+    logger.info(f"  w_kd={distill_cfg.get('w_kd', 0.5)} | "
+               f"w_focal={distill_cfg.get('w_focal', 0.3)} | "
+               f"teacher={os.path.basename(str(distill_cfg.get('teacher_weight', '')))}")
+    logger.info("=" * 56)
+    
+    # ══════════════════════════════════════════════════════════════════════
+    # 阶段 2：构建训练参数
+    # ══════════════════════════════════════════════════════════════════════
     train_args = {
-        "data":          train_cfg.get("data_yaml", "data.yaml"),
-        "project":       output_cfg.get("project", "runs/distill"),
-        "name":          output_cfg.get("name", "adaptive_kd"),
-        "device":        train_cfg.get("device", 0),
-        "epochs":        train_cfg.get("epochs", 150),
-        "imgsz":         train_cfg.get("imgsz", 640),
-        "batch":         train_cfg.get("batch", -1),
-        "workers":       train_cfg.get("workers", 8),
-        "lr0":           train_cfg.get("lr0", 0.01),
-        "lrf":           train_cfg.get("lrf", 0.1),
-        "warmup_epochs": train_cfg.get("warmup_epochs", 3.0),
-        "mosaic":        train_cfg.get("mosaic", 0.8),
-        "mixup":         train_cfg.get("mixup", 0.1),
-        "close_mosaic":  train_cfg.get("close_mosaic", 20),
-        "amp":           train_cfg.get("amp", True),
+        "data": train_cfg.get('data_yaml', 'coco128.yaml'),
+        "epochs": total_epochs,
+        "imgsz": int(train_cfg.get('imgsz', 640)),
+        "batch": int(train_cfg.get('batch', 16)),
+        "workers": 0,
+        "device": train_cfg.get('device', 0),
+        "lr0": float(train_cfg.get('lr0', 0.01)),
+        "lrf": float(train_cfg.get('lrf', 0.1)),
+        "warmup_epochs": int(train_cfg.get('warmup_epochs', 3)),
+        "mosaic": float(train_cfg.get('mosaic', 0.8)),
+        "mixup": float(train_cfg.get('mixup', 0.1)),
+        "close_mosaic": int(train_cfg.get('close_mosaic', 1)),
+        "amp": bool(train_cfg.get('amp', True)),
+        "project": output_cfg.get('project', 'runs/distill'),
+        "name": output_cfg.get('name', 'exp'),
+        "verbose": False,
     }
-
+    
+    # 处理 resume 参数
     if resume:
         if resume == 'auto':
             resume_path = find_resume_checkpoint(train_args['project'], train_args['name'])
             if resume_path is None:
-                logger.warning("未找到可续训 checkpoint，改为从头训练。")
+                logger.warning("未找到可续训 checkpoint，改为从头训练")
             else:
                 train_args['resume'] = str(resume_path)
-                logger.info(f"断点续训: 从 {resume_path} 恢复训练")
+                logger.info(f"断点续训: {resume_path}")
         else:
             resume_path = Path(resume)
             if resume_path.exists():
                 train_args['resume'] = str(resume_path)
-                logger.info(f"断点续训: 从指定 checkpoint {resume_path} 恢复训练")
+                logger.info(f"断点续训: {resume_path}")
             else:
                 raise FileNotFoundError(f"指定的断点权重不存在: {resume}")
-
-    student_model.TrainerClass = AdaptiveKDTrainer
-
-    logger.info("=" * 55)
-    logger.info("  自适应知识蒸馏训练启动")
-    logger.info(f"  alpha_init={kd_params['kd_alpha_init']} | "
-                f"T: [{kd_params['T_max']}→{kd_params['T_min']}] | "
-                f"warm_epochs={kd_params['warm_epochs']}")
-    logger.info("=" * 55)
-
+    
+    # 环境变量设置
+    os.environ['ULTRALYTICS_VERBOSE'] = 'False'
+    os.environ['WANDB_MODE'] = 'disabled'
+    os.environ['DATAMODULE_WORKERS'] = '0'
+    os.environ['NUM_WORKERS'] = '0'
+    
+    # ══════════════════════════════════════════════════════════════════════
+    # 阶段 3：执行训练
+    # ══════════════════════════════════════════════════════════════════════
+    _distill_trainer_cls = AdaptiveKDTrainer
+    
+    logger.info("[TRAIN] 开始蒸馏训练...")
+    
     try:
-        results = student_model.train(**train_args)
+        results = student_model.train(trainer=_distill_trainer_cls, **train_args)
     except Exception as e:
         msg = str(e)
         if 'nothing to resume' in msg.lower() or 'finished, nothing to resume' in msg.lower():
-            logger.warning("检测到 checkpoint 已完成训练，改为不使用 resume 参数重新启动训练")
+            logger.warning("checkpoint 已完成训练，改为从头开始")
             train_args.pop('resume', None)
-            results = student_model.train(**train_args)
+            results = student_model.train(trainer=_distill_trainer_cls, **train_args)
         else:
             raise
-
-    # 保存蒸馏过程日志
-    trainer: AdaptiveKDTrainer = student_model.trainer
-    if hasattr(trainer, "get_distill_log"):
+    
+    # ══════════════════════════════════════════════════════════════════════
+    # 阶段 4：保存蒸馏日志
+    # ══════════════════════════════════════════════════════════════════════
+    trainer = getattr(student_model, 'trainer', None)
+    if trainer is None:
+        logger.warning("未获取到 student_model.trainer，蒸馏日志保存失败")
+    elif not hasattr(trainer, 'get_distill_log'):
+        logger.warning("trainer 对象不支持 get_distill_log，无法保存蒸馏日志")
+    else:
         log_data = trainer.get_distill_log()
-        log_path = Path(output_cfg.get("project", "runs/distill")) / \
-                   output_cfg.get("name", "adaptive_kd") / "distill_log.json"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "w", encoding="utf-8") as f:
-            json.dump(log_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"蒸馏过程日志已保存: {log_path}")
+        if log_data:
+            run_dir = Path(getattr(trainer, 'save_dir', ''))
+            if not run_dir or not run_dir.exists():
+                run_dir = Path(train_args['project']) / train_args['name']
+                logger.warning(f"trainer.save_dir 不可用，回退到配置目录: {run_dir}")
+            else:
+                logger.info(f"使用 trainer.save_dir 保存蒸馏日志: {run_dir}")
 
-    student_model.fuse()
-    logger.info("✅ 自适应蒸馏训练完成，模型已 fuse。")
+            # 保存 distill_log.json（详细蒸馏数据）
+            log_path = run_dir / 'distill_log.json'
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, 'w', encoding='utf-8') as f:
+                json.dump(log_data, f, indent=2, ensure_ascii=False)
+            logger.info(f"蒸馏日志已保存: {log_path}")
+            
+            # 输出最终蒸馏统计
+            distill_entries = [e for e in log_data if e.get('phase') == 'distill']
+            warm_entries = [e for e in log_data if e.get('phase') == 'warm']
+            logger.info("-" * 56)
+            logger.info("训练完成统计:")
+            logger.info(f"  Warm-up epochs:   {len(warm_entries)}")
+            logger.info(f"  Distill epochs:   {len(distill_entries)}")
+            if distill_entries:
+                final_task = distill_entries[-1].get('task_loss', '--')
+                final_kd = distill_entries[-1].get('kd_loss', '--')
+                final_alpha = distill_entries[-1].get('alpha', '--')
+                final_temp = distill_entries[-1].get('temperature', '--')
+                logger.info(f"  Final task_loss:  {final_task:.4f}" if isinstance(final_task, float) else f"  Final task_loss:  {final_task}")
+                logger.info(f"  Final kd_loss:    {final_kd:.4f}" if isinstance(final_kd, float) else f"  Final kd_loss:    {final_kd}")
+                logger.info(f"  Final alpha:       {final_alpha:.3f}" if isinstance(final_alpha, float) else f"  Final alpha:       {final_alpha}")
+                logger.info(f"  Final temperature: {final_temp:.2f}" if isinstance(final_temp, float) else f"  Final temperature: {final_temp}")
+            logger.info("=" * 56)
+        else:
+            logger.warning("trainer.get_distill_log() 返回空，未生成蒸馏日志")
+    
+    # ══════════════════════════════════════════════════════════════════════
+    # 阶段 5：自动运行评估（如果配置了）
+    # ══════════════════════════════════════════════════════════════════════
+    eval_enabled = output_cfg.get('auto_eval', True)
+    if eval_enabled:
+        run_dir = Path(train_args['project']) / train_args['name']
+        best_pt = run_dir / 'weights' / 'best.pt'
+        last_pt = run_dir / 'weights' / 'last.pt'
+        
+        model_to_eval = None
+        if best_pt.exists():
+            model_to_eval = best_pt
+        elif last_pt.exists():
+            model_to_eval = last_pt
+        
+        if model_to_eval:
+            logger.info(f"[EVAL] 开始自动评估: {model_to_eval}")
+            try:
+                with _suppress_ultralytics_output():
+                    eval_model = YOLO(str(model_to_eval))
+                    eval_results = eval_model.val(
+                        data=train_cfg.get('data_yaml', 'coco128.yaml'),
+                        imgsz=int(train_cfg.get('imgsz', 640)),
+                        batch=int(train_cfg.get('batch', 16)),
+                        verbose=False,
+                    )
+                
+                # 提取关键指标
+                if hasattr(eval_results, 'box') and eval_results.box is not None:
+                    map50 = getattr(eval_results.box, 'map50', None)
+                    map50_95 = getattr(eval_results.box, 'map', None)
+                    precision = getattr(eval_results.box, 'mp', None)
+                    recall = getattr(eval_results.box, 'mr', None)
+                    
+                    logger.info("[EVAL] 评估完成:")
+                    if map50 is not None:
+                        logger.info(f"  mAP@50:     {map50:.4f}")
+                    if map50_95 is not None:
+                        logger.info(f"  mAP@50-95:  {map50_95:.4f}")
+                    if precision is not None:
+                        logger.info(f"  Precision:  {precision:.4f}")
+                    if recall is not None:
+                        logger.info(f"  Recall:     {recall:.4f}")
+                    
+                    # 保存评估结果
+                    eval_result_path = run_dir / 'eval_result.json'
+                    eval_data = {
+                        'model': str(model_to_eval),
+                        'map50': float(map50) if map50 is not None else None,
+                        'map50_95': float(map50_95) if map50_95 is not None else None,
+                        'precision': float(precision) if precision is not None else None,
+                        'recall': float(recall) if recall is not None else None,
+                    }
+                    with open(eval_result_path, 'w', encoding='utf-8') as f:
+                        json.dump(eval_data, f, indent=2, ensure_ascii=False)
+                    logger.info(f"  结果已保存: {eval_result_path}")
+            except Exception as eval_err:
+                logger.warning(f"[EVAL] 评估失败（不影响训练）: {eval_err}")
+    
+    logger.info("训练全部完成！")
     return results
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="EdgeDistillDet 蒸馏训练脚本")
+    parser.add_argument("--config", type=str, required=True, help="配置文件路径")
+    parser.add_argument("--resume", type=str, default="", 
+                        help="断点续训: 'auto' 自动查找或指定路径")
+    args = parser.parse_args()
+    
+    try:
+        results = run_distill_training(args.config, resume=args.resume)
+    except Exception as e:
+        logger.error(f"[FATAL] 训练失败: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

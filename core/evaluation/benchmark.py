@@ -17,7 +17,7 @@ import os
 import io
 import time
 import logging
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -33,30 +33,98 @@ logger = logging.getLogger("EdgeDistillDet.Benchmark")
 # 辅助：提取模型参数量 / GFLOPs
 # ─────────────────────────────────────────────────────────────────────────────
 def _extract_model_stats(model: YOLO) -> Dict[str, str]:
+    def _parse_number(value: str) -> Optional[float]:
+        if value is None:
+            return None
+        text = str(value).replace(",", "").strip()
+        if not text:
+            return None
+        suffix = text[-1].upper()
+        multiplier = 1.0
+        if suffix == 'M':
+            multiplier = 1e6
+            text = text[:-1]
+        elif suffix == 'K':
+            multiplier = 1e3
+            text = text[:-1]
+        try:
+            return float(text) * multiplier
+        except ValueError:
+            return None
+
+    params, gflops = "N/A", "N/A"
+
+    # 优先使用 ultralytics 返回的结构化信息
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(buf):
+            info_result = model.info(verbose=True)
+        if isinstance(info_result, (list, tuple)) and len(info_result) >= 2:
+            n_params = _parse_number(info_result[1])
+            g = _parse_number(info_result[3] if len(info_result) >= 4 else info_result[1])
+            if n_params is not None and n_params > 0:
+                params = f"{int(n_params):,}"
+            if g is not None and g > 0:
+                gflops = f"{g:.1f}".rstrip('0').rstrip('.')
+            if params != "N/A" or gflops != "N/A":
+                return {"params": params, "gflops": gflops}
+            text = buf.getvalue()
+        elif isinstance(info_result, dict):
+            if params == "N/A":
+                for key in ("params", "n_p", "n_params", "num_params"):
+                    if key in info_result:
+                        n_params = _parse_number(info_result[key])
+                        if n_params is not None and n_params > 0:
+                            params = f"{int(n_params):,}"
+                            break
+            if gflops == "N/A":
+                for key in ("gflops", "flops", "gfloats"):
+                    if key in info_result:
+                        g = _parse_number(info_result[key])
+                        if g is not None and g > 0:
+                            gflops = f"{g:.1f}".rstrip('0').rstrip('.')
+                            break
+            if params != "N/A" or gflops != "N/A":
+                return {"params": params, "gflops": gflops}
+            text = buf.getvalue()
+        elif isinstance(info_result, str):
+            text = info_result
+        else:
+            text = buf.getvalue()
+    except Exception:
+        text = ""
+
+    # 回退到 stdout 捕获解析旧版 ultralytics 输出
     buf = io.StringIO()
     try:
-        with redirect_stdout(buf):
+        with redirect_stdout(buf), redirect_stderr(buf):
             model.info(verbose=False)
         text = buf.getvalue()
-        params, gflops = "N/A", "N/A"
-        for line in text.split("\n"):
-            if "parameters" in line.lower() and params == "N/A":
-                parts = line.replace(",", "").split()
-                for i, p in enumerate(parts):
-                    if p.isdigit():
-                        params = p
+        for line in text.splitlines():
+            lower = line.lower()
+            if "parameters" in lower and params == "N/A":
+                for tok in line.replace(",", "").split():
+                    n = _parse_number(tok)
+                    if n is not None and n >= 1000:
+                        params = f"{int(n):,}"
                         break
-            if "gflops" in line.lower():
+            if "gflops" in lower and gflops == "N/A":
                 for tok in line.split():
-                    try:
-                        float(tok.replace(",", ""))
-                        gflops = tok.replace(",", "")
+                    g = _parse_number(tok)
+                    if g is not None and g > 0:
+                        gflops = f"{g:.1f}".rstrip('0').rstrip('.')
                         break
-                    except ValueError:
-                        continue
-        return {"params": params, "gflops": gflops}
     except Exception:
-        return {"params": "N/A", "gflops": "N/A"}
+        pass
+
+    if params == "N/A":
+        try:
+            total_params = sum(p.numel() for p in model.model.parameters())
+            params = f"{int(total_params):,}"
+        except Exception:
+            pass
+
+    return {"params": params, "gflops": gflops}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,14 +171,14 @@ def _measure_fps(
     for _ in range(3):
         model(img_paths[:batch_size], imgsz=imgsz, device=device,
               verbose=False, batch=batch_size, half=half)
-    if device != "cpu":
+    if device != "cpu" and torch.cuda.is_available():
         torch.cuda.synchronize()
 
     t0 = time.perf_counter()
     for _ in range(repeat):
         model(img_paths, imgsz=imgsz, device=device,
               verbose=False, batch=batch_size, half=half)
-    if device != "cpu":
+    if device != "cpu" and torch.cuda.is_available():
         torch.cuda.synchronize()
 
     elapsed = time.perf_counter() - t0
@@ -177,6 +245,7 @@ class UnifiedBenchmark:
     def _evaluate_one(self, weight_path: str) -> dict:
         name = Path(weight_path).stem
         logger.info(f"评估: {name}")
+        print(f"[BENCH] 开始评估: {name}", flush=True)
         row: dict = {"模型名称": name, "权重路径": weight_path}
 
         # ── 精度验证（GPU 优先）─────────────────────────────────────────────
@@ -189,11 +258,12 @@ class UnifiedBenchmark:
         stats = _extract_model_stats(model)
         row.update({"参数量": stats["params"], "GFLOPs": stats["gflops"]})
 
+        print(f"[BENCH]   正在验证精度 (device={val_device}, batch={val_batch})...", flush=True)
         val_res = model.val(
             data=self.test_yaml,
             imgsz=self.imgsz,
             device=val_device,
-            split="test",
+            split="val",
             verbose=False,
             batch=val_batch,
             half=val_half,
@@ -201,16 +271,22 @@ class UnifiedBenchmark:
             workers=0,
             cache=False,
         )
-        m = val_res.results_dict
-        row["精确率"]  = round(m["metrics/precision(B)"], 4)
-        row["召回率"]  = round(m["metrics/recall(B)"],    4)
-        row["mAP50"]   = round(m["metrics/mAP50(B)"],     4)
-        row["mAP50-95"]= round(m["metrics/mAP50-95(B)"], 4)
+        # 安全获取验证结果，兼容不同 ultralytics 版本
+        _m = getattr(val_res, 'results_dict', None) or {}
+        def _safe_get(key, default=0.0):
+            if _m:
+                return round(_m.get(key, default), 4)
+            return default
+        row["精确率"]  = _safe_get("metrics/precision(B)")
+        row["召回率"]  = _safe_get("metrics/recall(B)")
+        row["mAP50"]   = _safe_get("metrics/mAP50(B)")
+        row["mAP50-95"]= _safe_get("metrics/mAP50-95(B)")
 
         img_paths = self._get_img_paths(self.test_yaml, self.sample_count)
 
         # ── GPU FPS ──────────────────────────────────────────────────────────
         if self.run_gpu and torch.cuda.is_available() and img_paths:
+            print(f"[BENCH]   测试 GPU FP16 推理速度 (repeat={self.gpu_repeat})...", flush=True)
             gpu_fps = _measure_fps(
                 model, img_paths, self.imgsz, 0,
                 self.gpu_batch, True, self.gpu_repeat,
@@ -226,6 +302,7 @@ class UnifiedBenchmark:
 
         # ── CPU FPS ──────────────────────────────────────────────────────────
         if self.run_cpu and img_paths:
+            print(f"[BENCH]   测评 CPU FP32 推理速度 (repeat={self.cpu_repeat})...", flush=True)
             model_cpu = YOLO(weight_path)
             cpu_fps = _measure_fps(
                 model_cpu, img_paths, self.imgsz, "cpu",

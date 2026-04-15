@@ -20,6 +20,15 @@ from datetime import datetime
 from pathlib import Path
 
 
+# ═══════════════════════════════════════════════════════════════
+# 路径配置 — 必须在任何使用 ROOT 的函数之前定义！
+# ═══════════════════════════════════════════════════════════════
+WEB_DIR = Path(__file__).resolve().parent
+ROOT = WEB_DIR.parent
+_template_path = WEB_DIR / 'templates'
+_static_path = WEB_DIR / 'static'
+
+
 try:
     from utils.edge_profiler import EdgeProfiler
 except Exception:
@@ -346,6 +355,23 @@ def _load_yaml_file(path: Path):
             raise
     raise UnicodeDecodeError('utf-8', b'', 0, 1, f'Failed to decode {path} using fallback encodings')
 
+
+def _load_distill_log_json(run_dir: Path):
+    """尝试从 run_dir 中加载 distill_log.json 作为蒸馏数据回退源。"""
+    try:
+        log_path = run_dir / 'distill_log.json'
+        if not log_path.exists():
+            parent_log = run_dir.parent / 'distill_log.json'
+            if parent_log.exists():
+                log_path = parent_log
+            else:
+                return []
+        with open(log_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
 def normalize_log_line(line: str) -> str:
     if line is None:
         return ''
@@ -359,12 +385,10 @@ def normalize_log_line(line: str) -> str:
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 
-# ========== 直接使用项目根目录（修复Windows路径别名问题）==========
-WEB_DIR = Path(r'D:\Personal_Files\Projects\EdgeDistillDet\web')
-ROOT = WEB_DIR.parent
-_template_path = WEB_DIR / 'templates'
-_static_path = WEB_DIR / 'static'
 
+# ═══════════════════════════════════════════════════════════════
+# 注意：WEB_DIR / ROOT 已在模块顶部定义，此处不再重复
+# ═══════════════════════════════════════════════════════════════
 print(f"\n{'='*60}")
 print(f"  EdgeDistillDet BOOT DIAGNOSTIC")
 print(f"  __file__     : {__file__}")
@@ -392,7 +416,7 @@ training_status = {
     "running": False,
     "pid": None,
     "config": None,
-    "mode": "full",
+    "mode": "distill",
     "start_time": None,
     "current_epoch": 0,
     "total_epochs": 0,
@@ -404,7 +428,7 @@ training_status = {
 @app.route('/')
 def index():
     """直接读取HTML文件返回，绕过Jinja2模板查找（修复Windows路径别名问题）"""
-    _html_file = Path(r'D:\Personal_Files\Projects\EdgeDistillDet\web\templates\index.html')
+    _html_file = _template_path / 'index.html'
     if not _html_file.exists():
         return f"<h1>Error: Template not found at {_html_file}</h1>", 500
     with open(_html_file, 'r', encoding='utf-8') as f:
@@ -475,7 +499,7 @@ def save_config():
 
     recent_meta_path = ROOT / 'configs' / '.recent_config.json'
     with open(recent_meta_path, 'w', encoding='utf-8') as meta_file:
-        json.dump({"name": config_name, "saved_at": datetime.utcnow().isoformat() + 'Z'}, meta_file, ensure_ascii=False, indent=2)
+        json.dump({"name": config_name, "saved_at": datetime.now(tz=None).isoformat() + 'Z'}, meta_file, ensure_ascii=False, indent=2)
     
     return jsonify({"status": "ok", "message": f"配置已保存: {config_name}"})
 
@@ -489,9 +513,9 @@ def start_training():
     
     data = request.json or {}
     config_name = data.get('config', 'distill_config.yaml')
-    mode = data.get('mode', 'full')
+    mode = data.get('mode', 'distill')
     checkpoint = data.get('checkpoint')
-    if mode not in {'full', 'resume'}:
+    if mode not in {'distill', 'resume'}:
         return jsonify({"error": f"不支持的训练模式: {mode}"}), 400
 
     config_path = ROOT / 'configs' / config_name
@@ -509,25 +533,31 @@ def start_training():
     def run_train():
         global training_process, training_status
         try:
-            mode_msg = f"训练模式: {mode}"
-            training_status["logs"].append(mode_msg)
+            mode_msg = {"distill": "蒸馏训练模式（含自动评估）", "resume": "断点续训模式"}.get(mode, f"模式: {mode}")
+            training_status["logs"].append(f"已启动 {mode_msg}")
             try:
-                log_queue.put_nowait(mode_msg)
+                log_queue.put_nowait(training_status["logs"][-1])
             except queue.Full:
                 pass
 
-            if mode == 'resume':
+            # 共享环境变量（关键：强制子进程无缓冲输出，解决 Windows 管道缓冲问题）
+            _env = os.environ.copy()
+            _env['PYTHONUTF8'] = '1'
+            _env['PYTHONUNBUFFERED'] = '1'
+            _env['PYTHONIOENCODING'] = 'utf-8'
+            _env['PYTHONPATH'] = str(ROOT) + os.pathsep + (_env.get('PYTHONPATH', ''))
+
+            # 根据模式构建命令
+            if mode == 'distill':
+                cmd = [sys.executable, '-u', str(ROOT / 'scripts' / 'train_with_distill.py'), '--config', str(config_path)]
+            else:  # resume
                 resume_msg = "断点续训模式已启用，正在尝试从上次 checkpoint 自动恢复训练。"
                 training_status["logs"].append(resume_msg)
                 try:
                     log_queue.put_nowait(resume_msg)
                 except queue.Full:
                     pass
-
-            env = os.environ.copy()
-            env['PYTHONUTF8'] = '1'
-            cmd = [sys.executable, str(ROOT / 'main.py'), 'train', '--config', str(config_path)]
-            if mode == 'resume':
+                cmd = [sys.executable, '-u', str(ROOT / 'main.py'), 'train', '--config', str(config_path)]
                 if checkpoint:
                     checkpoint_path = Path(checkpoint)
                     if not checkpoint_path.is_absolute():
@@ -536,62 +566,115 @@ def start_training():
                 else:
                     cmd.append('--resume')
 
+            diag_cmd = ' '.join(cmd)
+            # 精简启动信息：显示模式 + 配置文件名
+            mode_label = {"distill": "蒸馏训练", "resume": "断点续训"}.get(mode, "训练")
+            cfg_name = Path(config_path).name if config_path else ""
+            diag_info = f"[启动] {mode_label} | 配置: {cfg_name}"
+            training_status["logs"].append(diag_info)
+            try:
+                log_queue.put_nowait(diag_info)
+            except queue.Full:
+                pass
+
             creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
             start_new_session = False if os.name == 'nt' else True
+
+            # 同时捕获 stdout 和 stderr（分离捕获，避免丢失错误信息）
             training_process = subprocess.Popen(
                 cmd,
                 cwd=str(ROOT),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,  # 分离 stderr，不再合并到 stdout
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                bufsize=1,
-                env=env,
+                bufsize=0,  # 完全无缓冲
+                env=_env,
                 creationflags=creation_flags,
                 start_new_session=start_new_session
             )
 
             training_status["pid"] = training_process.pid
-            
-            buffer = ''
-            while True:
-                char = training_process.stdout.read(1)
-                if not char:
-                    break
+            # PID 信息精简，不再显示
+            # pid_info = f"PID: {training_process.pid}"  — 调试用，用户一般不需要
 
-                buffer += char
 
-                if char in ('\r', '\n'):
-                    cleaned = normalize_log_line(buffer).rstrip('\r\n')
-                    buffer = ''
+            def _emit_log_line(line: str, is_stderr: bool = False):
+                # 不再添加 [stderr]/[诊断] 前缀 — 保持日志整洁
+                cleaned = normalize_log_line(line).rstrip('\r\n')
+                if not cleaned:
+                    return
+                training_status["logs"].append(cleaned)
+                try:
+                    log_queue.put_nowait(cleaned)
+                except queue.Full:
+                    pass
+                epoch_match = re.search(r"\bEpoch\s*(\d+)\s*/\s*(\d+)\b", cleaned, re.IGNORECASE)
+                if not epoch_match:
+                    raw_match = re.search(r"^\s*(\d+)\s*/\s*(\d+)\b", cleaned)
+                    if raw_match and re.search(r"\bGPU_mem\b|\bbox_loss\b|\bcls_loss\b|\bdfl_loss\b|\bSize\b|\bInstances\b|\bit/s\b|/s\b", cleaned, re.IGNORECASE):
+                        epoch_match = raw_match
+                if epoch_match:
+                    current_epoch = int(epoch_match.group(1))
+                    total_epochs = int(epoch_match.group(2))
+                    training_status["current_epoch"] = current_epoch
+                    training_status["total_epochs"] = total_epochs
 
-                    if cleaned:
-                        training_status["logs"].append(cleaned)
-                        try:
-                            log_queue.put_nowait(cleaned)
-                        except queue.Full:
-                            pass
+            def _drain_stream(stream, is_stderr: bool = False):
+                buffer = ""
+                while True:
+                    chunk = stream.read(1024)
+                    if chunk == '':
+                        break
+                    buffer += chunk
+                    while True:
+                        newline_pos = min((pos for pos in (buffer.find('\n'), buffer.find('\r')) if pos != -1), default=-1)
+                        if newline_pos == -1:
+                            break
+                        line = buffer[:newline_pos]
+                        buffer = buffer[newline_pos + 1:]
+                        if line:
+                            _emit_log_line(line, is_stderr=is_stderr)
+                if buffer:
+                    _emit_log_line(buffer, is_stderr=is_stderr)
 
-                        epoch_match = re.search(r"\bEpoch\s*(\d+)\s*/\s*(\d+)\b", cleaned, re.IGNORECASE)
-                        if not epoch_match:
-                            raw_match = re.search(r"^\s*(\d+)\s*/\s*(\d+)\b", cleaned)
-                            if raw_match and re.search(r"\bGPU_mem\b|\bbox_loss\b|\bcls_loss\b|\bdfl_loss\b|\bSize\b|\bInstances\b|\bit/s\b|/s\b", cleaned, re.IGNORECASE):
-                                epoch_match = raw_match
+            stdout_thread = threading.Thread(target=_drain_stream, args=(training_process.stdout, False), daemon=True)
+            stderr_thread = threading.Thread(target=_drain_stream, args=(training_process.stderr, True), daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
 
-                        if epoch_match:
-                            current_epoch = int(epoch_match.group(1))
-                            total_epochs = int(epoch_match.group(2))
-                            training_status["current_epoch"] = current_epoch
-                            training_status["total_epochs"] = total_epochs
-            training_process.wait()
+            return_code = training_process.wait() if training_process is not None else -1
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+
+            # 退出信息（精简）
+            if return_code == 0:
+                exit_msg = "训练进程正常结束"
+            else:
+                exit_msg = f"训练进程异常退出 (code={return_code})，请查看上方日志"
+            training_status["logs"].append(exit_msg)
+            try:
+                log_queue.put_nowait(exit_msg)
+            except queue.Full:
+                pass
+
         except Exception as e:
-            err_msg = f"训练异常: {str(e)}"
+            import traceback
+            tb_lines = traceback.format_exc().splitlines()
+            err_msg = f"训练异常: {type(e).__name__}: {e}"
             training_status["logs"].append(err_msg)
             try:
                 log_queue.put_nowait(err_msg)
             except queue.Full:
                 pass
+            # 输出完整堆栈（前 10 行）
+            for tb_line in tb_lines[:10]:
+                training_status["logs"].append(f"[堆栈] {tb_line}")
+                try:
+                    log_queue.put_nowait(f"[堆栈] {tb_line}")
+                except queue.Full:
+                    pass
         finally:
             training_status["running"] = False
             training_status["pid"] = None
@@ -795,11 +878,24 @@ def get_metrics():
             'pr_curve': None,
             'class_performance': None
         }
+
+        has_distill_columns = any(col.startswith('distill/') for col in (columns or []))
+        distill_log_fallback = _load_distill_log_json(run_dir) if not has_distill_columns else []
+        distill_by_epoch = {}
+        for entry in distill_log_fallback:
+            try:
+                ep = int(entry.get('epoch', -1))
+                if ep >= 0:
+                    distill_by_epoch[ep] = entry
+            except (TypeError, ValueError):
+                continue
+
         for row in rows:
             epoch = as_float(row.get('epoch'))
             if epoch is None:
                 continue
-            chart['epochs'].append(int(epoch))
+            epoch_int = int(epoch)
+            chart['epochs'].append(epoch_int)
             chart['train_losses']['box_loss'].append(as_float(row.get('train/box_loss')) or 0)
             chart['train_losses']['cls_loss'].append(as_float(row.get('train/cls_loss')) or 0)
             chart['train_losses']['dfl_loss'].append(as_float(row.get('train/dfl_loss')) or 0)
@@ -808,10 +904,23 @@ def get_metrics():
             chart['lr_series']['pg0'].append(as_float(row.get('lr/pg0')) or 0)
             chart['lr_series']['pg1'].append(as_float(row.get('lr/pg1')) or 0)
             chart['lr_series']['pg2'].append(as_float(row.get('lr/pg2')) or 0)
-            if 'distill/alpha' in row or 'distill/temperature' in row or 'distill/kd_loss' in row:
-                chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [as_float(row.get('distill/alpha')) or 0]
-                chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [as_float(row.get('distill/temperature')) or 0]
-                chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [as_float(row.get('distill/kd_loss')) or 0]
+
+            if has_distill_columns and ('distill/alpha' in row or 'distill/temperature' in row or 'distill/kd_loss' in row):
+                alpha_val = as_float(row.get('distill/alpha'))
+                temp_val = as_float(row.get('distill/temperature'))
+                kd_val = as_float(row.get('distill/kd_loss'))
+                chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [alpha_val if alpha_val is not None else None]
+                chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [temp_val if temp_val is not None else None]
+                chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [kd_val if kd_val is not None else None]
+            elif distill_by_epoch:
+                de = distill_by_epoch.get(epoch_int) or distill_by_epoch.get(epoch_int - 1)
+                if de:
+                    alpha_val = de.get('alpha')
+                    temp_val = de.get('temperature')
+                    kd_val = de.get('kd_loss') or de.get('avg_kd_loss')
+                    chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [_as_float(alpha_val)]
+                    chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [_as_float(temp_val)]
+                    chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [_as_float(kd_val)]
 
         labels = _parse_dataset_labels(run_dir)
         chart['class_performance'] = _extract_class_performance(rows, columns, labels)
@@ -820,35 +929,27 @@ def get_metrics():
     runs_dir = ROOT / 'runs'
     metrics_data = []
     if runs_dir.exists():
-        run_dirs = [p for p in runs_dir.rglob('*') if p.is_dir() and p.name.startswith('exp')]
-        run_dirs = sorted({p.resolve(): p for p in run_dirs}.values(), key=lambda p: p.stat().st_mtime, reverse=True)
-        for run_dir in run_dirs:
-            result_file = run_dir / 'results.csv'
-            has_results = result_file.exists()
+        result_files = [p for p in runs_dir.rglob('results.csv') if p.is_file()]
+        result_files = sorted(result_files, key=lambda p: p.stat().st_mtime, reverse=True)
+        for result_file in result_files:
+            run_dir = result_file.parent
             display_name = f"{run_dir.name} @ {datetime.fromtimestamp(run_dir.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}"
-            if not has_results:
-                display_name += ' (无结果)'
-
             entry = {
                 'name': run_dir.name,
                 'display_name': display_name,
                 'dir': str(run_dir.relative_to(ROOT)),
-                'has_results': has_results,
-                'path': str(result_file.relative_to(ROOT)) if has_results else ''
+                'has_results': True,
+                'path': str(result_file.relative_to(ROOT))
             }
-            if has_results:
-                try:
-                    with open(result_file, 'r', encoding='utf-8', newline='') as f:
-                        reader = csv.DictReader(f)
-                        columns = list(reader.fieldnames or [])
-                    with open(result_file, 'r', encoding='utf-8', newline='') as counter_file:
-                        row_count = sum(1 for _ in counter_file) - 1
-                    entry['columns'] = columns
-                    entry['rows'] = max(row_count, 0)
-                except Exception:
-                    entry['columns'] = []
-                    entry['rows'] = 0
-            else:
+            try:
+                with open(result_file, 'r', encoding='utf-8', newline='') as f:
+                    reader = csv.DictReader(f)
+                    columns = list(reader.fieldnames or [])
+                with open(result_file, 'r', encoding='utf-8', newline='') as counter_file:
+                    row_count = sum(1 for _ in counter_file) - 1
+                entry['columns'] = columns
+                entry['rows'] = max(row_count, 0)
+            except Exception:
                 entry['columns'] = []
                 entry['rows'] = 0
             metrics_data.append(entry)
@@ -861,6 +962,7 @@ def get_metrics():
             columns, rows = load_csv_summary(target)
             if rows:
                 chart_series = build_metric_series(rows, columns, target.parent)
+
                 summary_metrics = {
                     'box_loss': summarize_series(rows, 'train/box_loss', better='lower'),
                     'cls_loss': summarize_series(rows, 'train/cls_loss', better='lower'),
@@ -890,15 +992,78 @@ def get_metrics():
                     }
                 }
 
-    distill_logs = list(runs_dir.rglob('distill_log.json')) if runs_dir.exists() else []
     response = {
         'status': 'ok',
-        'csv_metrics': metrics_data,
-        'distill_logs': [str(p.relative_to(ROOT)) for p in distill_logs]
+        'csv_metrics': metrics_data
     }
     if selected_data:
         response.update(selected_data)
     return jsonify(response)
+
+
+@app.route('/api/debug/metrics', methods=['GET'])
+def debug_metrics():
+    """调试端点：返回详细的 metrics 诊断信息"""
+    import csv
+
+    def _dbg_load_csv(path):
+        try:
+            with open(path, 'r', encoding='utf-8', newline='') as f:
+                reader = csv.DictReader(f)
+                rows = [row for row in reader]
+            return list(reader.fieldnames or []), rows
+        except Exception:
+            return [], []
+
+    def _dbg_extract_epochs(rows):
+        epochs = []
+        for row in rows:
+            val = row.get('epoch')
+            if val is not None:
+                try: epochs.append(int(float(val)))
+                except: pass
+        return epochs
+
+    _runs_dir = ROOT / 'runs'
+    selected_path = request.args.get('source', '').strip()
+    info = {
+        'ROOT': str(ROOT),
+        'runs_dir_exists': _runs_dir.exists(),
+        'selected_path': selected_path,
+    }
+
+    if selected_path:
+        target = (ROOT / selected_path).resolve()
+        info['target_resolved'] = str(target)
+        info['target_exists'] = target.exists()
+        info['target_is_file'] = target.is_file() if target.exists() else None
+        info['target_suffix'] = target.suffix if target.exists() else None
+        info['ROOT_in_parents'] = ROOT in target.parents if target.exists() else None
+
+        if target.exists() and target.is_file() and target.suffix == '.csv' and ROOT in target.parents:
+            columns, rows = _dbg_load_csv(target)
+            info['csv_columns_count'] = len(columns)
+            info['csv_columns_sample'] = columns[:5] if columns else []
+            info['csv_rows_count'] = len(rows)
+            if rows:
+                epochs = _dbg_extract_epochs(rows)
+                info['chart_epochs'] = epochs[:5]
+                info['chart_epochs_len'] = len(epochs)
+                info['will_show_charts'] = bool(isinstance(epochs, list) and len(epochs) > 0)
+
+    # Also show all found exp dirs
+    result_files = [p for p in _runs_dir.rglob('results.csv') if p.is_file()]
+    result_files = sorted(result_files, key=lambda p: p.parent.stat().st_mtime, reverse=True)
+    info['found_exp_dirs'] = [
+        {
+            'name': p.parent.name,
+            'has_results': True,
+            'rel_path': str(p.parent.relative_to(ROOT))
+        }
+        for p in result_files
+    ]
+
+    return jsonify({'status': 'ok', 'debug': info})
 
 
 @app.route('/api/agent', methods=['GET', 'POST'])

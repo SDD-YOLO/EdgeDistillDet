@@ -1,6 +1,6 @@
 distillation:
-  student_weight: D:/Personal_Files/Projects/EdgeDistillDet/models/yolov8n.pt
-  teacher_weight: D:/Personal_Files/Projects/EdgeDistillDet/models/yolov8m.pt
+  student_weight: models/yolov8n.pt
+  teacher_weight: models/yolov8m.pt
   alpha_init: 0.45
   T_max: 6.00022671881199
   T_min: 2.00042512186827
@@ -13,7 +13,7 @@ distillation:
 training:
   data_yaml: coco128.yaml
   device: '0'
-  epochs: 20
+  epochs: 10
   imgsz: 640
   batch: 16
   workers: 4
@@ -22,8 +22,8 @@ training:
   warmup_epochs: 3
   mosaic: 0.8
   mixup: 0.1
-  close_mosaic: 8
+  close_mosaic: 1
   amp: true
 output:
-  project: runs/detect/runs/detect/runs/distill
-  name: exp1
+  project: runs/distill
+  name: exp2

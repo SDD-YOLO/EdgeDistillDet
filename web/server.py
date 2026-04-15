@@ -3,11 +3,15 @@ EdgeDistillDet Web Server - 自包含启动脚本
 ==========================================
 不依赖 import app.py，彻底避免 Windows 路径缓存问题
 
-使用方法: python D:\Personal_Files\Projects\EdgeDistillDet\web\server.py
+使用方法: python web/server.py
 """
 
-# ============ 路径配置（硬编码，不依赖 __file__）============
-BASE_DIR = r'D:\Personal_Files\Projects\EdgeDistillDet'
+# ============ 路径配置（自动检测，不依赖硬编码）============
+import os as _os
+import sys as _sys
+from pathlib import Path as _Path
+
+BASE_DIR = str(_Path(__file__).resolve().parent.parent)
 WEB_DIR = BASE_DIR + r'\web'
 TEMPLATE_FILE = WEB_DIR + r'\templates\index.html'
 STATIC_DIR = WEB_DIR + r'\static'
@@ -287,6 +291,28 @@ def _summarize_series(rows, key, better='higher'):
     }
 
 
+def _load_distill_log_json(run_dir):
+    """尝试从 run_dir 中加载 distill_log.json 作为蒸馏数据的回退源。"""
+    if not run_dir or not isinstance(run_dir, (str, Path)):
+        return []
+    try:
+        log_path = Path(run_dir) / 'distill_log.json'
+        if not log_path.exists():
+            # 尝试在子目录中查找（如 weights/ 或上级目录）
+            parent_log = Path(run_dir).parent / 'distill_log.json'
+            if parent_log.exists():
+                log_path = parent_log
+            else:
+                return []
+        with open(log_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception:
+        return []
+
+
 def _build_metric_series(rows, columns, run_dir):
     chart = {
         'epochs': [],
@@ -297,11 +323,31 @@ def _build_metric_series(rows, columns, run_dir):
         'pr_curve': None,
         'class_performance': None
     }
+
+    # 检查 CSV 是否包含蒸馏列
+    has_distill_columns = any(
+        col.startswith('distill/') for col in (columns or [])
+    )
+
+    # 预加载 distill_log.json（回退数据源）
+    distill_log_fallback = _load_distill_log_json(run_dir) if not has_distill_columns else []
+
+    # 将 distill_log.json 按 epoch 建立索引
+    distill_by_epoch = {}
+    for entry in distill_log_fallback:
+        try:
+            ep = int(entry.get('epoch', -1))
+            if ep >= 0:
+                distill_by_epoch[ep] = entry
+        except (TypeError, ValueError):
+            continue
+
     for row in rows:
         epoch = _as_float(row.get('epoch'))
         if epoch is None:
             continue
-        chart['epochs'].append(int(epoch))
+        epoch_int = int(epoch)
+        chart['epochs'].append(epoch_int)
         chart['train_losses']['box_loss'].append(_as_float(row.get('train/box_loss')) or 0)
         chart['train_losses']['cls_loss'].append(_as_float(row.get('train/cls_loss')) or 0)
         chart['train_losses']['dfl_loss'].append(_as_float(row.get('train/dfl_loss')) or 0)
@@ -310,10 +356,27 @@ def _build_metric_series(rows, columns, run_dir):
         chart['lr_series']['pg0'].append(_as_float(row.get('lr/pg0')) or 0)
         chart['lr_series']['pg1'].append(_as_float(row.get('lr/pg1')) or 0)
         chart['lr_series']['pg2'].append(_as_float(row.get('lr/pg2')) or 0)
-        if 'distill/alpha' in row or 'distill/temperature' in row or 'distill/kd_loss' in row:
-            chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [_as_float(row.get('distill/alpha')) or 0]
-            chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [_as_float(row.get('distill/temperature')) or 0]
-            chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [_as_float(row.get('distill/kd_loss')) or 0]
+
+        # 蒸馏数据：优先从 CSV 列读取，回退到 distill_log.json
+        if has_distill_columns and ('distill/alpha' in row or 'distill/temperature' in row or 'distill/kd_loss' in row):
+            alpha_val = _as_float(row.get('distill/alpha'))
+            temp_val = _as_float(row.get('distill/temperature'))
+            kd_val = _as_float(row.get('distill/kd_loss'))
+            chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [alpha_val if alpha_val is not None else None]
+            chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [temp_val if temp_val is not None else None]
+            chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [kd_val if kd_val is not None else None]
+        elif distill_by_epoch:
+            # 从 distill_log.json 回退：精确匹配 epoch，若没有则尝试 epoch-1（因为记录时机可能差一个）
+            de = distill_by_epoch.get(epoch_int) or distill_by_epoch.get(epoch_int - 1)
+            if de:
+                alpha_val = de.get('alpha')
+                temp_val = de.get('temperature')
+                # 兼容新旧字段名：新版用 avg_kd_loss，旧版可能用 kd_loss
+                kd_val = de.get('kd_loss') or de.get('avg_kd_loss')
+                chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [_as_float(alpha_val)]
+                chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [_as_float(temp_val)]
+                chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [_as_float(kd_val)]
+
     return chart
 
 
@@ -388,9 +451,9 @@ def start_training():
 
     data = request.json or {}
     config_name = data.get('config', 'distill_config.yaml')
-    mode = data.get('mode', 'full')
+    mode = data.get('mode', 'distill')
     checkpoint = data.get('checkpoint')
-    if mode not in {'full', 'resume'}:
+    if mode not in {'distill', 'resume'}:
         return jsonify({"error": f"不支持的训练模式: {mode}"}), 400
 
     config_path = os.path.join(BASE_DIR, 'configs', config_name)
@@ -407,16 +470,19 @@ def start_training():
                 except queue.Full:
                     pass
 
-            main_py = os.path.join(BASE_DIR, 'main.py')
-            cmd = [sys.executable, main_py, 'train', '--config', config_path]
-            if mode == 'resume':
-                if checkpoint:
-                    checkpoint_path = Path(checkpoint)
-                    if not checkpoint_path.is_absolute():
-                        checkpoint_path = (Path(BASE_DIR) / checkpoint_path).resolve()
-                    cmd.extend(['--resume', str(checkpoint_path)])
-                else:
-                    cmd.append('--resume')
+            if mode == 'distill':
+                cmd = [sys.executable, '-u', os.path.join(BASE_DIR, 'scripts', 'train_with_distill.py'), '--config', config_path]
+            else:
+                main_py = os.path.join(BASE_DIR, 'main.py')
+                cmd = [sys.executable, main_py, 'train', '--config', config_path]
+                if mode == 'resume':
+                    if checkpoint:
+                        checkpoint_path = Path(checkpoint)
+                        if not checkpoint_path.is_absolute():
+                            checkpoint_path = (Path(BASE_DIR) / checkpoint_path).resolve()
+                        cmd.extend(['--resume', str(checkpoint_path)])
+                    else:
+                        cmd.append('--resume')
             training_process = subprocess.Popen(
                 cmd,
                 cwd=BASE_DIR,
@@ -582,42 +648,27 @@ def get_metrics():
     metrics_data = []
     if os.path.exists(runs_dir):
         for root, dirs, files in os.walk(runs_dir):
-            for d in dirs:
-                if d.startswith('exp'):
-                    run_dir = os.path.join(root, d)
-                    result_path = os.path.join(run_dir, 'results.csv')
-                    has_results = os.path.exists(result_path)
-                    display_name = f"{d} @ {datetime.fromtimestamp(os.path.getmtime(run_dir)).strftime('%Y-%m-%d %H:%M:%S')}"
-                    if not has_results:
-                        display_name += ' (无结果)'
+            for file_name in files:
+                if file_name == 'results.csv':
+                    result_path = os.path.join(root, file_name)
+                    run_dir = os.path.dirname(result_path)
+                    display_name = f"{os.path.basename(run_dir)} @ {datetime.fromtimestamp(os.path.getmtime(run_dir)).strftime('%Y-%m-%d %H:%M:%S')}"
                     entry = {
-                        "name": d,
+                        "name": os.path.basename(run_dir),
                         "display_name": display_name,
                         "dir": os.path.relpath(run_dir, BASE_DIR),
-                        "has_results": has_results,
-                        "path": os.path.relpath(result_path, BASE_DIR) if has_results else ''
+                        "has_results": True,
+                        "path": os.path.relpath(result_path, BASE_DIR)
                     }
-                    if has_results:
-                        try:
-                            import pandas as pd
-                            df = pd.read_csv(result_path)
-                            entry["columns"] = list(df.columns)
-                            entry["rows"] = len(df)
-                        except Exception:
-                            entry["columns"] = []
-                            entry["rows"] = 0
-                    else:
+                    try:
+                        columns, rows = _load_csv_summary(Path(result_path))
+                        entry["columns"] = columns
+                        entry["rows"] = len(rows)
+                    except Exception:
                         entry["columns"] = []
                         entry["rows"] = 0
                     metrics_data.append(entry)
         metrics_data.sort(key=lambda item: os.path.getmtime(os.path.join(BASE_DIR, item['dir'])), reverse=True)
-    distill_logs = []
-    if os.path.exists(runs_dir):
-        for root, dirs, files in os.walk(runs_dir):
-            distill_logs.extend(
-                os.path.relpath(os.path.join(root, f), BASE_DIR)
-                for f in files if f == 'distill_log.json'
-            )
 
     selected_path = request.args.get('source', '').strip()
     selected_data = None
@@ -658,8 +709,7 @@ def get_metrics():
 
     response = {
         "status": "ok",
-        "csv_metrics": metrics_data,
-        "distill_logs": distill_logs
+        "csv_metrics": metrics_data
     }
     if selected_data:
         response.update(selected_data)

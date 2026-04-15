@@ -5,6 +5,8 @@
 let trainingStartTime = null;
 let wasRunning = false;
 let eventSource = null;  // SSE connection for real-time logs
+let sseReconnectAttempts = 0;
+const MAX_SSE_RECONNECT = 5;
 let lastLogoBlock = null;
 let currentLogoBlock = [];
 
@@ -33,20 +35,21 @@ function applyModeOverrides(config, mode) {
 
 // ==================== Training Control ====================
 async function startTraining() {
-    const mode = typeof getCurrentTrainMode === 'function' ? getCurrentTrainMode() : 'full';
+    const mode = typeof getCurrentTrainMode === 'function' ? getCurrentTrainMode() : 'distill';
     const baseConfig = getConfigFromForm();
     const config = applyModeOverrides(baseConfig, mode);
 
+    // 基础校验：所有模式都需要学生模型权重和数据集配置
     if (!config.distillation.student_weight) {
         showToast('请选择学生模型权重文件', 'warning');
         return;
     }
-    if (!config.distillation.teacher_weight) {
-        showToast('请选择教师模型权重文件', 'warning');
-        return;
-    }
     if (!config.training.data_yaml) {
         showToast('请填写数据集配置文件路径', 'warning');
+        return;
+    }
+    if (mode !== 'resume' && !config.distillation.teacher_weight) {
+        showToast('请选择教师模型权重文件', 'warning');
         return;
     }
 
@@ -107,11 +110,8 @@ async function startTraining() {
                 }
             });
             Animations.RealTimeSocket.on('complete', () => {
-                if (typeof Animations !== 'undefined') {
-                    Animations.TrainingButtonAnim.setState('success');
-                    Animations.Celebration.trigger({ message: '训练完成!' });
-                    Animations.ProgressBar.setStripesActive('progress-bar', false);
-                }
+                _wasPreviouslyRunning = false;  // 防止轮询重复触发
+                _triggerTrainingComplete();
             });
         }
 
@@ -167,30 +167,23 @@ function connectSSELogStream() {
     }
 
     AppState.useSSE = true;
-    if (AppState.logPollInterval) {
-        clearInterval(AppState.logPollInterval);
-        AppState.logPollInterval = null;
-    }
+    // 不清除轮询！改为混合模式：SSE 主导 + 轮询兜底
 
     eventSource = new EventSource('/api/train/logs/stream');
 
+    let sseReceivedData = false;
+
     eventSource.onmessage = (evt) => {
+        sseReceivedData = true;
+        sseReconnectAttempts = 0; // 成功接收数据，重置重连计数
+
         if (evt.data === '[DONE]') {
             disconnectSSELogStream();
-            stopElapsedTimer();
             trainingStartTime = null;
+            _wasPreviouslyRunning = false;  // 防止轮询重复触发
             addLogLine('[系统] 日志流传输完成', 'success');
             // 触发训练完成庆祝动画
-            if (typeof Animations !== 'undefined') {
-                Animations.TrainingButtonAnim.setState('success');
-                setTimeout(() => {
-                    try {
-                        Animations.Celebration.trigger({ message: '训练完成!' });
-                    } catch (err) {
-                        console.warn('庆祝动画触发失败，已忽略：', err);
-                    }
-                }, 300);
-            }
+            _triggerTrainingComplete();
             return;
         }
 
@@ -203,6 +196,7 @@ function connectSSELogStream() {
                 parseMetricsFromLogs([cleaned]);
                 handleEpochProgress(cleaned);
                 if (AppState.autoScroll) scrollToLogBottom();
+                // SSE 已经提供了实时日志，轮询只是兜底，不需要调整 offset 的值。
             }
         } catch (e) {
             // Raw text fallback
@@ -215,13 +209,27 @@ function connectSSELogStream() {
     };
 
     eventSource.onerror = () => {
-        console.warn('[SSE] Connection error or closed.');
+        console.warn(`[SSE] Connection error or closed. (attempt: ${sseReconnectAttempts})`);
         AppState.useSSE = false;
         if (eventSource) {
             eventSource.close();
             eventSource = null;
         }
-        managePolling();
+        // 延迟重试 + 指数退避
+        sseReconnectAttempts++;
+        if (sseReconnectAttempts <= MAX_SSE_RECONNECT) {
+            const delay = Math.min(1000 * Math.pow(2, sseReconnectAttempts), 10000);
+            console.log(`[SSE] Reconnecting in ${delay}ms...`);
+            setTimeout(() => {
+                // 仅在训练仍在运行时重连
+                if (wasRunning || (AppState.lastTrainingStatus && AppState.lastTrainingStatus.running)) {
+                    connectSSELogStream();
+                }
+            }, delay);
+        } else {
+            console.log('[SSE] Max reconnect attempts reached, falling back to polling only.');
+            managePolling();
+        }
     };
 
     console.log('[SSE] Real-time log stream connected.');
@@ -233,6 +241,7 @@ function disconnectSSELogStream() {
         eventSource = null;
     }
     AppState.useSSE = false;
+    sseReconnectAttempts = 0;
     console.log('[SSE] Real-time log stream disconnected.');
 }
 
@@ -288,12 +297,44 @@ function stopElapsedTimer() {
     }
 }
 
+// ==================== Training Complete Animation ====================
+function _triggerTrainingComplete() {
+    stopElapsedTimer();
+    setTrainingModeSelectionEnabled(true);
+    if (typeof Animations !== 'undefined') {
+        Animations.TrainingButtonAnim.setState('success');
+        Animations.ProgressBar.setStripesActive('progress-bar', false);
+        setTimeout(() => {
+            try {
+                Animations.Celebration.trigger({ message: '训练完成!' });
+            } catch (err) {
+                console.warn('庆祝动画触发失败，已忽略：', err);
+            }
+        }, 300);
+    }
+    updateTrainUI('completed');
+}
+
 // ==================== Status Checking ====================
+let _wasPreviouslyRunning = false;  // 追踪上一次轮询的训练状态，用于检测"刚结束"
+
 async function checkTrainingStatus() {
     try {
         const data = await API.get('/api/train/status');
         const running = !!data.running;
         wasRunning = running;
+
+        // 检测训练"刚结束"的瞬间（running: true→false），触发完成动画
+        if (_wasPreviouslyRunning && !running) {
+            _wasPreviouslyRunning = false;
+            // 延迟一点确保 SSE/DONE 优先处理（避免重复触发）
+            setTimeout(() => {
+                if (eventSource) return;  // SSE 还在连接中，由 SSE 路径处理
+                _triggerTrainingComplete();
+            }, 500);
+        } else if (running) {
+            _wasPreviouslyRunning = true;
+        }
 
         if (data.start_time && !trainingStartTime) {
             trainingStartTime = Math.floor(data.start_time * 1000);
@@ -360,7 +401,14 @@ async function fetchTrainingLogs() {
 
         if (!Array.isArray(data.logs) || data.logs.length === 0) return;
 
+        const seenLines = new Set(Array.from(document.querySelectorAll('#log-container .log-line'))
+            .map(el => el.textContent?.trim())
+            .filter(Boolean));
+
         data.logs.forEach((line) => {
+            const cleaned = line.trim();
+            if (!cleaned || seenLines.has(cleaned)) return;
+            seenLines.add(cleaned);
             addLogLine(line, classifyLogLine(line), false);
             handleEpochProgress(line);
         });
@@ -376,67 +424,130 @@ async function fetchTrainingLogs() {
 function sanitizeLogText(text) {
     if (text == null) return '';
     let cleaned = String(text);
+    // Strip ANSI escape sequences
     cleaned = cleaned.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
     cleaned = cleaned.replace(/\u001b/g, '');
     cleaned = cleaned.replace(/\r/g, '');
     cleaned = cleaned.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
-    // Remove broken progress bar artifacts between '%' and next fraction like 128/128 or 1/8
+    // Remove colored emoji and pictographs that can break ASCII banners
+    cleaned = cleaned.replace(/\p{Extended_Pictographic}/gu, '');
+    cleaned = cleaned.replace(/\uFE0F/g, '');
+    cleaned = cleaned.replace(/\uFE0E/g, '');
+    // Remove broken progress bar artifacts
     cleaned = cleaned.replace(/%\s*[^0-9A-Za-z\r\n]*?(?=\d+\/\d+)/g, '% ');
-    // Remove trailing broken glyph sequences after a percent display
     cleaned = cleaned.replace(/%[^\r\n]*$/g, '%');
-    return cleaned;
+    return cleaned.replace(/\s+$/g, '');
 }
 
-function normalizeLogoLine(text) {
-    return String(text)
-        .replace(/\u00A0/g, ' ')
-        .replace(/\s+$/g, '');
-}
+/**
+ * 智能日志分类器 — 返回 { type: string, display: boolean, priority: number }
+ * type: 'system' | 'diagnostic' | 'model' | 'epoch' | 'progress' | 'metric' | 'success' | 'warning' | 'error' | 'info' | 'hidden' | 'raw-json'
+ */
+function classifyLogLine(line) {
+    const text = String(line).trim();
+    if (!text) return { type: 'hidden', display: false, priority: 0 };
 
-function isAsciiLogoLine(text) {
-    if (typeof text !== 'string' || text.length < 32) return false;
-    const artChars = /[|_\\/\-]/;
-    const repeatedSpaces = (text.match(/ {2,}/g) || []).length;
-    const artCount = (text.match(/[|_\\/\-]/g) || []).length;
-    return artChars.test(text) && repeatedSpaces >= 2 && artCount >= 3;
-}
+    const lower = text.toLowerCase();
 
-function addLogLine(text, type = 'info', autoScroll = true) {
-    const container = document.getElementById('log-container');
-    if (!container) return;
-
-    const cleanedText = sanitizeLogText(text);
-    const normalizedText = normalizeLogoLine(cleanedText);
-    const isLogo = isAsciiLogoLine(normalizedText);
-
-    if (!isLogo && currentLogoBlock.length > 0) {
-        flushLogoBlock();
+    // 1) 过滤 SSE 原始 JSON 行（浏览器控制台泄露）
+    if (text.startsWith('{"line":') || text.match(/^\{.*"line"\s*:/)) {
+        return { type: 'raw-json', display: false, priority: -1 };
     }
 
-    if (isLogo && currentLogoBlock.length > 0 && normalizedText === currentLogoBlock[0].text) {
-        // Detected a new logo block starting immediately after the previous one.
-        flushLogoBlock();
+    // 2) 系统消息 [系统] / [INFO] / [DONE] / [INTERRUPT]
+    if (/^\[系统\]|^\[DONE\]|^\[INTERRUPT\]|^\[FATAL\]/.test(text)) {
+        return { type: 'system', display: true, priority: 90 };
+    }
+    if (/^\[(诊断|stderr|堆栈)\]/.test(text)) {
+        return { type: 'diagnostic', display: true, priority: 5 };
+    }
+    if (lower.includes('training completed') || lower.includes('all results') || /训练完成|评估结果已保存/.test(text)) {
+        return { type: 'success', display: true, priority: 95 };
     }
 
-    const line = document.createElement(isLogo ? 'pre' : 'div');
-    line.className = `log-line ${type}${isLogo ? ' logo' : ''}`;
-    line.textContent = cleanedText;
-    container.appendChild(line);
-
-    if (isLogo) {
-        currentLogoBlock.push({ text: normalizedText, node: line });
+    // 3) 错误/警告
+    if (/\b(error|exception|traceback|failed)\b/i.test(text) && !lower.includes('error-free')) {
+        return { type: 'error', display: true, priority: 99 };
+    }
+    if (/\b(warning|warn)\b/i.test(text)) {
+        return { type: 'warning', display: true, priority: 70 };
     }
 
-    while (container.children.length > 500) {
-        container.removeChild(container.firstChild);
+    // 4) 模型结构信息（折叠显示，不隐藏）
+    if ( /^\s+\d+\s+-1\s+\d+\s+ultralytics/i.test(text)
+         || /^Model summary:/i.test(text)
+         || /^Transferred \d+\/\d+ items/i.test(text)
+         || /^Freezing layer/i.test(text)) {
+        return { type: 'model', display: true, priority: 15 };
     }
 
-    if (autoScroll && AppState.autoScroll) {
-        scrollToLogBottom();
+    // 5) Epoch 训练进度条行 — 核心过滤逻辑
+    // 匹配格式: "   3/20      2.98G      1.266      1.555 ... 38%"
+    const progressMatch = text.match(/^\s*(\d+)\/(\d+)\s+[\d.]+G\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s+\d+:\s*(\d+)%/);
+    if (progressMatch) {
+        const pct = parseInt(progressMatch[3]);
+        // 只显示 0% 和 100%（epoch 开始和结束），中间的进度更新隐藏
+        if (pct === 0 || pct >= 99 || isNaN(pct)) {
+            return { type: 'progress', display: true, priority: 30 };
+        }
+        return { type: 'progress', display: false, priority: 28 }; // 隐藏中间进度
     }
-    if (typeof adjustLogContainerHeight === 'function') {
-        adjustLogContainerHeight();
+
+    // 6) Epoch 完成时的指标摘要
+    // 格式: "      Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size"
+    if (/^\s*Epoch\s+GPU_mem/.test(text)) {
+        return { type: 'epoch-header', display: true, priority: 40 };
     }
+    // Epoch 指标数据行（loss 值等）
+    if (/^\s*\d+\/\d+\s+[\d.]+G?\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s+\d+$/.test(text) && !text.includes('%')) {
+        return { type: 'metric', display: true, priority: 42 };
+    }
+
+    // 7) 验证指标行 (mAP 等)
+    if (/(mAP50|mAP50-95|Box\(P)/i.test(text) && /Class\s+Images\s+Instances/.test(text)) {
+        return { type: 'metric-header', display: true, priority: 45 };
+    }
+    // 类别级 mAP 数据行
+    if (/\ball\b\s+\d+\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+/.test(text)) {
+        return { type: 'metric', display: true, priority: 48 };
+    }
+    // 单类别 mAP 行
+    if (/\w{4,}\s+\d+\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+/.test(text) && text.length < 80) {
+        return { type: 'class-metric', display: true, priority: 46 };
+    }
+
+    // 8) 验证进度行 "Class ... 50%" — 隐藏中间进度
+    if (/^                 Class\s+Images\s+Instances\s+Box\(P\s*:\s*\d+%$/i.test(text)) {
+        return { type: 'val-progress', display: false, priority: 35 }; // 隐藏验证进度
+    }
+
+    // 9) 关键里程碑事件
+    if (/starting training for \d+ epochs/i.test(text)
+        || /\d+ epochs completed/i.test(text)
+        || /validating .*\.pt/i.test(text)) {
+        return { type: 'milestone', display: true, priority: 85 };
+    }
+
+    // 10) 环境信息（单行显示）
+    if (/^(Ultralytics |AMP:|optimizer:|Image sizes )/i.test(text)) {
+        return { type: 'env-info', display: true, priority: 25 };
+    }
+    if (/^(engine\\trainer:|train: |val: )/i.test(text)) {
+        return { type: 'env-detail', display: false, priority: 10 }; // 隐藏详细参数
+    }
+
+    // 11) 分隔线
+    if (/^={60,}$|^={10,}$/.test(text)) {
+        return { type: 'separator', display: true, priority: 5 };
+    }
+
+    // 12) 更新提示
+    if (/New https:\/\/pypi\.org/i.test(text)) {
+        return { type: 'update-hint', display: false, priority: 3 }; // 隐藏更新提示
+    }
+
+    // 13) 默认显示
+    return { type: 'info', display: true, priority: 20 };
 }
 
 function flushLogoBlock() {
@@ -472,13 +583,55 @@ function isTrainingEpochSummary(line) {
         || /s</i.test(text);
 }
 
-function classifyLogLine(line) {
-    const lower = String(line).toLowerCase();
-    if (lower.includes('error') || lower.includes('failed') || lower.includes('exception') || lower.includes('traceback')) return 'error';
-    if (lower.includes('warning') || lower.includes('warn')) return 'warning';
-    if (/\bepoch\b/i.test(line) || isTrainingEpochSummary(line)) return 'epoch';
-    if (lower.includes('completed') || lower.includes('finished') || lower.includes('done')) return 'success';
-    return 'info';
+function addLogLine(text, type = 'info', autoScroll = true) {
+    const container = document.getElementById('log-container');
+    if (!container) return;
+
+    const cleanedText = sanitizeLogText(text);
+    if (!cleanedText) return;
+
+    // 使用智能分类器
+    let classification = null;
+    if (typeof classifyLogLine === 'function') {
+        classification = classifyLogLine(cleanedText);
+        if (type === 'error' || type === 'warning') {
+            classification.type = type;
+            classification.display = true;
+            classification.priority = 99;
+        }
+    }
+
+    // Force display when type is explicitly passed as a non-classifier string
+    // (e.g., the initial "已启动训练" message with type='info')
+    const explicitType = !classification || typeof type === 'string' && type !== 'unknown';
+    if (classification && !classification.display && !explicitType) return;
+
+    const lineType = (classification && classification.type !== 'hidden' && classification.type !== 'raw-json')
+        ? classification.type : type;
+
+    // Logo detection: check if line looks like ASCII art (YOLO banner, etc.)
+    const normalizedText = typeof normalizeLogoLine === 'function'
+        ? normalizeLogoLine(cleanedText) : cleanedText;
+    const isLogo = typeof isAsciiLogoLine === 'function'
+        ? isAsciiLogoLine(normalizedText) : false;
+
+    if (!isLogo && currentLogoBlock.length > 0) flushLogoBlock();
+    if (isLogo && currentLogoBlock.length > 0 && normalizedText === currentLogoBlock[0].text) flushLogoBlock();
+
+    const line = document.createElement(isLogo ? 'pre' : 'div');
+    line.className = `log-line ${lineType}${isLogo ? ' logo' : ''}`;
+    line.dataset.logType = lineType;
+
+    const displayText = cleanedText;
+    line.textContent = displayText;
+    container.appendChild(line);
+
+    if (isLogo) currentLogoBlock.push({ text: normalizedText, node: line });
+
+    while (container.children.length > 800) container.removeChild(container.firstChild);
+
+    if (autoScroll && AppState.autoScroll) scrollToLogBottom();
+    if (typeof adjustLogContainerHeight === 'function') adjustLogContainerHeight();
 }
 
 function extractEpochProgress(line) {
@@ -518,8 +671,10 @@ function clearLogs(showNotice = true) {
     const container = document.getElementById('log-container');
     if (!container) return;
     container.innerHTML = '';
-    // Skip any existing historical logs until the server appends new ones.
-    AppState.logOffset = Number.MAX_SAFE_INTEGER;
+    // When showNotice=false (called from startTraining), reset offset to 0
+    // to capture new training logs from the fresh server-side log array.
+    // When showNotice=true (manual clear), skip old logs by setting max offset.
+    AppState.logOffset = showNotice ? Number.MAX_SAFE_INTEGER : 0;
     lastLogoBlock = null;
     currentLogoBlock = [];
 
@@ -704,4 +859,24 @@ function formatTime(seconds) {
     const m = Math.floor((seconds % 3600) / 60);
     const s = seconds % 60;
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+// ==================== Logo Detection (local fallback) ====================
+// These functions are required by addLogLine() but were previously missing,
+// causing ReferenceError that prevented ALL log lines from displaying.
+function normalizeLogoLine(text) {
+    if (text == null || typeof text !== 'string') return '';
+    return text.replace(/\s+$/g, '');
+}
+
+function isAsciiLogoLine(text) {
+    if (!text || text.length < 4) return false;
+    let nonAlphaCount = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        if ((c >= 33 && c <= 126) && !/[a-zA-Z0-9\s]/.test(text[i])) {
+            nonAlphaCount++;
+        }
+    }
+    return nonAlphaCount > text.length * 0.35;
 }

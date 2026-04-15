@@ -175,10 +175,13 @@ function managePolling() {
     AppState.statusPollInterval = setInterval(() => checkTrainingStatus(), 2000);
     checkTrainingStatus();
 
-    // Poll logs only when SSE is unavailable
-    if (AppState.currentTab === 'training' && !AppState.useSSE) {
-        AppState.logPollInterval = setInterval(() => fetchTrainingLogs(), 1200);
-        fetchTrainingLogs();
+    if (AppState.currentTab === 'training') {
+        if (!AppState.useSSE) {
+            AppState.logPollInterval = setInterval(() => fetchTrainingLogs(), 1200);
+            fetchTrainingLogs();
+        } else {
+            AppState.logPollInterval = null;
+        }
     }
 }
 
@@ -787,7 +790,7 @@ function updateTrainingModeStatus(mode) {
     if (!statusBadge) return;
     
     const modeLabels = {
-        'full': '完整蒸馏模式',
+        'distill': '蒸馏训练（含自动评估）',
         'resume': '断点续训模式'
     };
     
@@ -797,7 +800,7 @@ function updateTrainingModeStatus(mode) {
 
 function getCurrentTrainMode() {
     const selected = document.querySelector('input[name="train-mode"]:checked');
-    return selected ? selected.value : 'full';
+    return selected ? selected.value : 'distill';
 }
 
 // Initialize when DOM is ready

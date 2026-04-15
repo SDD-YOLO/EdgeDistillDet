@@ -72,16 +72,16 @@
                         
                         <div class="launch-modes">
                             <label class="mode-option selected">
-                                <input type="radio" name="train-mode" value="full" checked>
+                                <input type="radio" name="train-mode" value="distill" checked>
                                 <div class="mode-card">
-                                    <span class="material-icons mode-icon">play_circle</span>
+                                    <span class="material-icons mode-icon">school</span>
                                     <div class="mode-text">
-                                        <strong>完整蒸馏训练</strong>
-                                        <span>标准知识蒸馏 + 超参优化，推荐首次训练使用</span>
+                                        <strong>蒸馏训练</strong>
+                                        <span>知识蒸馏训练，训练完成后自动评估模型性能</span>
                                     </div>
                                 </div>
                             </label>
-                            
+
                             <label class="mode-option">
                                 <input type="radio" name="train-mode" value="resume">
                                 <div class="mode-card">

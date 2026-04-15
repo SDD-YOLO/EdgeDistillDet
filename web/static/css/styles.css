@@ -945,7 +945,7 @@ body {
     border-radius: var(--radius-md);
     background: var(--log-bg);
     color: var(--log-text);
-    font-family: 'Consolas', 'Courier New', 'Roboto Mono', monospace;
+    font-family: 'Consolas', 'Courier New', 'Roboto Mono', 'Menlo', 'Monaco', monospace;
     font-size: 12px;
     line-height: 1.25;
     padding: 10px;
@@ -972,11 +972,42 @@ body {
     line-height: 1.0;
 }
 
-.log-line.info { color: #8dc3ff; }
-.log-line.warning { color: #ffd68e; }
-.log-line.error { color: #ff9f9f; }
-.log-line.success { color: #a2e2b3; }
-.log-line.epoch { color: #b9d7ff; }
+.log-line.info,
+.log-line.warning,
+.log-line.error,
+.log-line.success,
+.log-line.epoch,
+.log-line.system,
+.log-line.diagnostic,
+.log-line.model,
+.log-line.progress,
+.log-line.metric,
+.log-line.class-metric,
+.log-line.epoch-header,
+.log-line.metric-header,
+.log-line.milestone,
+.log-line.env-info,
+.log-line.separator {
+    color: inherit;
+    font-weight: inherit;
+    font-size: inherit;
+    background: none;
+    border: none;
+    padding: 0;
+    opacity: 1;
+}
+.log-line.separator {
+    text-align: left;
+    letter-spacing: normal;
+    margin: 0;
+}
+/* 日志图标 */
+.log-icon {
+    display: inline-block;
+    width: 1.2em;
+    text-align: center;
+    flex-shrink: 0;
+}
 
 .quick-stats {
     display: grid;
