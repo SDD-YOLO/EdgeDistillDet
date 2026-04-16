@@ -18,12 +18,12 @@ training:
   batch: 16
   workers: 4
   lr0: 0.01
-  lrf: 0.1
+  lrf: 0.08
   warmup_epochs: 3
   mosaic: 0.8
   mixup: 0.1
   close_mosaic: 1
   amp: true
 output:
-  project: runs/distill
-  name: exp2
+  project: runs
+  name: yolov8n

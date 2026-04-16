@@ -7,6 +7,8 @@ const AgentState = {
     conversationHistory: [],
     availableActions: [],
     isProcessing: false,
+    apiUrl: '',
+    apiKey: '',
     // ==================== Extension Registry ====================
     // 预留的扩展注册接口，后续可动态添加新功能
     registeredExtensions: {
@@ -22,12 +24,17 @@ const AgentState = {
 
 // ==================== Initialize Agent ====================
 async function initAgent() {
-    try {
-        const data = await API.get('/api/agent');
-        AgentState.availableActions = data.available_actions || [];
-        console.log('Agent initialized with actions:', AgentState.availableActions);
-    } catch (e) {
-        console.log('Agent init using defaults');
+    loadAgentApiConfig();
+    AgentState.availableActions = [
+        'auto_tune',
+        'analyze_result',
+        'suggest_config',
+        'compare_models'
+    ];
+    if (AgentState.apiUrl) {
+        showToast(`Agent API 已配置: ${AgentState.apiUrl}`, 'success');
+    } else {
+        showToast('请先配置外部 Agent API 地址，然后才能调用 Agent 功能。', 'info');
     }
 }
 
@@ -39,6 +46,12 @@ async function initAgent() {
 async function callAgentAction(action) {
     if (AgentState.isProcessing) {
         showToast('Agent 正在处理中，请稍候...', 'warning');
+        return;
+    }
+
+    syncAgentApiConfig();
+    if (!AgentState.apiUrl) {
+        showToast('请先在 Agent API 面板中填写外部 API 地址', 'warning');
         return;
     }
 
@@ -61,36 +74,32 @@ async function callAgentAction(action) {
         AgentState.isProcessing = true;
         showAgentThinking();
 
-        // 调用后端 API
-        const result = await API.post('/api/agent', {
-            action: action,
-            params: {}
+        const headers = getAgentApiRequestHeaders();
+        const response = await fetch(AgentState.apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...headers
+            },
+            body: JSON.stringify({ action: action, params: {} })
         });
 
-        // 根据响应生成回复
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || response.statusText || 'Agent API 返回错误');
+        }
+
         let responseText = '';
-        
-        switch(action) {
-            case 'auto_tune':
-                responseText = generateAutoTuneResponse(result);
-                break;
-            case 'analyze_result':
-                responseText = generateAnalyzeResponse(result);
-                break;
-            case 'suggest_config':
-                responseText = generateSuggestConfigResponse(result);
-                break;
-            case 'compare_models':
-                responseText = generateCompareModelsResponse(result);
-                break;
-            default:
-                responseText = `操作 "${action}" 的响应:\n${JSON.stringify(result, null, 2)}`;
+        if (typeof result === 'string') {
+            responseText = result;
+        } else if (result && (result.reply || result.message)) {
+            responseText = result.reply || result.message;
         }
 
         removeAgentThinking();
-        addAgentMessage('agent', responseText);
-        
-        // 更新输出面板
+        if (responseText) {
+            addAgentMessage('agent', responseText);
+        }
         updateAgentOutput(formatOutputForPanel(result, action));
         
     } catch (error) {
@@ -148,7 +157,15 @@ function sendAgentMessage() {
     autoResizeTextarea(AgentChat.input);
     AgentChat.input.focus();
 
-    processNaturalQuery(text);
+    syncAgentApiConfig();
+    if (AgentState.apiUrl) {
+        forwardUserMessageToApi(text).catch(error => {
+            addAgentMessage('agent', `抱歉，处理请求时出错: ${error.message}`);
+            updateAgentOutput(`Error: ${error.message}`);
+        });
+    } else {
+        showToast('请先配置外部 Agent API 地址，然后再发送消息。', 'warning');
+    }
 }
 
 function handleChatKeydown(event) {
@@ -304,6 +321,103 @@ training:
     }
 }
 
+function syncAgentApiConfig() {
+    const urlInput = document.getElementById('agent-api-url');
+    const keyInput = document.getElementById('agent-api-key');
+    if (urlInput) {
+        AgentState.apiUrl = urlInput.value.trim();
+    }
+    if (keyInput) {
+        AgentState.apiKey = keyInput.value.trim();
+    }
+}
+
+function getAgentApiRequestHeaders() {
+    const headers = {};
+    if (AgentState.apiKey) {
+        headers['Authorization'] = AgentState.apiKey;
+    }
+    return headers;
+}
+
+function loadAgentApiConfig() {
+    try {
+        const saved = window.localStorage.getItem('edge_distill_agent_api');
+        if (saved) {
+            const config = JSON.parse(saved);
+            AgentState.apiUrl = config.apiUrl || '';
+            AgentState.apiKey = config.apiKey || '';
+        }
+    } catch (error) {
+        console.warn('加载 Agent API 配置失败', error);
+    }
+
+    const urlInput = document.getElementById('agent-api-url');
+    const keyInput = document.getElementById('agent-api-key');
+    if (urlInput) urlInput.value = AgentState.apiUrl;
+    if (keyInput) keyInput.value = AgentState.apiKey;
+}
+
+function saveAgentApiConfig() {
+    const urlInput = document.getElementById('agent-api-url');
+    const keyInput = document.getElementById('agent-api-key');
+    if (!urlInput) return;
+
+    AgentState.apiUrl = urlInput.value.trim();
+    AgentState.apiKey = keyInput ? keyInput.value.trim() : '';
+    window.localStorage.setItem('edge_distill_agent_api', JSON.stringify({ apiUrl: AgentState.apiUrl, apiKey: AgentState.apiKey }));
+    showToast('Agent API 配置已保存', 'success');
+}
+
+async function testAgentApi() {
+    syncAgentApiConfig();
+    if (!AgentState.apiUrl) {
+        showToast('请先填写 Agent API 地址', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch(AgentState.apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAgentApiRequestHeaders()
+            },
+            body: JSON.stringify({ action: 'ping', params: {} })
+        });
+        if (!response.ok) {
+            const result = await response.text();
+            throw new Error(`HTTP ${response.status} ${response.statusText}: ${result}`);
+        }
+        showToast('Agent API 连接成功', 'success');
+    } catch (error) {
+        showToast(`Agent API 连接失败: ${error.message}`, 'error');
+        console.error(error);
+    }
+}
+
+async function forwardUserMessageToApi(query) {
+    const headers = getAgentApiRequestHeaders();
+    const response = await fetch(AgentState.apiUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...headers
+        },
+        body: JSON.stringify({ query: query })
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+        throw new Error(result.error || response.statusText || 'Agent API 返回错误');
+    }
+
+    const reply = typeof result === 'string' ? result : (result.reply || result.message || JSON.stringify(result, null, 2));
+    removeAgentThinking();
+    addAgentMessage('agent', reply);
+    updateAgentOutput(formatOutputForPanel(result, 'user_query'));
+}
+
 // ==================== Message Management ====================
 function addAgentMessage(role, content) {
     const container = document.getElementById('agent-chat-messages');
@@ -332,9 +446,6 @@ function clearAgentChat() {
     const container = document.getElementById('agent-chat-messages');
     container.innerHTML = '';
     AgentState.conversationHistory = [];
-    
-    // Add welcome message back
-    addAgentMessage('agent', `对话已清空。有什么可以帮你的? 😊`);
 }
 
 function showAgentThinking() {

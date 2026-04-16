@@ -147,13 +147,15 @@ function initCharts() {
         options: { ...opts, scales: { ...opts.scales, y: { ...opts.scales.y, type: 'logarithmic', title: { display: true, text: 'Loss (log scale)', color: ChartColors.titleColor } } } }
     });
 
-    // mAP Chart
+    // mAP Chart (包含 Precision & Recall)
     charts.mapChart = new Chart(document.getElementById('map-chart'), {
         type: 'line',
         data: {
             labels: [], datasets: [
                 { label: 'mAP@50', data: [], borderColor: ChartColors.success, backgroundColor: transparentize(ChartColors.success, 0.12), fill: true },
-                { label: 'mAP@50-95', data: [], borderColor: ChartColors.tertiary, backgroundColor: transparentize(ChartColors.tertiary, 0.12), fill: true }
+                { label: 'mAP@50-95', data: [], borderColor: ChartColors.tertiary, backgroundColor: transparentize(ChartColors.tertiary, 0.12), fill: true },
+                { label: 'Precision', data: [], borderColor: '#F57C00', backgroundColor: transparentize('#F57C00', 0.08), fill: false, borderDash: [5, 3] },
+                { label: 'Recall', data: [], borderColor: '#1565C0', backgroundColor: transparentize('#1565C0', 0.08), fill: false, borderDash: [5, 3] }
             ]
         }, options: opts
     });
@@ -167,7 +169,25 @@ function initCharts() {
                 { label: 'LR pg1', data: [], borderColor: ChartColors.secondary, backgroundColor: transparentize(ChartColors.secondary, 0.12), fill: true },
                 { label: 'LR pg2', data: [], borderColor: ChartColors.tertiary, backgroundColor: transparentize(ChartColors.tertiary, 0.12), fill: true }
             ]
-        }, options: { ...opts, scales: { ...opts.scales, y: { ...opts.scales.y, type: 'logarithmic', title: { display: true, text: 'Learning Rate (log)', color: ChartColors.titleColor } } } }
+        }, options: {
+            ...opts,
+            plugins: {
+                ...opts.plugins,
+                tooltip: {
+                    ...opts.plugins.tooltip,
+                    callbacks: {
+                        label(context) {
+                            const value = context.raw;
+                            const label = context.dataset.label || '';
+                            if (value === null || value === undefined) return label;
+                            const formatted = Number(value).toExponential(3);
+                            return `${label}: ${formatted}`;
+                        }
+                    }
+                }
+            },
+            scales: { ...opts.scales, y: { ...opts.scales.y, type: 'logarithmic', title: { display: true, text: 'Learning Rate (log)', color: ChartColors.titleColor } } }
+        }
     });
 
     // Distillation Dynamics Chart
@@ -206,13 +226,34 @@ function initCharts() {
         charts.classChart = new Chart(document.getElementById('class-chart'), {
             type: 'bar',
             data: {
-                labels: ['drone', 'person', 'vehicle', 'boat', 'bird'],
+                labels: [],
                 datasets: [
-                    { label: 'mAP', data: [0.94, 0.89, 0.91, 0.87, 0.82], backgroundColor: transparentize(ChartColors.primary, 0.75), borderColor: ChartColors.primary, borderRadius: 6, borderSkipped: false },
-                    { label: 'Recall', data: [0.92, 0.86, 0.89, 0.84, 0.78], backgroundColor: transparentize(ChartColors.success, 0.65), borderColor: ChartColors.success, borderRadius: 6, borderSkipped: false }
+                    { label: 'mAP', data: [], backgroundColor: transparentize(ChartColors.primary, 0.75), borderColor: ChartColors.primary, borderRadius: 6, borderSkipped: false },
+                    { label: 'Recall', data: [], backgroundColor: transparentize(ChartColors.success, 0.65), borderColor: ChartColors.success, borderRadius: 6, borderSkipped: false },
+                    { label: 'Precision', data: [], backgroundColor: transparentize('#F57C00', 0.55), borderColor: '#F57C00', borderRadius: 6, borderSkipped: false }
                 ]
             }, options: {
-                ...opts, scales: { x: { ...opts.scales.x, grid: { display: false } }, y: { ...opts.scales.y, beginAtZero: true, max: 1, title: { display: true, text: 'Score', color: ChartColors.titleColor } } }
+                ...opts,
+                plugins: {
+                    ...opts.plugins,
+                    tooltip: {
+                        ...opts.plugins.tooltip,
+                        callbacks: {
+                            label(context) {
+                                const value = context.raw;
+                                const label = context.dataset.label || '';
+                                if (value === null || value === undefined) {
+                                    return `${label}: 无数据`;
+                                }
+                                return `${label}: ${Number(value).toFixed(4)}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { ...opts.scales.x, grid: { display: false } },
+                    y: { ...opts.scales.y, beginAtZero: true, max: 1, title: { display: true, text: 'Score', color: ChartColors.titleColor } }
+                }
             }
         });
     } catch(e) {}
@@ -278,6 +319,8 @@ function renderMetricsSource(data) {
         charts.mapChart.data.labels = epochs;
         charts.mapChart.data.datasets[0].data = map_series.map50 || [];
         charts.mapChart.data.datasets[1].data = map_series.map50_95 || [];
+        charts.mapChart.data.datasets[2].data = data.chart_series.precision_recall?.precision || [];
+        charts.mapChart.data.datasets[3].data = data.chart_series.precision_recall?.recall || [];
         charts.mapChart.update('none');
         charts.mapChart._originalLabels = [...epochs];
         charts.mapChart.data.datasets.forEach(ds => ds._originalData = [...ds.data]);
@@ -300,32 +343,106 @@ function renderMetricsSource(data) {
     }
     if (charts.distillChart) {
         charts.distillChart.data.labels = epochs;
-        charts.distillChart.data.datasets[0].data = distill_series?.alpha || [];
-        charts.distillChart.data.datasets[1].data = distill_series?.temperature || [];
-        charts.distillChart.data.datasets[2].data = distill_series?.kd_loss || [];
+        
+        // 线性插值填充 null/undefined 值，确保图表连续显示
+        const fillGaps = (arr) => {
+            if (!arr || !arr.length) return [];
+            const result = [...arr];
+            // 前向填充：找到第一个非空值
+            let lastValidIdx = result.findIndex(v => v !== null && v !== undefined);
+            for (let i = 0; i < lastValidIdx; i++) result[i] = result[lastValidIdx];
+            // 后向填充
+            let lastValidVal = result[lastValidIdx];
+            for (let i = lastValidIdx + 1; i < result.length; i++) {
+                if (result[i] === null || result[i] === undefined) {
+                    // 找到下一个有效值做线性插值
+                    let nextIdx = -1;
+                    for (let j = i + 1; j < result.length; j++) {
+                        if (result[j] !== null && result[j] !== undefined) { nextIdx = j; break; }
+                    }
+                    if (nextIdx > 0) {
+                        const t = (i - lastValidIdx) / (nextIdx - lastValidIdx);
+                        result[i] = lastValidVal + (result[nextIdx] - lastValidVal) * t;
+                    } else {
+                        result[i] = lastValidVal;
+                    }
+                } else {
+                    lastValidIdx = i;
+                    lastValidVal = result[i];
+                }
+            }
+            return result;
+        };
+        
+        charts.distillChart.data.datasets[0].data = fillGaps(distill_series?.alpha || []);
+        charts.distillChart.data.datasets[1].data = fillGaps(distill_series?.temperature || []);
+        charts.distillChart.data.datasets[2].data = fillGaps(distill_series?.kd_loss || []);
         charts.distillChart.update('none');
     }
 
+    const prData = pr_curve || {};
     const prCard = document.getElementById('pr-chart')?.closest('.chart-card');
     if (prCard) {
-        const hasPr = pr_curve && Array.isArray(pr_curve.recall) && pr_curve.recall.length;
+        const hasPr = Array.isArray(prData.recall) && prData.recall.length && Array.isArray(prData.precision) && prData.precision.length;
         prCard.style.display = hasPr ? '' : 'none';
     }
-    if (charts.prChart && data.chart_series.pr_curve && Array.isArray(data.chart_series.pr_curve.recall)) {
-        charts.prChart.data.labels = data.chart_series.pr_curve.recall.map(r => Number(r).toFixed(2));
-        charts.prChart.data.datasets[0].data = data.chart_series.pr_curve.precision || [];
+    if (charts.prChart && Array.isArray(prData.recall) && Array.isArray(prData.precision)) {
+        charts.prChart.data.labels = prData.recall.map(r => Number(r).toFixed(2));
+        charts.prChart.data.datasets[0].data = prData.precision;
         charts.prChart.update('none');
     }
 
     const classCard = document.getElementById('class-chart')?.closest('.chart-card');
     if (classCard) {
-        const hasClass = class_performance && Array.isArray(class_performance.labels) && class_performance.labels.length;
-        classCard.style.display = hasClass ? '' : 'none';
+        // 即使没有按类数据，也显示卡片，使用总体 P/R 作为 fallback
+        classCard.style.display = '';
+        // 清理旧的按钮（如果存在）
+        const oldBtn = classCard.querySelector('.gen-class-btn');
+        if (oldBtn) oldBtn.remove();
     }
-    if (charts.classChart && data.chart_series.class_performance) {
-        charts.classChart.data.labels = data.chart_series.class_performance.labels;
-        charts.classChart.data.datasets[0].data = data.chart_series.class_performance.map || [];
-        charts.classChart.data.datasets[1].data = data.chart_series.class_performance.recall || [];
+    if (charts.classChart) {
+        const normalizeChartValue = (value) => {
+            return value === null || value === undefined || value === '' || Number.isNaN(Number(value))
+                ? null
+                : Number(value);
+        };
+
+        if (data.chart_series.class_performance && Array.isArray(data.chart_series.class_performance.labels) && data.chart_series.class_performance.labels.length > 1) {
+            // 过滤掉完全没有有效指标的类别，但保留只有 P/R 或只有 mAP 数据的类
+            const labels = data.chart_series.class_performance.labels;
+            const mapData = data.chart_series.class_performance.map || [];
+            const recData = data.chart_series.class_performance.recall || [];
+            const precData = data.chart_series.class_performance.precision || [];
+
+            const validIndices = [];
+            for (let i = 0; i < labels.length; i++) {
+                const mapValue = normalizeChartValue(mapData[i]);
+                const recValue = normalizeChartValue(recData[i]);
+                const precValue = normalizeChartValue(precData[i]);
+                if (mapValue !== null || recValue !== null || precValue !== null) {
+                    validIndices.push(i);
+                }
+            }
+
+            charts.classChart.data.labels = validIndices.map(i => labels[i]);
+            charts.classChart.data.datasets[0].data = validIndices.map(i => normalizeChartValue(mapData[i]));
+            charts.classChart.data.datasets[1].data = validIndices.map(i => normalizeChartValue(recData[i]));
+            charts.classChart.data.datasets[2].data = validIndices.map(i => normalizeChartValue(precData[i]));
+            charts.classChart.data.datasets[2].hidden = !precData.some(v => normalizeChartValue(v) !== null);
+        } else {
+            // 无按类别数据时 fallback 到总体指标
+            const prData = data.chart_series.precision_recall || {};
+            const lastP = prData.precision?.length ? normalizeChartValue(prData.precision[prData.precision.length - 1]) : null;
+            const lastR = prData.recall?.length ? normalizeChartValue(prData.recall[prData.recall.length - 1]) : null;
+            const mapSeries = data.chart_series.map_series || {};
+            const lastMap = normalizeChartValue(mapSeries.map50?.length ? mapSeries.map50[mapSeries.map50.length - 1]
+                : mapSeries.map50_95?.length ? mapSeries.map50_95[mapSeries.map50_95.length - 1] : null);
+            charts.classChart.data.labels = ['Overall'];
+            charts.classChart.data.datasets[0].data = [lastMap];
+            charts.classChart.data.datasets[1].data = [lastR];
+            charts.classChart.data.datasets[2].data = [lastP];
+            charts.classChart.data.datasets[2].hidden = lastP === null;
+        }
         charts.classChart.update('none');
     }
 

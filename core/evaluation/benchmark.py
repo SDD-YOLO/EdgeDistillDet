@@ -21,6 +21,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from utils import expand_env_vars
+
 import torch
 import pandas as pd
 from tqdm import tqdm
@@ -232,9 +234,13 @@ class UnifiedBenchmark:
     @staticmethod
     def _get_img_paths(yaml_path: str, n: int = 10) -> List[str]:
         import yaml
+        from pathlib import Path as _Path
+        yaml_path = _Path(yaml_path)
         with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+            cfg = expand_env_vars(yaml.safe_load(f) or {})
         img_dir = Path(cfg["path"]) / cfg.get("test", cfg.get("val", ""))
+        if not img_dir.is_absolute():
+            img_dir = yaml_path.parent / img_dir
         if not img_dir.exists():
             return []
         paths = [str(p) for p in img_dir.glob("*")

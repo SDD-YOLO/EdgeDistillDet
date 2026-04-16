@@ -84,7 +84,6 @@ async function startTraining() {
         trainingStartTime = Date.now();
         AppState.logOffset = 0;
         clearLogs(false);
-        addLogLine(`[系统] 已启动训练（模式: ${mode}）`, 'info');
         updateTrainUI('running');
         setEpochInfo(0, config.training.epochs || 0);
         startElapsedTimer();
@@ -151,7 +150,6 @@ async function stopTraining() {
             }
         }
         updateTrainUI('stopped');
-        addLogLine('[系统] 训练已被用户停止', 'warning');
         showToast('训练已停止', 'info');
         wasRunning = false;
     } catch (e) {
@@ -173,28 +171,40 @@ function connectSSELogStream() {
 
     let sseReceivedData = false;
 
+    const handleLogStreamDone = () => {
+        disconnectSSELogStream();
+        trainingStartTime = null;
+        wasRunning = false;
+        _wasPreviouslyRunning = false;  // 防止轮询重复触发
+        AppState.logOffset = Number.MAX_SAFE_INTEGER;
+        // 触发训练完成庆祝动画
+        _triggerTrainingComplete();
+    };
+
     eventSource.onmessage = (evt) => {
         sseReceivedData = true;
         sseReconnectAttempts = 0; // 成功接收数据，重置重连计数
 
         if (evt.data === '[DONE]') {
-            disconnectSSELogStream();
-            trainingStartTime = null;
-            _wasPreviouslyRunning = false;  // 防止轮询重复触发
-            addLogLine('[系统] 日志流传输完成', 'success');
-            // 触发训练完成庆祝动画
-            _triggerTrainingComplete();
+            handleLogStreamDone();
             return;
         }
 
         try {
             const parsed = JSON.parse(evt.data);
+            if (parsed.chunk) {
+                appendLogChunk(parsed.chunk);
+                return;
+            }
             const line = typeof parsed === 'string' ? parsed : (parsed.line || evt.data);
             if (line) {
                 const cleaned = sanitizeLogText(line);
                 addLogLine(cleaned, classifyLogLine(cleaned), false);
                 parseMetricsFromLogs([cleaned]);
-                handleEpochProgress(cleaned);
+                const epochDetail = handleEpochProgress(cleaned);
+                if (epochDetail) {
+                    addEpochDetailLine(epochDetail);
+                }
                 if (AppState.autoScroll) scrollToLogBottom();
                 // SSE 已经提供了实时日志，轮询只是兜底，不需要调整 offset 的值。
             }
@@ -207,6 +217,10 @@ function connectSSELogStream() {
             }
         }
     };
+
+    eventSource.addEventListener('done', () => {
+        handleLogStreamDone();
+    });
 
     eventSource.onerror = () => {
         console.warn(`[SSE] Connection error or closed. (attempt: ${sseReconnectAttempts})`);
@@ -439,6 +453,60 @@ function sanitizeLogText(text) {
     return cleaned.replace(/\s+$/g, '');
 }
 
+function sanitizeLogChunk(text) {
+    if (text == null) return '';
+    let cleaned = String(text);
+    cleaned = cleaned.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+    cleaned = cleaned.replace(/\u001b/g, '');
+    cleaned = cleaned.replace(/\uFE0F/g, '').replace(/\uFE0E/g, '');
+    cleaned = cleaned.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+    return cleaned;
+}
+
+function appendLogChunk(rawText) {
+    if (rawText == null) return;
+    const cleanedChunk = sanitizeLogChunk(rawText);
+    if (!cleanedChunk) return;
+    const container = document.getElementById('log-container');
+    if (!container) return;
+
+    const createStreamingLine = () => {
+        const lineEl = document.createElement('div');
+        lineEl.className = 'log-line info streaming';
+        lineEl.dataset.logType = 'streaming';
+        container.appendChild(lineEl);
+        while (container.children.length > 800) container.removeChild(container.firstChild);
+        return lineEl;
+    };
+
+    if (!AppState.currentStreamLine || !container.contains(AppState.currentStreamLine)) {
+        AppState.currentStreamLine = createStreamingLine();
+    }
+
+    let currentLine = AppState.currentStreamLine;
+    const tokens = cleanedChunk.split(/(\r\n|\r|\n)/);
+    for (const token of tokens) {
+        if (token === '\r' || token === '\n' || token === '\r\n') {
+            if (token === '\r') {
+                currentLine.textContent = '';
+                continue;
+            }
+            const finishedText = currentLine.textContent;
+            if (finishedText) {
+                parseMetricsFromLogs([finishedText]);
+                const epochDetail = handleEpochProgress(finishedText);
+                if (epochDetail) addEpochDetailLine(epochDetail);
+            }
+            currentLine = createStreamingLine();
+            AppState.currentStreamLine = currentLine;
+            continue;
+        }
+        currentLine.textContent += token;
+    }
+
+    if (AppState.autoScroll) scrollToLogBottom();
+}
+
 /**
  * 智能日志分类器 — 返回 { type: string, display: boolean, priority: number }
  * type: 'system' | 'diagnostic' | 'model' | 'epoch' | 'progress' | 'metric' | 'success' | 'warning' | 'error' | 'info' | 'hidden' | 'raw-json'
@@ -603,8 +671,7 @@ function addLogLine(text, type = 'info', autoScroll = true) {
 
     // Force display when type is explicitly passed as a non-classifier string
     // (e.g., the initial "已启动训练" message with type='info')
-    const explicitType = !classification || typeof type === 'string' && type !== 'unknown';
-    if (classification && !classification.display && !explicitType) return;
+    if (classification && (classification.type === 'raw-json' || classification.type === 'hidden')) return;
 
     const lineType = (classification && classification.type !== 'hidden' && classification.type !== 'raw-json')
         ? classification.type : type;
@@ -654,17 +721,132 @@ function extractEpochProgress(line) {
 }
 
 function handleEpochProgress(line) {
+    // 优先解析结构化的 [BATCH_PROGRESS] 日志
+    const batchMatch = line.match(/\[BATCH_PROGRESS\]\s+epoch=(\d+)\s+total=(\d+)\s+batch=(\d+)\/(\d+)\s+progress=([\d.]+)%\s+bar=\[([^\]]+)\]\s+batch_size=(\d+)\s+samples=([\d\.]+|unknown)\s+dataset_samples=([^\s]+)\s+phase=(\w+)/i);
+    if (batchMatch) {
+        const current = Number(batchMatch[1]);
+        const total = Number(batchMatch[2]);
+        const batchIndex = Number(batchMatch[3]);
+        const batchTotal = Number(batchMatch[4]);
+        const progress = batchMatch[5];
+        const bar = batchMatch[6];
+        const batchSize = Number(batchMatch[7]);
+        const samples = batchMatch[8];
+        const datasetSamples = batchMatch[9];
+        const phase = batchMatch[10];
+
+        if (total > 0) {
+            const details = {
+                current,
+                total,
+                loss: null,
+                kdLoss: null,
+                alpha: null,
+                temp: null,
+                batches: `${batchIndex}/${batchTotal} @ ${batchSize}`,
+                batchSize,
+                samples,
+                datasetSamples: datasetSamples === 'unknown' ? '未知' : `${datasetSamples} images`,
+                phase: phase.charAt(0).toUpperCase() + phase.slice(1),
+                progress,
+                bar
+            };
+            setEpochInfo(current, total, null, details);
+            addEpochDetailLine(details);
+            return details;
+        }
+    }
+
+    // 优先解析结构化的 [EPOCH_PROGRESS] 日志
+    const epMatch = line.match(/\[EPOCH_PROGRESS\]\s+epoch=(\d+)\s+total=(\d+)\s+loss=([\d.]+)\s+kd=([\d.]+)\s+alpha=([\d.]+)\s+temp=([\d.]+)\s+batches=([^\s]+)\s+batch_size=(\d+)\s+samples=([\d\.]+|unknown)\s+dataset_samples=([^\s]+)\s+phase=(\w+)/i);
+    if (epMatch) {
+        const current = Number(epMatch[1]);
+        const total = Number(epMatch[2]);
+        const loss = epMatch[3];
+        const kdLoss = epMatch[4];
+        const alpha = epMatch[5];
+        const temp = epMatch[6];
+        const batches = epMatch[7];
+        const batchSize = epMatch[8];
+        const samples = epMatch[9];
+        const datasetSamples = epMatch[10];
+        const phase = epMatch[11];
+
+        if (total > 0) {
+            const details = {
+                current,
+                total,
+                loss,
+                kdLoss,
+                alpha,
+                temp,
+                batches: `${batches} @ ${batchSize}`,
+                batchSize,
+                samples,
+                datasetSamples: datasetSamples === 'unknown' ? '未知' : `${datasetSamples} images`,
+                phase: phase.charAt(0).toUpperCase() + phase.slice(1)
+            };
+            setEpochInfo(current, total, { loss, kdLoss, alpha, temp }, details);
+            return details;
+        }
+    }
+
+    // 兼容旧格式：ultralytics 原始 epoch 行（如 "100/100"）
     const progress = extractEpochProgress(line);
     if (!progress || !progress.total) return;
     setEpochInfo(progress.current, progress.total);
+    return null;
 }
 
-function setEpochInfo(current, total) {
+function addEpochDetailLine(details) {
+    if (!details) return;
+    const container = document.getElementById('log-container');
+    if (!container) return;
+
+    const detailLine = document.createElement('div');
+    detailLine.className = 'log-line epoch-detail';
+    detailLine.dataset.logType = 'info';
+    detailLine.textContent = `[Epoch ${details.current}/${details.total}] ${details.phase} | batches=${details.batches} | samples=${details.samples} | dataset=${details.datasetSamples} | loss=${details.loss} | kd=${details.kdLoss} | alpha=${details.alpha} | temp=${details.temp}`;
+    container.appendChild(detailLine);
+    while (container.children.length > 800) container.removeChild(container.firstChild);
+    if (AppState.autoScroll) scrollToLogBottom();
+}
+
+function setEpochInfo(current, total, metrics = null, details = null) {
     const epochInfo = document.getElementById('epoch-info');
     if (epochInfo) {
         epochInfo.textContent = `Epoch: ${current} / ${total}`;
     }
     updateEpochProgress(current, total);
+    setEpochDetails(details);
+
+    // 更新蒸馏指标统计卡片（如果数据可用）
+    if (metrics) {
+        if (metrics.loss) updateStat('stat-loss', metrics.loss);
+        if (metrics.kdLoss) updateStat('stat-kd-loss', metrics.kdLoss);
+        if (metrics.alpha) updateStat('stat-alpha', metrics.alpha);
+        if (metrics.temp)   updateStat('stat-temp', metrics.temp);
+    }
+}
+
+function setEpochDetails(details) {
+    const batchInfo = document.getElementById('batch-info');
+    const sampleInfo = document.getElementById('sample-info');
+    const datasetInfo = document.getElementById('dataset-info');
+    const phaseInfo = document.getElementById('phase-info');
+
+    if (batchInfo) {
+        batchInfo.textContent = details?.batches ? `Batches: ${details.batches}` : 'Batches: --';
+    }
+    if (sampleInfo) {
+        sampleInfo.textContent = details?.samples ? `Samples: ${details.samples}` : 'Samples: --';
+    }
+    if (datasetInfo) {
+        datasetInfo.textContent = details?.datasetSamples ? `Dataset: ${details.datasetSamples}` : 'Dataset: --';
+    }
+    if (phaseInfo) {
+        phaseInfo.textContent = details?.phase ? `Phase: ${details.phase}` : 'Phase: --';
+    }
 }
 
 function clearLogs(showNotice = true) {
@@ -679,7 +861,7 @@ function clearLogs(showNotice = true) {
     currentLogoBlock = [];
 
     if (showNotice) {
-        addLogLine('[系统] 日志已清空', 'info');
+        // Keep log container clear without adding synthetic notices.
     }
 }
 
@@ -754,6 +936,49 @@ function parseMetricsFromLogs(logs) {
     const lastLogs = logs.slice(-16);
 
     for (const line of lastLogs) {
+        // 解析结构化的 [BATCH_PROGRESS] 日志
+        const batchMatch = line.match(/\[BATCH_PROGRESS\]\s+epoch=(\d+)\s+total=(\d+)\s+batch=(\d+)\/(\d+)\s+progress=([\d.]+)%\s+bar=\[([^\]]+)\]\s+batch_size=(\d+)\s+samples=([\d\.]+|unknown)\s+dataset_samples=([^\s]+)\s+phase=(\w+)/i);
+        if (batchMatch) {
+            const current = Number(batchMatch[1]);
+            const total = Number(batchMatch[2]);
+            const batchSize = Number(batchMatch[7]);
+            const samples = batchMatch[8];
+            const datasetSamples = batchMatch[9];
+            const phase = batchMatch[10];
+            setEpochInfo(current, total, null, {
+                batches: `${batchMatch[3]}/${batchMatch[4]} @ ${batchSize}`,
+                samples,
+                datasetSamples: datasetSamples === 'unknown' ? '未知' : `${datasetSamples} images`,
+                phase: phase.charAt(0).toUpperCase() + phase.slice(1)
+            });
+            continue;
+        }
+
+        // 解析结构化的 EPOCH_PROGRESS 行
+        const epMatch = line.match(/\[EPOCH_PROGRESS\].*?epoch=(\d+)\s+total=(\d+)\s+loss=([\d.]+)\s+kd=([\d.]+)\s+alpha=([\d.]+)\s+temp=([\d.]+)\s+batches=([^\s]+)\s+batch_size=(\d+)\s+samples=([\d\.]+|unknown)\s+dataset_samples=([^\s]+)\s+phase=(\w+)/i);
+        if (epMatch) {
+            updateStat('stat-loss', epMatch[3]);
+            updateStat('stat-kd-loss', epMatch[4]);
+            updateStat('stat-alpha', epMatch[5]);
+            updateStat('stat-temp', epMatch[6]);
+            setEpochInfo(Number(epMatch[1]), Number(epMatch[2]), null, {
+                batches: `${epMatch[7]} @ ${epMatch[8]}`,
+                samples: epMatch[9],
+                datasetSamples: epMatch[10] === 'unknown' ? '未知' : `${epMatch[10]} images`,
+                phase: epMatch[11].charAt(0).toUpperCase() + epMatch[11].slice(1)
+            });
+        }
+
+        // 解析 TRAIN_INFO 数据集信息
+        const infoMatch = line.match(/\[TRAIN_INFO\].*?images=(\d+)\s*classes=(\d+)/i);
+        if (infoMatch) {
+            const elImages = document.getElementById('stat-images');
+            if (elImages) elImages.textContent = infoMatch[1];
+            const elClasses = document.getElementById('stat-classes');
+            if (elClasses) elClasses.textContent = infoMatch[2];
+        }
+
+        // 兼容旧格式：ultralytics 原始 loss/mAP 输出
         const lossMatch = line.match(/box_loss=([\d.]+)\s+cls_loss=([\d.]+)\s+dfl_loss=([\d.]+)/i);
         if (lossMatch) {
             updateStat('stat-loss', (+lossMatch[1] + +lossMatch[2] + +lossMatch[3]).toFixed(4));

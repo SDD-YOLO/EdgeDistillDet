@@ -116,49 +116,22 @@ const Animations = (() => {
 
         _enterLoading(btn) {
             btn.disabled = true;
-            btn.innerHTML = `
-                <span class="btn-spinner"></span>
-                <span>训练中...</span>
-            `;
             btn.style.pointerEvents = 'none';
         },
 
         _enterSuccess(btn) {
             btn.disabled = false;
             btn.style.pointerEvents = '';
-            btn.innerHTML = `
-                <span class="material-icons btn-check-icon">check_circle</span>
-                <span>训练完成</span>
-            `;
-            btn.classList.add('btn-success-flash');
-            // 触发 reflow 以重新播放动画
-            void btn.offsetWidth;
-            btn.classList.remove('btn-success-flash');
-            void btn.offsetWidth;
-            btn.classList.add('btn-success-flash');
-
-            // 3秒后恢复 idle
-            setTimeout(() => this.setState('idle'), 3500);
         },
 
         _enterError(btn) {
             btn.disabled = false;
             btn.style.pointerEvents = '';
-            btn.innerHTML = `
-                <span class="material-icons" style="font-size:18px">error</span>
-                <span>开始训练</span>
-            `;
-            btn.classList.add('btn-error-shake');
-            setTimeout(() => btn.classList.remove('btn-error-shake'), 600);
         },
 
         _resetToIdle(btn) {
             btn.disabled = false;
             btn.style.pointerEvents = '';
-            btn.innerHTML = `
-                <span class="material-icons">play_arrow</span>
-                <span>开始训练</span>
-            `;
         }
     };
 

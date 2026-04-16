@@ -335,7 +335,7 @@ def register_socketio_routes(socketio_app, training_callback: TrainingCallback =
     """
     注册 Socket.IO 事件处理器（当使用 python-socketio 时）
 
-    Usage in server.py:
+    Usage in app.py:
         from flask_socketio import SocketIO
         socketio = SocketIO(app, cors_allowed_origins="*")
         from websocket_server import register_socketio_routes, manager, TrainingCallback

@@ -28,21 +28,28 @@ const ThemeManager = {
     
     apply(theme) {
         this.currentTheme = theme;
-        document.documentElement.setAttribute('data-theme', theme);
-        localStorage.setItem(this.STORAGE_KEY, theme);
-        
-        // Update all chart themes if charts exist
-        if (typeof updateChartsTheme === 'function') {
-            updateChartsTheme(theme === 'dark');
-        }
-        
-        // Update log container colors
-        const logContainers = document.querySelectorAll('.log-container, .agent-output');
-        logContainers.forEach(el => {
-            el.style.background = getComputedStyle(document.documentElement).getPropertyValue('--log-bg').trim();
+        const htmlEl = document.documentElement;
+        htmlEl.classList.add('theme-transition');
+
+        requestAnimationFrame(() => {
+            htmlEl.setAttribute('data-theme', theme);
+            localStorage.setItem(this.STORAGE_KEY, theme);
+
+            // Update all chart themes if charts exist
+            if (typeof updateChartsTheme === 'function') {
+                updateChartsTheme(theme === 'dark');
+            }
+
+            // Update log container colors
+            const logContainers = document.querySelectorAll('.log-container, .agent-output');
+            logContainers.forEach(el => {
+                el.style.background = getComputedStyle(document.documentElement).getPropertyValue('--log-bg').trim();
+            });
+
+            console.log(`[Theme] Applied: ${theme.toUpperCase()}`);
+
+            window.setTimeout(() => htmlEl.classList.remove('theme-transition'), 420);
         });
-        
-        console.log(`[Theme] Applied: ${theme.toUpperCase()}`);
     },
     
     toggle() {

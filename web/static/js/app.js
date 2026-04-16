@@ -341,7 +341,7 @@ function triggerDirectoryPicker(targetId) {
  * @param {HTMLInputElement|string} fileInputOrTargetId - 文件输入元素或目标ID
  * @param {string} targetId - 可选，目标输入框ID（如果第一个参数是fileInputElement）
  */
-function handleFileSelect(fileInputOrTargetId, targetId) {
+async function handleFileSelect(fileInputOrTargetId, targetId) {
     let fileInput, actualTargetId;
     
     // 判断调用方式
@@ -359,23 +359,27 @@ function handleFileSelect(fileInputOrTargetId, targetId) {
     
     if (fileInput.files && fileInput.files.length > 0) {
         const file = fileInput.files[0];
-        const isDirectory = !!AppState.filePickerDirectory;
-        let filePath = file.webkitRelativePath || file.name;
-        if (isDirectory && file.webkitRelativePath) {
-            const parts = file.webkitRelativePath.split('/');
-            if (parts.length > 1) {
-                filePath = parts[0];
+        if (actualTargetId === '_load-config') {
+            await handleConfigFileUpload(file);
+        } else {
+            const isDirectory = !!AppState.filePickerDirectory;
+            let filePath = file.webkitRelativePath || file.name;
+            if (isDirectory && file.webkitRelativePath) {
+                const parts = file.webkitRelativePath.split('/');
+                if (parts.length > 1) {
+                    filePath = parts[0];
+                }
             }
+            const targetEl = document.getElementById(actualTargetId);
+            if (targetEl) {
+                targetEl.value = filePath;
+                // Visual feedback - briefly highlight the input
+                targetEl.style.borderColor = 'var(--md-success)';
+                setTimeout(() => { targetEl.style.borderColor = ''; }, 1500);
+            }
+            showToast(isDirectory ? `已选择目录: ${filePath}` : `已选择文件: ${file.name}`, 'success');
         }
-        const targetEl = document.getElementById(actualTargetId);
-        if (targetEl) {
-            targetEl.value = filePath;
-            // Visual feedback - briefly highlight the input
-            targetEl.style.borderColor = 'var(--md-success)';
-            setTimeout(() => { targetEl.style.borderColor = ''; }, 1500);
-        }
-        showToast(isDirectory ? `已选择目录: ${filePath}` : `已选择文件: ${file.name}`, 'success');
-        
+
         // 重置隐藏输入以便可以选择相同文件/目录再次触发change事件
         fileInput.value = '';
         fileInput.removeAttribute('webkitdirectory');
@@ -672,7 +676,8 @@ function clearResumeSelection() {
 function updateResumePanelState(mode) {
     if (mode === 'resume') {
         setResumePanelEnabled(true);
-        refreshResumeCandidates({ selectFirst: false }).catch(() => {});
+        // 默认选择第一个历史运行候选，避免用户直接点击“开始训练”时没有checkpoint对象
+        refreshResumeCandidates({ selectFirst: true }).catch(() => {});
     } else {
         setResumePanelEnabled(false);
         clearResumeSelection();
@@ -689,20 +694,48 @@ async function validateRunNameBeforeStart(project, runName) {
 }
 
 async function loadConfig() {
+    const hiddenInput = document.getElementById('hidden-file-input');
+    if (!hiddenInput) {
+        showToast('无法打开文件选择器', 'error');
+        return;
+    }
+
+    AppState.filePickerTarget = '_load-config';
+    AppState.filePickerAccept = '.yaml,.yml';
+    AppState.filePickerDirectory = false;
+
+    hiddenInput.accept = AppState.filePickerAccept;
+    hiddenInput.removeAttribute('webkitdirectory');
+    hiddenInput.removeAttribute('directory');
+    hiddenInput.click();
+}
+
+async function handleConfigFileUpload(file) {
+    if (!file) {
+        showToast('未选择配置文件', 'warning');
+        return;
+    }
+    if (!file.name.toLowerCase().endsWith('.yaml') && !file.name.toLowerCase().endsWith('.yml')) {
+        showToast('请选择 YAML 格式的配置文件 (.yaml 或 .yml)', 'warning');
+        return;
+    }
+
     try {
-        const data = await API.get('/api/configs');
-        const configs = Object.keys(data.configs);
-        if (configs.length === 0) {
-            showToast('未找到配置文件', 'warning');
-            return;
+        const text = await file.text();
+        const response = await fetch('/api/config/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: text, name: file.name })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || '解析配置失败');
         }
-        // Load first available config (distill_config.yaml preferred)
-        const target = configs.includes('distill_config.yaml') ? 'distill_config.yaml' : configs[0];
-        const result = await API.get(`/api/config/${target}`);
         populateForm(result.config);
-        showToast(`已加载配置: ${target}`, 'success');
-    } catch (e) {
-        showToast('加载配置失败', 'error');
+        showToast(`已加载本地配置: ${file.name}`, 'success');
+    } catch (error) {
+        console.error('Config upload error:', error);
+        showToast(error.message || '加载配置失败', 'error');
     }
 }
 

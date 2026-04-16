@@ -118,11 +118,41 @@ class EdgeProfiler:
         self.device_spec = DEVICE_DB[self.target_device]
 
     # ── 提取模型基础指标 ──────────────────────────────────────────────────────
+    @staticmethod
+    def _count_params_from_checkpoint(path: str) -> float:
+        import torch
+
+        raw = torch.load(path, map_location='cpu')
+        state_dict = None
+        if hasattr(raw, 'state_dict'):
+            state_dict = raw.state_dict()
+        elif isinstance(raw, dict):
+            if 'model' in raw:
+                model_obj = raw['model']
+                if hasattr(model_obj, 'state_dict'):
+                    state_dict = model_obj.state_dict()
+                elif isinstance(model_obj, dict):
+                    state_dict = model_obj
+            elif 'state_dict' in raw:
+                state_dict = raw['state_dict']
+            elif all(hasattr(v, 'numel') for v in raw.values()):
+                state_dict = raw
+
+        if not isinstance(state_dict, dict):
+            raise RuntimeError('无法从 checkpoint 提取 state_dict')
+
+        total_params = 0
+        for value in state_dict.values():
+            if hasattr(value, 'numel'):
+                total_params += int(value.numel())
+        if total_params <= 0:
+            raise RuntimeError('模型参数计数结果为 0')
+        return total_params / 1e6
+
     def _get_model_metrics(self) -> Dict[str, float]:
         try:
             from ultralytics import YOLO
             model = YOLO(self.weight_path)
-            params_m, gflops = 1.0, 1.0
 
             # 优先尝试现代 ultralytics (>=8.x) 直接返回 (nparams, gflops) 元组
             try:
@@ -130,12 +160,11 @@ class EdgeProfiler:
                 if isinstance(info_result, (list, tuple)) and len(info_result) >= 2:
                     n_params = float(info_result[0])
                     g = float(info_result[1])
-                    if n_params > 1000:
+                    if n_params > 1000 and g > 0:
                         params_m = n_params / 1e6
-                    if g > 0:
                         gflops = g
-                    del model
-                    return {"params_m": params_m, "gflops": gflops}
+                        del model
+                        return {"params_m": params_m, "gflops": gflops}
             except Exception:
                 pass
 
@@ -147,8 +176,10 @@ class EdgeProfiler:
                 except Exception:
                     pass
             text = buf.getvalue()
+            params_m = None
+            gflops = None
             for line in text.split("\n"):
-                if "parameters" in line.lower():
+                if "parameters" in line.lower() and params_m is None:
                     for tok in line.replace(",", "").split():
                         try:
                             v = float(tok)
@@ -157,18 +188,25 @@ class EdgeProfiler:
                                 break
                         except ValueError:
                             continue
-                if "gflops" in line.lower():
+                if "gflops" in line.lower() and gflops is None:
                     for tok in line.split():
                         try:
-                            gflops = float(tok.replace(",", ""))
-                            break
+                            g = float(tok.replace(",", ""))
+                            if g > 0:
+                                gflops = g
+                                break
                         except ValueError:
                             continue
             del model
+            if params_m is not None and gflops is not None:
+                return {"params_m": params_m, "gflops": gflops}
+
+            params_m = self._count_params_from_checkpoint(self.weight_path)
+            gflops = max(params_m * 4.5, 1.0)
             return {"params_m": params_m, "gflops": gflops}
         except Exception as e:
-            logger.warning(f"模型指标提取失败: {e}，使用默认值")
-            return {"params_m": 1.0, "gflops": 1.0}
+            logger.warning(f"模型指标提取失败: {e}")
+            raise
 
     # ── 内存估算 ──────────────────────────────────────────────────────────────
     @staticmethod

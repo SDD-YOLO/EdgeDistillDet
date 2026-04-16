@@ -9,6 +9,8 @@ import logging
 import argparse
 import yaml
 
+from utils import expand_env_vars
+
 # 确保项目根目录在路径中（scripts/ -> 项目根目录）
 _SCRIPT_DIR = str(__import__('pathlib').Path(__file__).resolve().parent)
 sys.path.insert(0, _SCRIPT_DIR)
@@ -33,7 +35,7 @@ def run_evaluation(config_path: str):
         print("╚══════════════════════════════════════════════════════════════╝\n")
 
     with open(config_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
+        cfg = expand_env_vars(yaml.safe_load(f) or {})
 
     eval_cfg   = cfg.get("evaluation", {})
     output_cfg = cfg.get("output", {})
@@ -48,20 +50,27 @@ def run_evaluation(config_path: str):
         test_yaml = "coco128.yaml"
 
     from pathlib import Path
-    _ty_path = Path(test_yaml)
-    if not _ty_path.is_absolute():
-        # 先尝试相对于项目根目录
-        _candidate = _ROOT / test_yaml
-        if not _candidate.exists():
-            # 再尝试 configs/ 目录
-            _candidate = _ROOT / 'configs' / test_yaml
-        if _candidate.exists():
-            test_yaml = str(_candidate)
-            print(f"[评估] 数据集配置: {test_yaml}")
-        else:
-            print(f"[警告] 数据集文件未找到: {test_yaml} (将使用默认)")
-    else:
+    config_dir = Path(config_path).resolve().parent
+
+    def _resolve_relative_path(path_str: str, base_dir: Path) -> str:
+        if not isinstance(path_str, str) or not path_str:
+            return path_str
+        path_obj = Path(path_str)
+        if path_obj.is_absolute():
+            return str(path_obj)
+        candidate = (base_dir / path_obj).resolve()
+        if candidate.exists():
+            return str(candidate)
+        candidate = (_ROOT / path_obj).resolve()
+        if candidate.exists():
+            return str(candidate)
+        return str(path_obj)
+
+    test_yaml = _resolve_relative_path(test_yaml, config_dir)
+    if Path(test_yaml).exists():
         print(f"[评估] 数据集配置: {test_yaml}")
+    else:
+        print(f"[警告] 数据集文件未找到: {test_yaml} (将使用默认)")
 
     print(f"[评估] 图像尺寸: imgsz={eval_cfg.get('imgsz', 640)}, GPU batch={eval_cfg.get('gpu_batch', 4)}")
 
@@ -75,6 +84,7 @@ def run_evaluation(config_path: str):
             if not isinstance(weight_paths, list):
                 weight_paths = []
             weight_paths.append(teacher_weight)
+    weight_paths = [_resolve_relative_path(w, config_dir) for w in weight_paths]
     print(f"[评估] 权重模型 ({len(weight_paths)} 个): {[Path(w).name for w in weight_paths]}")
 
     bench = UnifiedBenchmark(

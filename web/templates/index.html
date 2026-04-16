@@ -7,9 +7,10 @@
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
     
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <!-- Chart.js (本地静态文件，避免 CDN 被浏览器追踪防护拦截) -->
+    <script src="/static/js/chart.umd.js"></script>
     
     <!-- Main Stylesheet -->
     <link rel="stylesheet" href="/static/css/styles.css">
@@ -50,7 +51,7 @@
             </button>
             <button class="tab-btn" role="tab" data-tab="agent" onclick="switchTab('agent')" aria-selected="false">
                 <span class="material-icons tab-icon">smart_toy</span>
-                AI Agent
+                Agent API
             </button>
         </nav>
 
@@ -420,9 +421,7 @@
                             </div>
 
                             <!-- Log Output -->
-                            <div id="log-container" class="log-container">
-                                <div class="log-line info">[系统] 等待开始训练...</div>
-                            </div>
+                            <div id="log-container" class="log-container"></div>
                         </div>
 
                         <!-- Quick Stats Cards -->
@@ -430,6 +429,18 @@
                             <div class="stat-card">
                                 <span class="stat-label">当前 Loss</span>
                                 <span class="stat-value" id="stat-loss">--</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">KD Loss</span>
+                                <span class="stat-value" id="stat-kd-loss">--</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">Alpha 权重</span>
+                                <span class="stat-value" id="stat-alpha">--</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">温度 T</span>
+                                <span class="stat-value" id="stat-temp">--</span>
                             </div>
                             <div class="stat-card">
                                 <span class="stat-label">mAP50</span>
@@ -442,6 +453,10 @@
                             <div class="stat-card">
                                 <span class="stat-label">学习率</span>
                                 <span class="stat-value" id="stat-lr">--</span>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">数据集图片数</span>
+                                <span class="stat-value" id="stat-images">--</span>
                             </div>
                         </div>
                     </div>
@@ -457,6 +472,13 @@
                             刷新数据
                         </button>
                         <select id="metrics-source" class="md-select" onchange="loadMetricsData()"></select>
+                    </div>
+                    <div class="auto-refresh-bar">
+                        <label class="auto-refresh-label">
+                            <input type="checkbox" id="auto-refresh-toggle" onchange="toggleAutoRefresh(this)">
+                            自动刷新图表数据
+                        </label>
+                        <span class="auto-refresh-interval" id="refresh-timer">--</span>
                     </div>
                     <div class="toolbar-right">
                         <div class="chip-group">
@@ -476,218 +498,194 @@
                 </div>
 
                 <div id="metrics-content">
-                <!-- Quick Overview Stats -->
-                <div class="metrics-overview" id="metrics-overview">
-                    <div class="overview-card">
-                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-success), #4CAF50);">
-                            <span class="material-icons">trending_up</span>
-                        </div>
-                        <div class="overview-info">
-                            <span class="overview-label">最佳 mAP@50</span>
-                            <span class="overview-value" id="ov-map50">--</span>
-                        </div>
-                    </div>
-                    <div class="overview-card">
-                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-primary), #9C27B0);">
-                            <span class="material-icons">speed</span>
-                        </div>
-                        <div class="overview-info">
-                            <span class="overview-label">推理 FPS (GPU)</span>
-                            <span class="overview-value" id="ov-fps">--</span>
-                        </div>
-                    </div>
-                    <div class="overview-card">
-                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-warning), #FF9800);">
-                            <span class="material-icons">memory</span>
-                        </div>
-                        <div class="overview-info">
-                            <span class="overview-label">模型参数量</span>
-                            <span class="overview-value" id="ov-params">--</span>
-                        </div>
-                    </div>
-                    <div class="overview-card">
-                        <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-info), #2196F3);">
-                            <span class="material-icons">timer</span>
-                        </div>
-                        <div class="overview-info">
-                            <span class="overview-label">训练总耗时</span>
-                            <span class="overview-value" id="ov-time">--</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="charts-grid">
-                    <div class="chart-card wide">
-                        <div class="chart-header">
-                            <h3>训练损失曲线</h3>
-                            <div class="chart-actions">
-                                <select id="loss-range-select" class="md-select mini-select" onchange="updateLossRange()">
-                                    <option value="all">全部 Epochs</option>
-                                    <option value="last30">最近 30</option>
-                                    <option value="last10">最近 10</option>
-                                </select>
-                                <button class="btn-icon-sm" onclick="exportChart('loss-chart')">
-                                    <span class="material-icons">download</span>
-                                </button>
-                                <button class="btn-icon-sm" onclick="zoomChart('loss-chart')">
-                                    <span class="material-icons">fullscreen</span>
-                                </button>
+                    <div class="metrics-overview" id="metrics-overview">
+                        <div class="overview-card">
+                            <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-success), #4CAF50);">
+                                <span class="material-icons">trending_up</span>
+                            </div>
+                            <div class="overview-info">
+                                <span class="overview-label">最佳 mAP@50</span>
+                                <span class="overview-value" id="ov-map50">--</span>
                             </div>
                         </div>
-                        <div class="chart-body">
-                            <canvas id="loss-chart"></canvas>
-                        </div>
-                    </div>
-
-                    <div class="chart-card">
-                        <div class="chart-header">
-                            <h3>mAP 曲线</h3>
-                            <div class="chart-actions">
-                                <button class="btn-icon-sm" onclick="exportChart('map-chart')">
-                                    <span class="material-icons">download</span>
-                                </button>
+                        <div class="overview-card">
+                            <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-primary), #9C27B0);">
+                                <span class="material-icons">speed</span>
+                            </div>
+                            <div class="overview-info">
+                                <span class="overview-label">推理 FPS (GPU)</span>
+                                <span class="overview-value" id="ov-fps">--</span>
                             </div>
                         </div>
-                        <div class="chart-body">
-                            <canvas id="map-chart"></canvas>
-                        </div>
-                    </div>
-
-                    <div class="chart-card">
-                        <div class="chart-header">
-                            <h3>学习率变化</h3>
-                            <div class="chart-actions">
-                                <button class="btn-icon-sm" onclick="exportChart('lr-chart')">
-                                    <span class="material-icons">download</span>
-                                </button>
+                        <div class="overview-card">
+                            <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-warning), #FF9800);">
+                                <span class="material-icons">memory</span>
+                            </div>
+                            <div class="overview-info">
+                                <span class="overview-label">模型参数量</span>
+                                <span class="overview-value" id="ov-params">--</span>
                             </div>
                         </div>
-                        <div class="chart-body">
-                            <canvas id="lr-chart"></canvas>
-                        </div>
-                    </div>
-
-                    <div class="chart-card wide" id="card-distill-flow">
-                        <div class="chart-header" style="margin-top:0;">
-                            <h3>蒸馏指标 (Alpha/Temperature 动态变化)</h3>
-                            <div class="chart-actions">
-                                <button class="btn-icon-sm" onclick="exportChart('distill-chart')">
-                                    <span class="material-icons">download</span>
-                                </button>
-                                <button class="btn-icon-sm" onclick="zoomChart('distill-chart')">
-                                    <span class="material-icons">fullscreen</span>
-                                </button>
+                        <div class="overview-card">
+                            <div class="overview-icon" style="background: linear-gradient(135deg, var(--md-info), #2196F3);">
+                                <span class="material-icons">timer</span>
+                            </div>
+                            <div class="overview-info">
+                                <span class="overview-label">训练总耗时</span>
+                                <span class="overview-value" id="ov-time">--</span>
                             </div>
                         </div>
-                        <div class="chart-body">
-                            <canvas id="distill-chart"></canvas>
-                        </div>
                     </div>
 
-                    <div class="chart-card">
-                        <div class="chart-header"><h3>Precision-Recall 曲线</h3></div>
-                        <div class="chart-body"><canvas id="pr-chart"></canvas></div>
-                    </div>
-
-                    <div class="chart-card">
-                        <div class="chart-header"><h3>各类别性能分布</h3></div>
-                        <div class="chart-body"><canvas id="class-chart"></canvas></div>
-                    </div>
-
-                    <div class="chart-card full-width">
-                        <div class="chart-header">
-                            <h3>训练结果摘要</h3>
-                            <div class="chart-actions">
-                                <button class="md-btn md-btn-tonal sm-btn" onclick="exportTable()">
-                                    <span class="material-icons">table_chart</span>
-                                    导出表格
-                                </button>
+                    <div class="charts-grid">
+                        <div class="chart-card wide">
+                            <div class="chart-header">
+                                <h3>训练损失曲线</h3>
+                                <div class="chart-actions">
+                                    <select id="loss-range-select" class="md-select mini-select" onchange="updateLossRange()">
+                                        <option value="all">全部 Epochs</option>
+                                        <option value="last30">最近 30</option>
+                                        <option value="last10">最近 10</option>
+                                    </select>
+                                    <button class="btn-icon-sm" onclick="exportChart('loss-chart')">
+                                        <span class="material-icons">download</span>
+                                    </button>
+                                    <button class="btn-icon-sm" onclick="zoomChart('loss-chart')">
+                                        <span class="material-icons">fullscreen</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="chart-body">
+                                <canvas id="loss-chart"></canvas>
                             </div>
                         </div>
-                        <div class="table-container">
-                            <table id="results-table" class="md-table">
-                                <thead>
-                                    <tr>
-                                        <th>指标</th>
-                                        <th>最佳值</th>
-                                        <th>最终值</th>
-                                        <th>改善幅度</th>
-                                        <th>趋势</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="results-tbody">
-                                    <tr><td colspan="5" class="empty-hint">暂无数据，请先完成一次训练</td></tr>
-                                </tbody>
-                            </table>
+
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>mAP 曲线</h3>
+                                <div class="chart-actions">
+                                    <button class="btn-icon-sm" onclick="exportChart('map-chart')">
+                                        <span class="material-icons">download</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="chart-body">
+                                <canvas id="map-chart"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>学习率变化</h3>
+                                <div class="chart-actions">
+                                    <button class="btn-icon-sm" onclick="exportChart('lr-chart')">
+                                        <span class="material-icons">download</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="chart-body">
+                                <canvas id="lr-chart"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="chart-card wide" id="card-distill-flow">
+                            <div class="chart-header" style="margin-top:0;">
+                                <h3>蒸馏指标 (Alpha/Temperature 动态变化)</h3>
+                                <div class="chart-actions">
+                                    <button class="btn-icon-sm" onclick="exportChart('distill-chart')">
+                                        <span class="material-icons">download</span>
+                                    </button>
+                                    <button class="btn-icon-sm" onclick="zoomChart('distill-chart')">
+                                        <span class="material-icons">fullscreen</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="chart-body">
+                                <canvas id="distill-chart"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="chart-card">
+                            <div class="chart-header"><h3>Precision-Recall 曲线</h3></div>
+                            <div class="chart-body"><canvas id="pr-chart"></canvas></div>
+                        </div>
+
+                        <div class="chart-card">
+                            <div class="chart-header"><h3>各类别性能分布</h3></div>
+                            <div class="chart-body"><canvas id="class-chart"></canvas></div>
+                        </div>
+
+                        <div class="chart-card full-width">
+                            <div class="chart-header">
+                                <h3>训练结果摘要</h3>
+                                <div class="chart-actions">
+                                    <button class="md-btn md-btn-tonal sm-btn" onclick="exportTable()">
+                                        <span class="material-icons">table_chart</span>
+                                        导出表格
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="table-container">
+                                <table id="results-table" class="md-table">
+                                    <thead>
+                                        <tr>
+                                            <th>指标</th>
+                                            <th>最佳值</th>
+                                            <th>最终值</th>
+                                            <th>改善幅度</th>
+                                            <th>趋势</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="results-tbody">
+                                        <tr><td colspan="5" class="empty-hint">暂无数据，请先完成一次训练</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <div class="auto-refresh-bar">
-                    <label class="auto-refresh-label">
-                        <input type="checkbox" id="auto-refresh-toggle" onchange="toggleAutoRefresh(this)">
-                        自动刷新图表数据
-                    </label>
-                    <span class="auto-refresh-interval" id="refresh-timer">--</span>
-                </div>
                 </div>
             </div>
 
             <!-- ==================== AGENT PANEL ==================== -->
             <div id="panel-agent" class="tab-panel">
                 <div class="agent-layout">
-                    <!-- Agent Action Sidebar -->
                     <div class="agent-sidebar">
                         <h3 class="sidebar-title">
-                            <span class="material-icons">auto_awesome</span>
-                            Agent 功能面板
+                            <span class="material-icons">api</span>
+                            Agent API 接入
                         </h3>
-                        
-                        <div class="agent-actions-list">
-                            <div class="agent-action-card" onclick="callAgentAction('auto_tune')">
-                                <span class="material-icons action-icon">tune</span>
-                                <div class="action-info">
-                                    <span class="action-name">自动超参数调优</span>
-                                    <span class="action-desc">基于贝叶斯优化自动搜索最优参数组合</span>
-                                </div>
-                                <span class="material-icons arrow">chevron_right</span>
-                            </div>
 
-                            <div class="agent-action-card" onclick="callAgentAction('analyze_result')">
-                                <span class="material-icons action-icon">insights</span>
-                                <div class="action-info">
-                                    <span class="action-name">训练结果分析</span>
-                                    <span class="action-desc">深度分析训练曲线、异常点与改进建议</span>
+                        <div class="agent-settings-card">
+                            <h4>外部 API 配置</h4>
+                            <div class="form-row stacked-row">
+                                <div class="form-group">
+                                    <label for="agent-api-url">Agent API 地址</label>
+                                    <input type="url" id="agent-api-url" class="md-input" placeholder="https://example.com/api/agent">
                                 </div>
-                                <span class="material-icons arrow">chevron_right</span>
-                            </div>
-
-                            <div class="agent-action-card" onclick="callAgentAction('suggest_config')">
-                                <span class="material-icons action-icon">lightbulb</span>
-                                <div class="action-info">
-                                    <span class="action-name">智能配置推荐</span>
-                                    <span class="action-desc">根据数据集特征自动生成最优配置</span>
+                                <div class="form-group">
+                                    <label for="agent-api-key">API Token (可选)</label>
+                                    <input type="text" id="agent-api-key" class="md-input" placeholder="Bearer token 或自定义 Header 值">
                                 </div>
-                                <span class="material-icons arrow">chevron_right</span>
                             </div>
+                            <div class="launch-actions" style="margin-top: 12px; gap: 8px;">
+                                <button class="md-btn md-btn-tonal" onclick="saveAgentApiConfig()">
+                                    <span class="material-icons">save</span>
+                                    保存配置
+                                </button>
+                                <button class="md-btn md-btn-outlined" onclick="testAgentApi()">
+                                    <span class="material-icons">bolt</span>
+                                    测试连接
+                                </button>
+                            </div>
+                        </div>
 
-                            <div class="agent-action-card" onclick="callAgentAction('compare_models')">
-                                <span class="material-icons action-icon">compare_arrows</span>
-                                <div class="action-info">
-                                    <span class="action-name">模型对比分析</span>
-                                    <span class="action-desc">多维度对比不同模型的性能差异</span>
-                                </div>
-                                <span class="material-icons arrow">chevron_right</span>
-                            </div>
-
-                            <div class="agent-note">
-                                <span class="material-icons">info</span>
-                                <span>扩展入口保留在接口层，UI 默认仅展示可用功能。</span>
-                            </div>
+                        <div class="agent-note">
+                            <span class="material-icons">info</span>
+                            <span>请输入你自己的 Agent API 地址。前端将把动作请求发送到该地址，并显示返回结果。</span>
                         </div>
                     </div>
 
-                    <!-- Agent Interaction Area -->
                     <div class="agent-main">
                         <div class="agent-chat-panel">
                             <div class="chat-header">
@@ -701,24 +699,8 @@
                                     </button>
                                 </div>
                             </div>
-                            
+
                             <div id="agent-chat-messages" class="chat-messages">
-                                <div class="chat-message agent">
-                                    <div class="message-avatar agent-avatar">
-                                        <span class="material-icons">smart_toy</span>
-                                    </div>
-                                    <div class="message-content">
-                                        <p>你好！我是 EdgeDistillDet AI Agent。</p>
-                                        <p>我可以帮助你：</p>
-                                        <ul>
-                                            <li>自动调优超参数</li>
-                                            <li>分析训练结果并提供建议</li>
-                                            <li>根据数据集智能推荐配置</li>
-                                            <li>对比多个模型的表现</li>
-                                        </ul>
-                                        <p>请在左侧选择一个功能开始，或直接输入你的问题。</p>
-                                    </div>
-                                </div>
                             </div>
 
                             <div class="chat-input-area">
@@ -731,18 +713,12 @@
                             </div>
                         </div>
 
-                        <!-- Agent Status Panel -->
                         <div class="agent-status-panel">
                             <div class="status-header">
-                                <h4>Agent 状态与输出</h4>
+                                <h4>Agent 输出</h4>
                             </div>
                             <div id="agent-output" class="agent-output">
-                                <pre id="agent-output-content">// Agent 输出将显示在这里
-// 可用于显示:
-// - 参数调优进度
-// - 分析报告 JSON
-// - 推荐配置预览
-// - 模型对比表格</pre>
+                                <pre id="agent-output-content">请先配置外部 Agent API，然后开始对话或调用动作。</pre>
                             </div>
                         </div>
                     </div>
@@ -764,6 +740,7 @@
     <script src="/static/js/training.js"></script>
     <script src="/static/js/metrics.js"></script>
     <script src="/static/js/agent.js"></script>
+
 
     <!-- Initialize Animation System on DOM Ready -->
     <script>

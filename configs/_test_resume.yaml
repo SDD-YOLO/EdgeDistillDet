@@ -1,0 +1,29 @@
+distillation:
+  T_max: 6.00022671881199
+  T_min: 2.00042512186827
+  alpha_init: 0.45
+  focal_gamma: 2
+  scale_boost: 2
+  student_weight: models/yolov8n.pt
+  teacher_weight: models/yolov8m.pt
+  w_feat: 0
+  w_focal: 0.472225371273098
+  w_kd: 0.503655840843394
+  warm_epochs: 1
+output:
+  name: _resume_test
+  project: runs
+training:
+  amp: true
+  batch: 4
+  close_mosaic: 1
+  data_yaml: coco128.yaml
+  device: '0'
+  epochs: 3
+  imgsz: 640
+  lr0: 0.01
+  lrf: 0.08
+  mixup: 0.1
+  mosaic: 0.8
+  warmup_epochs: 3
+  workers: 0

@@ -352,9 +352,9 @@ class FeatureAlignmentLoss(nn.Module):
     def forward(self, student_feats: List[torch.Tensor], teacher_feats: List[torch.Tensor]) -> torch.Tensor:
         if not student_feats or not teacher_feats:
             device = torch.device('cpu')
-        if student_feats:
-            try: device = student_feats[0].device
-            except (IndexError, AttributeError, RuntimeError): device = torch.device('cpu')
+            if student_feats:
+                try: device = student_feats[0].device
+                except (IndexError, AttributeError, RuntimeError): pass
             return torch.tensor(0.0, device=device)
         
         device = student_feats[0].device
