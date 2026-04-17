@@ -377,8 +377,10 @@ def _maybe_auto_eval(
                 for i in range(nc):
                     labels_list.append(class_names.get(i, f"class{i}"))
                     map_list.append(float(ap_per_cls[i]))
-                    prec_list.append(float(p_arr[i]) if p_arr is not None and i < len(p_arr) else 0.0)
-                    rec_list.append(float(r_arr[i]) if r_arr is not None and i < len(r_arr) else 0.0)
+                    # Keep missing class metrics as null instead of 0.0,
+                    # so UI can distinguish "no data" from a true zero score.
+                    prec_list.append(float(p_arr[i]) if p_arr is not None and i < len(p_arr) else None)
+                    rec_list.append(float(r_arr[i]) if r_arr is not None and i < len(r_arr) else None)
                 per_class_data = {
                     "labels": labels_list,
                     "map": map_list,

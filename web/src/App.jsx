@@ -200,6 +200,7 @@ function TrainingPanel({ toast }) {
   const logContainerRef = useRef(null);
   const overlapAlertShownRef = useRef("");
   const outputNameInputRef = useRef(null);
+  const pendingOverlapAlertRef = useRef(false);
 
   const setNested = (scope, key, value) => {
     setForm((prev) => ({
@@ -357,13 +358,19 @@ function TrainingPanel({ toast }) {
     : `建议输出目录: ${currentOutputProject}/${outputCheckInfo.suggested || "exp1"}`;
 
   useEffect(() => {
+    if (!isOutputPathOverlap) {
+      pendingOverlapAlertRef.current = false;
+      return;
+    }
     if (!isOutputPathOverlap || !currentOutputName) return;
     const overlapKey = `${currentOutputProject}/${currentOutputName}`;
     if (overlapAlertShownRef.current === overlapKey) return;
     const isFocused = document.activeElement === outputNameInputRef.current;
-    // #region agent log
-    fetch("http://127.0.0.1:7683/ingest/597ab011-8d14-4d9b-8374-f910e434ea52",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"b45ef3"},body:JSON.stringify({sessionId:"b45ef3",runId:"pre-fix",hypothesisId:"N1",location:"web/src/App.jsx:overlapAlertEffect",message:"overlap effect reached",data:{overlapKey,isFocused,currentOutputName,isOutputPathOverlap},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
+    if (isFocused) {
+      pendingOverlapAlertRef.current = true;
+      return;
+    }
+    pendingOverlapAlertRef.current = false;
     overlapAlertShownRef.current = overlapKey;
     window.alert(`路径重合：${overlapKey}`);
     toast(`路径重合：${overlapKey}`, "warning");
@@ -598,19 +605,19 @@ function TrainingPanel({ toast }) {
                   onChange={(e) => {
                     const nextName = e.target.value;
                     setNested("output", "name", nextName);
-                    // #region agent log
-                    fetch("http://127.0.0.1:7683/ingest/597ab011-8d14-4d9b-8374-f910e434ea52",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"b45ef3"},body:JSON.stringify({sessionId:"b45ef3",runId:"pre-fix",hypothesisId:"N2",location:"web/src/App.jsx:outputNameOnChange",message:"output name changed",data:{nextName,overlap:outputCheckInfo.existingNames.includes((nextName||"").trim())},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
-                  }}
-                  onFocus={() => {
-                    // #region agent log
-                    fetch("http://127.0.0.1:7683/ingest/597ab011-8d14-4d9b-8374-f910e434ea52",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"b45ef3"},body:JSON.stringify({sessionId:"b45ef3",runId:"pre-fix",hypothesisId:"N3",location:"web/src/App.jsx:outputNameOnFocus",message:"output input focused",data:{name:(form.output.name||"").trim()},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                   }}
                   onBlur={() => {
-                    // #region agent log
-                    fetch("http://127.0.0.1:7683/ingest/597ab011-8d14-4d9b-8374-f910e434ea52",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"b45ef3"},body:JSON.stringify({sessionId:"b45ef3",runId:"pre-fix",hypothesisId:"N4",location:"web/src/App.jsx:outputNameOnBlur",message:"output input blurred",data:{name:(form.output.name||"").trim(),overlapNow:isOutputPathOverlap},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
+                    const overlapKey = `${currentOutputProject}/${(form.output.name || "").trim()}`;
+                    const shouldAlertOnBlur = Boolean(
+                      isOutputPathOverlap &&
+                      (pendingOverlapAlertRef.current || overlapAlertShownRef.current !== overlapKey)
+                    );
+                    if (shouldAlertOnBlur) {
+                      pendingOverlapAlertRef.current = false;
+                      overlapAlertShownRef.current = overlapKey;
+                      window.alert(`路径重合：${overlapKey}`);
+                      toast(`路径重合：${overlapKey}`, "warning");
+                    }
                   }}
                   disabled={running}
                 />
@@ -1224,6 +1231,42 @@ function getChartTheme() {
   };
 }
 
+function formatMetricValueForTooltip(chartKey, value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "--";
+  if (chartKey === "lr") {
+    if (num === 0) return "0";
+    if (Math.abs(num) < 0.001) return num.toExponential(6);
+    return num.toFixed(6);
+  }
+  return num.toFixed(4);
+}
+
+function compactClassSeries(cls = {}) {
+  const labels = Array.isArray(cls.labels) ? cls.labels : [];
+  const map = Array.isArray(cls.map) ? cls.map : [];
+  const recall = Array.isArray(cls.recall) ? cls.recall : [];
+  const precision = Array.isArray(cls.precision) ? cls.precision : [];
+  const toMetric = (arr, idx) => {
+    const raw = arr[idx];
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  const next = { labels: [], map: [], recall: [], precision: [] };
+  for (let i = 0; i < labels.length; i += 1) {
+    const m = toMetric(map, i);
+    const r = toMetric(recall, i);
+    const p = toMetric(precision, i);
+    if (m == null && r == null && p == null) continue;
+    next.labels.push(labels[i]);
+    next.map.push(m);
+    next.recall.push(r);
+    next.precision.push(p);
+  }
+  return next;
+}
+
 function renderLineChart(instancesRef, canvas, key, labels, datasets, options = {}) {
   if (!canvas) return;
   if (instancesRef.current[key]) instancesRef.current[key].destroy();
@@ -1291,7 +1334,14 @@ function renderLineChart(instancesRef, canvas, key, labels, datasets, options = 
             titleColor: theme.text,
             bodyColor: theme.text,
             displayColors: true,
-            padding: 10
+            padding: 10,
+            callbacks: {
+              label: (ctx) => {
+                const chartKey = key;
+                const value = chartKey === "lr" ? ctx?.raw : (ctx?.parsed?.y ?? ctx?.raw);
+                return `${ctx.dataset.label}: ${formatMetricValueForTooltip(chartKey, value)}`;
+              }
+            }
           }
         },
         ...options
@@ -1353,7 +1403,13 @@ function renderBarChart(instancesRef, canvas, key, labels, datasets) {
             borderWidth: 1,
             titleColor: theme.text,
             bodyColor: theme.text,
-            padding: 10
+            padding: 10,
+            callbacks: {
+              label: (ctx) => {
+                const value = ctx?.parsed?.y ?? ctx?.raw;
+                return `${ctx.dataset.label}: ${formatMetricValueForTooltip(key, value)}`;
+              }
+            }
           }
         }
       }
@@ -1388,7 +1444,7 @@ function renderAllCharts(instancesRef, refs, chartSeries, lossRange) {
   const lrSeries = chartSeries?.lr_series || {};
   const distill = chartSeries?.distill_series || {};
   const pr = chartSeries?.pr_curve || {};
-  const cls = chartSeries?.class_performance || {};
+  const cls = compactClassSeries(chartSeries?.class_performance || {});
   renderLineChart(instancesRef, refs.lossRef.current, "loss", epochs, [
     { label: "Box Loss", data: (trainLoss.box_loss || []).slice(start), color: "#6750A4" },
     { label: "CLS Loss", data: (trainLoss.cls_loss || []).slice(start), color: "#F57C00" },

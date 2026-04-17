@@ -26,5 +26,5 @@ training:
   amp: true
 output:
   project: runs
-  name: exp1
+  name: ''
 __agentPreConfirmedOverlap: true
