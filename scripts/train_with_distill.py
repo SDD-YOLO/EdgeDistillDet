@@ -230,6 +230,72 @@ def _build_train_args(
     }
 
 
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return default
+
+
+def _setup_wandb_env(
+    wandb_cfg: Dict[str, Any],
+    output_cfg: Dict[str, Any],
+    resume_path: Optional[Path],
+) -> None:
+    """
+    配置 W&B 环境变量。
+
+    说明：
+    - 默认关闭（兼容旧行为）；
+    - 支持在 YAML 里显式开启并自定义 project/entity/name/tags。
+    """
+    enabled = _to_bool(wandb_cfg.get("enabled", False), default=False)
+    if not enabled:
+        os.environ["WANDB_MODE"] = "disabled"
+        return
+
+    mode = str(wandb_cfg.get("mode", "online")).strip().lower() or "online"
+    if mode not in {"online", "offline", "disabled"}:
+        mode = "online"
+    os.environ["WANDB_MODE"] = mode
+
+    project = str(wandb_cfg.get("project") or output_cfg.get("project") or "edge-distilldet").strip()
+    if project:
+        os.environ["WANDB_PROJECT"] = project
+
+    entity = str(wandb_cfg.get("entity", "")).strip()
+    if entity:
+        os.environ["WANDB_ENTITY"] = entity
+
+    run_name = str(wandb_cfg.get("name") or output_cfg.get("name") or "").strip()
+    if run_name:
+        suffix = "_resume" if resume_path is not None else ""
+        os.environ["WANDB_NAME"] = f"{run_name}{suffix}"
+
+    group = str(wandb_cfg.get("group", "")).strip()
+    if group:
+        os.environ["WANDB_RUN_GROUP"] = group
+
+    job_type = str(wandb_cfg.get("job_type", "")).strip()
+    if job_type:
+        os.environ["WANDB_JOB_TYPE"] = job_type
+
+    notes = str(wandb_cfg.get("notes", "")).strip()
+    if notes:
+        os.environ["WANDB_NOTES"] = notes
+
+    tags = wandb_cfg.get("tags")
+    if isinstance(tags, (list, tuple)):
+        clean_tags = [str(t).strip() for t in tags if str(t).strip()]
+        if clean_tags:
+            os.environ["WANDB_TAGS"] = ",".join(clean_tags)
+
+
 def run_distill_training(config_path: str | Path, resume: str = "", allow_overwrite: bool = False) -> Any:
     """
     执行蒸馏训练（支持 resume 为空、'auto'、或 last.pt 等绝对/相对路径）。
@@ -251,6 +317,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     distill_cfg = cfg.get("distillation", {}) or {}
     train_cfg = dict(cfg.get("training", {}) or {})
     output_cfg = dict(cfg.get("output", {}) or {})
+    wandb_cfg = dict(cfg.get("wandb", {}) or {})
 
     student_weight = str(_resolve_under_root(str(distill_cfg.get("student_weight", "yolov8n.pt")), root))
     if not Path(student_weight).exists():
@@ -308,9 +375,9 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     train_args = _build_train_args(train_cfg, output_cfg, resume_path, allow_overwrite=allow_overwrite)
 
     os.environ.setdefault("ULTRALYTICS_VERBOSE", "True")
-    os.environ.setdefault("WANDB_MODE", "disabled")
     os.environ.setdefault("DATAMODULE_WORKERS", "0")
     os.environ.setdefault("NUM_WORKERS", "0")
+    _setup_wandb_env(wandb_cfg, output_cfg, resume_path)
 
     try:
         results = student_model.train(trainer=AdaptiveKDTrainer, **train_args)

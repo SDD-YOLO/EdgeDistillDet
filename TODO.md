@@ -7,9 +7,9 @@
 ## 项目概览
 
 - [x] 前端：React
-- [ ] 后端：FastAPI
+- [x] 后端：FastAPI
 - [x] 核心：模型蒸馏、训练管理、可视化
-- [ ] 云：AutoDL、Google Colab
+- [x] 云：AutoDL、Google Colab
 - [ ] 监控：W&B
 - [ ] 智能分析：OpenAI / DeepSeek
 
@@ -18,7 +18,7 @@
 ## 第一阶段：基础搭建
 
 - [x] 项目结构、环境、依赖管理
-- [ ] 后端 API、数据库、认证
+- [x] 后端 API、数据库、认证
 - [x] 前端基础界面与主题
 - [x] 本地蒸馏训练器与示例
 - [ ] 数据模型与存储方案

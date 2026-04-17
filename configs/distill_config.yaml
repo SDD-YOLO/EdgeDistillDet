@@ -11,6 +11,21 @@ distillation:
   scale_boost: 2
   focal_gamma: 2
 training:
+  compute_provider: local
+  cloud_api:
+    base_url: ''
+    submit_path: /train/start
+    status_path: /train/status
+    logs_path: /train/logs
+    stop_path: /train/stop
+    token: ''
+    poll_interval_sec: 3
+  dataset_api:
+    enabled: false
+    source: path
+    resolve_url: ''
+    token: ''
+    dataset_name: ''
   data_yaml: coco128.yaml
   device: '0'
   epochs: 10
@@ -26,5 +41,15 @@ training:
   amp: true
 output:
   project: runs
+  name: exp5
+wandb:
+  enabled: false
+  mode: online
+  project: edge-distilldet
+  entity: ''
   name: ''
+  group: ''
+  job_type: distill-train
+  tags: []
+  notes: ''
 __agentPreConfirmedOverlap: true

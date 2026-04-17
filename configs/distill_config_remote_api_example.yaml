@@ -1,0 +1,46 @@
+distillation:
+  student_weight: models/yolov8n.pt
+  teacher_weight: models/yolov8m.pt
+  alpha_init: 0.5
+  T_max: 6.0
+  T_min: 1.5
+  warm_epochs: 5
+  w_kd: 0.5
+  w_focal: 0.3
+  w_feat: 0.0
+  scale_boost: 2.0
+  focal_gamma: 2.0
+
+training:
+  compute_provider: remote_api
+  data_yaml: datasets/your_dataset/data.yaml
+  device: "0"
+  epochs: 150
+  imgsz: 640
+  batch: 16
+  workers: 0
+  lr0: 0.01
+  lrf: 0.1
+  warmup_epochs: 3
+  mosaic: 0.8
+  mixup: 0.1
+  close_mosaic: 20
+  amp: true
+  cloud_api:
+    base_url: "https://your-cloud-trainer.example.com/api"
+    submit_path: "/train/start"
+    status_path: "/train/status"
+    logs_path: "/train/logs"
+    stop_path: "/train/stop"
+    token: "Bearer <YOUR_TOKEN>"
+    poll_interval_sec: 3
+  dataset_api:
+    source: api
+    enabled: true
+    resolve_url: "https://your-dataset-service.example.com/api/dataset/resolve"
+    token: "Bearer <YOUR_DATASET_TOKEN>"
+    dataset_name: "your_dataset_alias"
+
+output:
+  project: runs/distill
+  name: remote_api_exp1

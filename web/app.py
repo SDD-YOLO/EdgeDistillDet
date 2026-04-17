@@ -16,6 +16,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -290,15 +293,29 @@ def _as_float(value):
         return None
 
 
-def _resolve_project_path(project: str) -> Path:
+def _resolve_project_path(project: str, allow_external: bool = False) -> Path:
     project_path = Path(project)
     if not project_path.is_absolute():
         project_path = (BASE_DIR / project_path).resolve()
     else:
         project_path = project_path.resolve()
+    if allow_external:
+        return project_path
     if str(project_path).startswith(str(Path(BASE_DIR).resolve())) is False and str(Path(BASE_DIR).resolve()) not in str(project_path):
         raise ValueError('项目目录必须在仓库根目录下')
     return project_path
+
+
+def _normalize_compute_provider(value: str | None) -> str:
+    """统一算力平台标识，兼容多种写法。"""
+    v = str(value or '').strip().lower()
+    if v in {'google colab', 'google_colab', 'colab'}:
+        return 'colab'
+    if v in {'autodl', 'auto_dl', 'auto-dl'}:
+        return 'autodl'
+    if v in {'remote_api', 'remote-api', 'cloud_api', 'cloud-api'}:
+        return 'remote_api'
+    return 'local'
 
 
 def _candidate_output_roots(project_path: Path):
@@ -790,6 +807,12 @@ training_status = {
     'total_epochs': 0,
     'logs': [],
 }
+remote_training_state = {
+    'active': False,
+    'job_id': '',
+    'api_base_url': '',
+    'logs_offset': 0,
+}
 # 保护 logs / running 等与 SSE、子进程读线程的并发访问（Flask 多线程 + 后台训练线程）
 _train_state_lock = threading.RLock()
 _train_log_cond = threading.Condition(_train_state_lock)
@@ -862,6 +885,127 @@ def _update_status_line(line: str):
         progress = _extract_epoch_progress(clean_line)
         if progress:
             training_status['current_epoch'], training_status['total_epochs'] = progress
+
+
+def _http_json_request(method: str, url: str, payload: dict | None = None, headers: dict | None = None, timeout: float = 20.0):
+    req_headers = {'Content-Type': 'application/json'}
+    if isinstance(headers, dict):
+        req_headers.update({str(k): str(v) for k, v in headers.items() if k})
+    data = None
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    req = urllib.request.Request(url=url, data=data, headers=req_headers, method=method.upper())
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode('utf-8', errors='replace')
+        return json.loads(body) if body else {}
+
+
+def _build_cloud_api_config(train_cfg: dict):
+    cloud_api = dict(train_cfg.get('cloud_api', {}) or {})
+    base_url = str(cloud_api.get('base_url', '') or '').strip().rstrip('/')
+    if not base_url:
+        raise ValueError('云训练 API 缺少 base_url')
+    submit_path = str(cloud_api.get('submit_path', '/train/start') or '/train/start').strip()
+    status_path = str(cloud_api.get('status_path', '/train/status') or '/train/status').strip()
+    logs_path = str(cloud_api.get('logs_path', '/train/logs') or '/train/logs').strip()
+    stop_path = str(cloud_api.get('stop_path', '/train/stop') or '/train/stop').strip()
+    auth_token = str(cloud_api.get('token', '') or '').strip()
+    headers = dict(cloud_api.get('headers', {}) or {})
+    if auth_token and 'Authorization' not in headers:
+        headers['Authorization'] = auth_token
+    return {
+        'base_url': base_url,
+        'submit_url': f"{base_url}{submit_path}",
+        'status_url': f"{base_url}{status_path}",
+        'logs_url': f"{base_url}{logs_path}",
+        'stop_url': f"{base_url}{stop_path}",
+        'headers': headers,
+        'poll_interval_sec': float(cloud_api.get('poll_interval_sec', 3)),
+    }
+
+
+def _resolve_dataset_via_api(train_cfg: dict, cfg: dict, mode: str, checkpoint: str | None):
+    dataset_api = dict(train_cfg.get('dataset_api', {}) or {})
+    source = str(dataset_api.get('source', '') or '').strip().lower()
+    enabled = bool(dataset_api.get('enabled', False) or source == 'api')
+    resolve_url = str(dataset_api.get('resolve_url', '') or '').strip()
+    if not enabled or not resolve_url:
+        return None
+
+    headers = dict(dataset_api.get('headers', {}) or {})
+    token = str(dataset_api.get('token', '') or '').strip()
+    if not token:
+        token = str((train_cfg.get('cloud_api') or {}).get('token', '') or '').strip()
+    if token and 'Authorization' not in headers:
+        headers['Authorization'] = token
+
+    request_payload = dataset_api.get('request_body')
+    if not isinstance(request_payload, dict):
+        request_payload = {
+            'dataset_name': dataset_api.get('dataset_name', ''),
+            'config': cfg,
+            'mode': mode,
+            'checkpoint': checkpoint,
+        }
+    timeout_sec = float(dataset_api.get('timeout_sec', 30))
+    result = _http_json_request('POST', resolve_url, payload=request_payload, headers=headers, timeout=timeout_sec)
+    if not isinstance(result, dict):
+        raise ValueError('数据集 API 返回格式非法（需为 JSON 对象）')
+
+    data_yaml = str(
+        result.get('data_yaml')
+        or result.get('dataset_yaml')
+        or result.get('dataset_path')
+        or ''
+    ).strip()
+    dataset_id = str(result.get('dataset_id') or result.get('id') or '').strip()
+    if not data_yaml and not dataset_id:
+        raise ValueError('数据集 API 未返回 data_yaml 或 dataset_id')
+
+    out = dict(result)
+    out['data_yaml'] = data_yaml
+    out['dataset_id'] = dataset_id
+    return out
+
+
+def _remote_polling_loop(api_cfg: dict, job_id: str):
+    global remote_training_state
+    while True:
+        with _train_state_lock:
+            if not remote_training_state.get('active'):
+                break
+            logs_offset = int(remote_training_state.get('logs_offset', 0) or 0)
+
+        try:
+            status_qs = urllib.parse.urlencode({'job_id': job_id})
+            status_data = _http_json_request('GET', f"{api_cfg['status_url']}?{status_qs}", headers=api_cfg['headers'])
+            state = str(status_data.get('state', '') or '').lower()
+            current_epoch = int(status_data.get('current_epoch', 0) or 0)
+            total_epochs = int(status_data.get('total_epochs', 0) or 0)
+            with _train_state_lock:
+                training_status['current_epoch'] = current_epoch
+                training_status['total_epochs'] = total_epochs
+
+            logs_qs = urllib.parse.urlencode({'job_id': job_id, 'offset': logs_offset, 'limit': 200})
+            logs_data = _http_json_request('GET', f"{api_cfg['logs_url']}?{logs_qs}", headers=api_cfg['headers'])
+            lines = list(logs_data.get('logs') or [])
+            if lines:
+                with _train_state_lock:
+                    for line in lines:
+                        _update_status_line(str(line))
+                    remote_training_state['logs_offset'] = logs_offset + len(lines)
+
+            if state in {'completed', 'failed', 'stopped', 'cancelled', 'done', 'success'}:
+                with _train_state_lock:
+                    training_status['running'] = False
+                    training_status['pid'] = None
+                    remote_training_state['active'] = False
+                _update_status_line(f"[REMOTE] 云训练结束，状态: {state or 'unknown'}")
+                break
+        except Exception as e:
+            _update_status_line(f"[REMOTE] 轮询异常: {e}")
+
+        time.sleep(max(1.0, float(api_cfg.get('poll_interval_sec', 3.0))))
 
 
 def _iter_pipe_lines(stdout_pipe, chunk_size: int = 4096):
@@ -1424,7 +1568,7 @@ def agent_patch_apply(payload: AgentPatchApplyRequest):
 def output_check(project: str = Query('runs/distill')):
     project = project or 'runs/distill'
     try:
-        project_path = _resolve_project_path(project)
+        project_path = _resolve_project_path(project, allow_external=Path(project).is_absolute())
     except ValueError as e:
         return _error(str(e), 400)
 
@@ -1609,11 +1753,82 @@ def start_training(payload: TrainStartRequest):
             return _error(f'配置文件不存在: {config_name}', 404)
 
         cfg = _load_yaml_file(config_path) or {}
+        train_cfg = dict(cfg.get('training', {}) or {})
+        compute_provider = _normalize_compute_provider(train_cfg.get('compute_provider'))
+        if compute_provider == 'remote_api':
+            try:
+                api_cfg = _build_cloud_api_config(train_cfg)
+            except ValueError as e:
+                return _error(str(e), 400)
+            request_payload = {
+                'config': cfg,
+                'mode': mode,
+                'checkpoint': checkpoint,
+                'allow_overwrite': allow_overwrite,
+            }
+            try:
+                dataset_result = _resolve_dataset_via_api(train_cfg, cfg, mode, checkpoint)
+                if isinstance(dataset_result, dict):
+                    dataset_yaml = str(dataset_result.get('data_yaml', '') or '').strip()
+                    dataset_id = str(dataset_result.get('dataset_id', '') or '').strip()
+                    if dataset_yaml:
+                        request_payload['config'] = copy.deepcopy(cfg)
+                        request_payload['config'].setdefault('training', {})
+                        request_payload['config']['training']['data_yaml'] = dataset_yaml
+                    request_payload['dataset'] = dataset_result
+                    _update_status_line(
+                        f"[REMOTE] 数据集API已解析: "
+                        f"{dataset_yaml or dataset_id or 'unknown'}"
+                    )
+            except urllib.error.HTTPError as e:
+                try:
+                    body = e.read().decode('utf-8', errors='replace')
+                except Exception:
+                    body = ''
+                return _error(f'数据集 API 调用失败: HTTP {e.code} {body}', 502)
+            except Exception as e:
+                return _error(f'数据集 API 调用失败: {e}', 502)
+            try:
+                submit_result = _http_json_request('POST', api_cfg['submit_url'], payload=request_payload, headers=api_cfg['headers'])
+            except urllib.error.HTTPError as e:
+                try:
+                    body = e.read().decode('utf-8', errors='replace')
+                except Exception:
+                    body = ''
+                return _error(f'云训练提交失败: HTTP {e.code} {body}', 502)
+            except Exception as e:
+                return _error(f'云训练提交失败: {e}', 502)
+
+            job_id = str(submit_result.get('job_id', '') or submit_result.get('id', '') or '').strip()
+            if not job_id:
+                return _error('云训练接口未返回 job_id', 502)
+
+            with _train_state_lock:
+                training_status.update({
+                    'running': True,
+                    'pid': None,
+                    'config': config_name,
+                    'mode': mode,
+                    'start_time': time.time(),
+                    'current_epoch': 0,
+                    'total_epochs': 0,
+                    'logs': [f"[REMOTE] 已提交云训练任务: job_id={job_id}"],
+                })
+                remote_training_state.update({
+                    'active': True,
+                    'job_id': job_id,
+                    'api_base_url': api_cfg['base_url'],
+                    'logs_offset': 0,
+                })
+
+            threading.Thread(target=_remote_polling_loop, args=(api_cfg, job_id), daemon=True).start()
+            return {'status': 'ok', 'message': '云训练任务已提交', 'remote': True, 'job_id': job_id}
+        allow_external_project = compute_provider in {'autodl', 'colab'}
         output_cfg = dict(cfg.get('output', {}) or {})
         target_project = str(output_cfg.get('project', 'runs/distill') or 'runs/distill')
         target_name = str(output_cfg.get('name', 'exp') or 'exp').strip()
         try:
-            project_path = _resolve_project_path(target_project)
+            project_path = _resolve_project_path(target_project, allow_external=allow_external_project)
         except ValueError:
             _release_training_lock()
             return _error(f'输出目录非法: {target_project}', 400)
@@ -1704,6 +1919,21 @@ def stop_training():
     proc = training_process
     old_pid = getattr(proc, 'pid', None) if proc else None
 
+    if remote_training_state.get('active'):
+        try:
+            cfg = _load_yaml_file(CONFIG_DIR / 'distill_config.yaml') or {}
+            train_cfg = dict(cfg.get('training', {}) or {})
+            api_cfg = _build_cloud_api_config(train_cfg)
+            job_id = str(remote_training_state.get('job_id') or '')
+            if job_id:
+                _http_json_request('POST', api_cfg['stop_url'], payload={'job_id': job_id}, headers=api_cfg['headers'])
+                _update_status_line(f'[REMOTE] 已请求停止云任务: {job_id}')
+        except Exception as e:
+            _update_status_line(f'[REMOTE] 停止云任务失败: {e}')
+        with _train_state_lock:
+            remote_training_state['active'] = False
+            remote_training_state['job_id'] = ''
+
     if proc and old_pid and old_pid > 0:
         # ═══ Step 1: 先关闭 stdout pipe → 让 _run_training_process_safe 的 for 循环立即退出 ═══
         if proc.stdout and not proc.stdout.closed:
@@ -1770,7 +2000,7 @@ def get_training_status():
 def get_resume_candidates(project: str = Query('runs/distill')):
     project = project or 'runs/distill'
     try:
-        project_path = _resolve_project_path(project)
+        project_path = _resolve_project_path(project, allow_external=Path(project).is_absolute())
     except ValueError as e:
         return _error(str(e), 400)
     candidates = _list_resume_candidates(project_path)

@@ -37,6 +37,17 @@
     --log-bg: #111615;
     --log-text: #b2c5c3;
     --toast-bg: #0f1c1b;
+    --md-surface-container-low: #eff5f4;
+    --md-surface-container: #e8efee;
+    --md-surface-container-high: #e2e9e8;
+    --md-surface-bright: #fbffff;
+    --md-surface-dim: #d6dddc;
+    --md-inverse-surface: #2f3131;
+    --md-inverse-on-surface: #f0f1f1;
+    --md-inverse-primary: #7dd5d4;
+    --m3-state-hover-opacity: 0.08;
+    --m3-state-focus-opacity: 0.12;
+    --m3-state-pressed-opacity: 0.12;
 }
 
 html.theme-transition * {
@@ -81,6 +92,14 @@ html.theme-transition * {
     --log-bg: #0a0f0f;
     --log-text: #9db5b4;
     --toast-bg: #1d2a29;
+    --md-surface-container-low: #171d1d;
+    --md-surface-container: #1b2121;
+    --md-surface-container-high: #262c2c;
+    --md-surface-bright: #3a4141;
+    --md-surface-dim: #121818;
+    --md-inverse-surface: #e0e3e2;
+    --md-inverse-on-surface: #2b3131;
+    --md-inverse-primary: #006a6b;
 }
 
 *, *::before, *::after {
@@ -169,6 +188,22 @@ body {
 
 .material-icons {
     vertical-align: middle;
+    font-family: "Material Symbols Rounded", "Material Icons";
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-font-feature-settings: "liga";
+    font-feature-settings: "liga";
 }
 
 .theme-toggle .icon-moon {
@@ -223,7 +258,7 @@ body {
     border: none;
     background: transparent;
     color: var(--md-on-surface-variant);
-    border-radius: 10px 10px 0 0;
+    border-radius: 14px 14px 0 0;
     padding: 12px 16px;
     display: inline-flex;
     align-items: center;
@@ -232,6 +267,12 @@ body {
     font: inherit;
     font-size: 13px;
     font-weight: 600;
+    transition: color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.tab-btn:hover {
+    background: color-mix(in srgb, var(--md-primary-container) 44%, transparent);
+    color: var(--md-primary);
 }
 
 .tab-btn.active {
@@ -304,7 +345,7 @@ body {
 .launch-actions .md-btn-text {
     justify-content: center;
     min-width: 150px;
-    height: 44px;
+    height: 40px;
     white-space: nowrap;
 }
 
@@ -445,14 +486,16 @@ body {
 .btn-stop,
 .md-btn,
 .md-btn-text {
-    border: none;
-    border-radius: 28px;
+    border: 1px solid transparent;
+    border-radius: 20px;
     font: inherit;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
-    padding: 10px 16px;
-    min-width: 150px;
-    height: 44px;
+    letter-spacing: 0.1px;
+    line-height: 20px;
+    padding: 0 20px;
+    min-width: 136px;
+    height: 40px;
     flex: 1 1 150px;
     white-space: nowrap;
     cursor: pointer;
@@ -460,50 +503,106 @@ body {
     align-items: center;
     justify-content: center;
     gap: 6px;
-    transition: background-color 180ms ease, box-shadow 180ms ease, filter 180ms ease;
-    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    box-shadow: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-start::before,
+.btn-stop::before,
+.md-btn::before,
+.md-btn-text::before,
+.btn-icon-sm::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: currentColor;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease;
 }
 
 .md-btn-filled,
 .md-btn-filled.primary {
     background: var(--md-primary);
     color: var(--md-on-primary);
+    box-shadow: var(--shadow-1);
 }
 
 .btn-start {
-    background: linear-gradient(135deg, #24c279 0%, #1a9e5f 100%);
-    color: #ffffff;
+    background: var(--md-primary);
+    color: var(--md-on-primary);
+    box-shadow: var(--shadow-1);
 }
 
 .btn-stop {
-    background: linear-gradient(135deg, #ff4f5a 0%, #d32f2f 100%);
-    color: #ffffff;
+    background: var(--md-error-container);
+    color: var(--md-error);
+    border-color: color-mix(in srgb, var(--md-error) 35%, transparent);
 }
 
 .btn-start.is-disabled,
 .btn-stop.is-disabled,
 .btn-start:disabled,
 .btn-stop:disabled {
-    opacity: 0.45;
+    opacity: 1;
     cursor: not-allowed;
     box-shadow: none;
-    filter: none;
+    background: color-mix(in srgb, var(--md-on-surface) 10%, transparent);
+    color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+    border-color: transparent;
 }
 
 .btn-start:hover:not(:disabled),
+.md-btn-filled:hover:not(:disabled),
+.md-btn-filled.primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--md-primary) 92%, #ffffff 8%);
+    box-shadow: var(--shadow-2);
+}
+
+.btn-start:hover:not(:disabled)::before,
+.md-btn-filled:hover:not(:disabled)::before,
+.md-btn-filled.primary:hover:not(:disabled)::before {
+    opacity: var(--m3-state-hover-opacity);
+}
+
 .btn-stop:hover:not(:disabled) {
-    filter: brightness(1.03);
+    background: color-mix(in srgb, var(--md-error-container) 88%, var(--md-error) 12%);
+}
+
+.btn-stop:hover:not(:disabled)::before {
+    opacity: var(--m3-state-hover-opacity);
 }
 
 .btn-start:active:not(:disabled),
-.btn-stop:active:not(:disabled) {
-    filter: brightness(0.93);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 4px 10px rgba(0, 0, 0, 0.14);
+.btn-stop:active:not(:disabled),
+.md-btn:active:not(:disabled),
+.md-btn-text:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.btn-start:active:not(:disabled)::before,
+.btn-stop:active:not(:disabled)::before,
+.md-btn:active:not(:disabled)::before,
+.md-btn-text:active:not(:disabled)::before,
+.btn-icon-sm:active:not(:disabled)::before {
+    opacity: var(--m3-state-pressed-opacity);
 }
 
 .md-btn-tonal {
     background: var(--md-secondary-container);
     color: var(--md-on-secondary-container);
+    border-color: transparent;
+}
+
+.md-btn-tonal:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--md-secondary-container) 84%, var(--md-primary-container) 16%);
+}
+
+.md-btn-tonal:hover:not(:disabled)::before {
+    opacity: var(--m3-state-hover-opacity);
 }
 
 .md-btn-outlined {
@@ -512,9 +611,43 @@ body {
     border: 1px solid var(--md-outline);
 }
 
+.md-btn-outlined:hover:not(:disabled) {
+    border-color: var(--md-primary);
+    background: color-mix(in srgb, var(--md-primary-container) 40%, transparent);
+}
+
+.md-btn-outlined:hover:not(:disabled)::before {
+    opacity: var(--m3-state-hover-opacity);
+}
+
 .md-btn-text {
     background: transparent;
     color: var(--md-primary);
+    border-color: transparent;
+}
+
+.md-btn-text:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--md-primary-container) 42%, transparent);
+}
+
+.md-btn-text:hover:not(:disabled)::before {
+    opacity: var(--m3-state-hover-opacity);
+}
+
+.md-btn:focus-visible,
+.md-btn-text:focus-visible,
+.btn-start:focus-visible,
+.btn-stop:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 26%, transparent);
+}
+
+.md-btn:focus-visible::before,
+.md-btn-text:focus-visible::before,
+.btn-start:focus-visible::before,
+.btn-stop:focus-visible::before,
+.btn-icon-sm:focus-visible::before {
+    opacity: var(--m3-state-focus-opacity);
 }
 
 .sm-btn {
@@ -571,10 +704,20 @@ body {
 .agent-chat-panel,
 .agent-status-panel,
 .stat-card {
-    background: var(--md-surface);
+    background: var(--md-surface-container-low);
     border: 1px solid var(--md-outline-variant);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-1);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.config-card:hover,
+.log-card:hover,
+.agent-chat-panel:hover,
+.agent-status-panel:hover {
+    border-color: color-mix(in srgb, var(--md-primary) 30%, var(--md-outline-variant));
+    box-shadow: var(--shadow-2);
+    transform: translateY(-1px);
 }
 
 .config-card,
@@ -587,7 +730,10 @@ body {
 
 .card-header {
     margin: 0 0 12px;
-    font-size: 14px;
+    font-size: 16px;
+    line-height: 24px;
+    letter-spacing: 0.15px;
+    font-weight: 600;
 }
 
 .form-grid {
@@ -614,11 +760,47 @@ body {
 
 .form-group label {
     font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.5px;
+    font-weight: 500;
     color: var(--md-on-surface-variant);
 }
 
-.hint {
+.md-field {
+    position: relative;
+}
+
+.md-field-label {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    padding: 0 4px;
+    pointer-events: none;
+    color: var(--md-on-surface-variant);
+    transition: transform 0.16s ease, color 0.16s ease, top 0.16s ease, background-color 0.16s ease, font-size 0.16s ease;
+}
+
+.md-field:focus-within .md-field-label,
+.md-field.has-value .md-field-label {
+    top: 0;
+    transform: translateY(-50%);
     font-size: 11px;
+    color: var(--md-primary);
+    background: var(--md-surface-container-low);
+}
+
+.md-field .md-input:disabled + .md-field-label,
+.md-field .md-select:disabled + .md-field-label,
+.md-field textarea:disabled + .md-field-label {
+    color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+}
+
+.hint {
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.4px;
     color: var(--md-on-surface-variant);
 }
 
@@ -630,20 +812,22 @@ body {
 .md-select,
 .chat-input-wrapper textarea {
     width: 100%;
-    border: 1px solid var(--md-outline-variant);
-    border-radius: var(--radius-sm);
-    background: var(--md-surface);
+    border: 1px solid color-mix(in srgb, var(--md-outline-variant) 72%, var(--md-surface));
+    border-radius: 12px;
+    background: var(--md-surface-container-low);
     color: var(--md-on-surface);
     font: inherit;
-    font-size: 15px;
+    font-size: 16px;
     line-height: 24px;
-    padding: 12px 14px;
+    letter-spacing: 0.15px;
+    padding: 15px 16px;
     outline: none;
     resize: none;
-    height: 48px;
-    min-height: 48px;
+    height: 56px;
+    min-height: 56px;
     max-height: 160px;
     overflow-y: auto;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
 /* Hide number input spinner arrows */
@@ -662,14 +846,34 @@ body {
 
 /* Adjust select arrow position */
 .md-select {
-    padding-right: 36px;
+    padding-right: 44px;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='M5 7.5L10 12.5L15 7.5' stroke='%236f7978' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 10px center;
+    background-position: right 14px center;
     background-size: 20px 20px;
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
+    cursor: pointer;
+}
+
+.md-field .md-input,
+.md-field .md-select,
+.md-field textarea {
+    padding-top: 20px;
+    padding-bottom: 10px;
+}
+
+.chat-input-wrapper .md-field textarea {
+    font-size: 14px;
+    line-height: 20px;
+    padding-top: 16px;
+    padding-bottom: 8px;
+}
+
+.md-field .m3-select .m3-select-trigger {
+    padding-top: 20px;
+    padding-bottom: 10px;
 }
 
 [data-theme="dark"] .md-select {
@@ -695,6 +899,26 @@ body {
     background-color: color-mix(in srgb, var(--md-primary-container) 80%, var(--md-primary) 20%);
 }
 
+.md-select:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--md-primary) 35%, var(--md-outline-variant));
+    background-color: color-mix(in srgb, var(--md-surface-container-low) 86%, var(--md-primary-container) 14%);
+}
+
+.md-input:hover:not(:disabled),
+.chat-input-wrapper textarea:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--md-primary) 24%, var(--md-outline-variant));
+}
+
+.md-input:disabled,
+.md-select:disabled,
+.chat-input-wrapper textarea:disabled {
+    cursor: not-allowed;
+    opacity: 1;
+    color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+    border-color: color-mix(in srgb, var(--md-outline) 24%, transparent);
+    background: color-mix(in srgb, var(--md-on-surface) 4%, var(--md-surface-container-low));
+}
+
 /* Firefox specific styles for select options */
 @-moz-document url-prefix() {
     .md-select option {
@@ -714,7 +938,32 @@ body {
 .md-select:focus,
 .chat-input-wrapper textarea:focus {
     border-color: var(--md-primary);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-primary) 24%, transparent);
+    border-width: 2px;
+    padding: 14px 15px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--md-primary) 28%, transparent);
+    background-color: color-mix(in srgb, var(--md-surface-container-low) 82%, var(--md-primary-container) 18%);
+}
+
+.md-select:focus {
+    padding-right: 43px;
+}
+
+.md-field .md-input:focus,
+.md-field .md-select:focus,
+.md-field textarea:focus {
+    padding-top: 19px;
+    padding-bottom: 9px;
+}
+
+.chat-input-wrapper .md-field textarea:focus {
+    padding-top: 15px;
+    padding-bottom: 7px;
+}
+
+.chat-input-wrapper textarea {
+    min-height: 56px;
+    height: auto;
+    max-height: 144px;
 }
 
 .file-input-wrapper {
@@ -722,6 +971,10 @@ body {
     grid-template-columns: 1fr auto;
     gap: 8px;
     align-items: center;
+}
+
+.file-input-wrapper .md-field-label {
+    left: 14px;
 }
 
 .file-picker-label {
@@ -733,13 +986,13 @@ body {
     align-items: center;
     justify-content: center;
     color: var(--md-primary);
-    background: var(--md-surface);
+    background: var(--md-surface-container-low);
     cursor: pointer;
     transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 .file-picker-label:hover {
-    background: color-mix(in srgb, var(--md-primary-container) 80%, transparent);
+    background: color-mix(in srgb, var(--md-primary-container) 74%, transparent);
     border-color: var(--md-primary);
 }
 
@@ -931,15 +1184,33 @@ body {
 
 .btn-icon-sm {
     border: 1px solid var(--md-outline-variant);
-    background: transparent;
+    background: color-mix(in srgb, var(--md-surface) 90%, var(--md-primary-container) 10%);
     color: var(--md-on-surface-variant);
-    border-radius: 8px;
-    width: 30px;
-    height: 30px;
+    border-radius: 12px;
+    width: 32px;
+    height: 32px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-icon-sm:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--md-primary-container) 68%, transparent);
+    color: var(--md-primary);
+    border-color: color-mix(in srgb, var(--md-primary) 38%, var(--md-outline-variant));
+}
+
+.btn-icon-sm:hover:not(:disabled)::before {
+    opacity: var(--m3-state-hover-opacity);
+}
+
+.btn-icon-sm:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 22%, transparent);
 }
 
 .btn-icon-sm.is-disabled {
@@ -1122,6 +1393,17 @@ body {
     flex-wrap: wrap;
 }
 
+.toolbar-right {
+    margin-left: auto;
+    justify-content: flex-end;
+}
+
+.metrics-toolbar-right {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+
 .metrics-toolbar {
     justify-content: space-between;
     margin-bottom: 14px;
@@ -1175,10 +1457,16 @@ body {
     width: 42px;
     height: 42px;
     border-radius: 12px;
-    color: #fff;
+    color: var(--md-primary);
+    background: color-mix(in srgb, var(--md-primary-container) 78%, var(--md-surface));
     display: inline-flex;
     align-items: center;
     justify-content: center;
+}
+
+[data-theme="dark"] .overview-icon {
+    color: var(--md-on-primary-container);
+    background: color-mix(in srgb, var(--md-primary-container) 88%, transparent);
 }
 
 .overview-label {
@@ -1654,6 +1942,105 @@ body {
     align-items: center;
 }
 
+.chat-input-wrapper .md-field {
+    width: 100%;
+}
+
+.chat-input-wrapper .md-field-label {
+    left: 14px;
+}
+
+.m3-select {
+    position: relative;
+    width: 100%;
+}
+
+.m3-select-trigger {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    text-align: left;
+    cursor: pointer;
+}
+
+.m3-select-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.m3-select-arrow {
+    font-size: 20px;
+    color: var(--md-on-surface-variant);
+    transition: transform 0.16s ease;
+}
+
+.m3-select.open .m3-select-arrow {
+    transform: rotate(180deg);
+}
+
+.m3-select-menu {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    padding: 8px 6px;
+    border-radius: 12px;
+    border: 1px solid var(--md-outline-variant);
+    background: var(--md-surface-container-high);
+    box-shadow: var(--shadow-2);
+    max-height: 280px;
+    overflow: auto;
+}
+
+.m3-select-option {
+    width: 100%;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--md-on-surface);
+    text-align: left;
+    font: inherit;
+    font-size: 14px;
+    line-height: 20px;
+    letter-spacing: 0.1px;
+    min-height: 40px;
+    padding: 10px 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.m3-select-option:hover {
+    background: color-mix(in srgb, var(--md-primary-container) 46%, transparent);
+}
+
+.m3-select-option.selected {
+    background: color-mix(in srgb, var(--md-primary-container) 68%, transparent);
+    color: var(--md-on-primary-container);
+}
+
+.m3-select-option .material-icons {
+    font-size: 18px;
+}
+
+.m3-select.disabled .m3-select-trigger {
+    cursor: not-allowed;
+}
+
+.metrics-source-select {
+    width: min(380px, 100%);
+}
+
+.metrics-refresh-btn {
+    width: min(380px, 100%);
+    flex: 0 0 auto;
+}
+
 .send-btn {
     width: 42px;
     height: 42px;
@@ -2029,23 +2416,6 @@ body {
     text-align: right;
     padding: 3px 6px 0 0;
     display: block;
-}
-
-/* ---- Distillation Flow Canvas Interaction Hints ---- */
-.distill-flow-container::after {
-    content: '点击暂停/继续 · 滚轮缩放';
-    position: absolute;
-    bottom: 2px;
-    right: 8px;
-    font-size: 9px;
-    color: var(--md-on-surface-variant);
-    opacity: 0.45;
-    pointer-events: none;
-    transition: opacity 0.2s;
-}
-
-.distill-flow-container:hover::after {
-    opacity: 0.75;
 }
 
 /* ---- WebSocket Connection Status Indicator ---- */

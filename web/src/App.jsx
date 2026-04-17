@@ -41,6 +41,23 @@ const DEFAULT_FORM = {
     focal_gamma: 2
   },
   training: {
+    compute_provider: "local",
+    cloud_api: {
+      base_url: "",
+      submit_path: "/train/start",
+      status_path: "/train/status",
+      logs_path: "/train/logs",
+      stop_path: "/train/stop",
+      token: "",
+      poll_interval_sec: 3
+    },
+    dataset_api: {
+      enabled: false,
+      source: "path",
+      resolve_url: "",
+      token: "",
+      dataset_name: ""
+    },
     data_yaml: "",
     device: "0",
     epochs: 150,
@@ -58,8 +75,56 @@ const DEFAULT_FORM = {
   output: {
     project: "runs/distill",
     name: "adaptive_kd_v1"
+  },
+  wandb: {
+    enabled: false,
+    mode: "online",
+    project: "edge-distilldet",
+    entity: "",
+    name: "",
+    group: "",
+    job_type: "distill-train",
+    tags: "",
+    notes: ""
   }
 };
+
+const COMPUTE_PRESETS = {
+  local: {
+    device: "0",
+    outputProject: "runs/distill"
+  },
+  autodl: {
+    device: "0",
+    outputProject: "/root/autodl-tmp/runs/distill"
+  },
+  colab: {
+    device: "0",
+    outputProject: "/content/runs/distill"
+  }
+};
+
+function inferComputeProviderFromConfig(config, fallback = "local") {
+  const explicitProvider = String(config?.training?.compute_provider || "").trim().toLowerCase();
+  if (explicitProvider === "autodl" || explicitProvider === "colab" || explicitProvider === "local" || explicitProvider === "remote_api") {
+    return explicitProvider;
+  }
+
+  const outputProject = String(config?.output?.project || "").toLowerCase();
+  const dataYaml = String(config?.training?.data_yaml || "").toLowerCase();
+  const featureText = `${outputProject} ${dataYaml}`;
+
+  if (featureText.includes("/root/autodl-tmp") || featureText.includes("autodl")) {
+    return "autodl";
+  }
+  if (featureText.includes("/content/") || featureText.includes("colab")) {
+    return "colab";
+  }
+  if (featureText.includes("http://") || featureText.includes("https://")) {
+    return "remote_api";
+  }
+  return fallback;
+}
 
 function useToast() {
   const [toasts, setToasts] = useState([]);
@@ -120,7 +185,7 @@ function App() {
         <div className="app-bar-content">
           <span className="material-icons app-icon">radar</span>
           <h1 className="app-title">EdgeDistillDet</h1>
-          <span className="app-subtitle">边缘蒸馏训练工作台 (React 迁移中)</span>
+          <span className="app-subtitle">边缘蒸馏训练工作台</span>
           <div className="app-bar-spacer" />
           <button
             className="theme-toggle"
@@ -201,12 +266,49 @@ function TrainingPanel({ toast }) {
   const overlapAlertShownRef = useRef("");
   const outputNameInputRef = useRef(null);
   const pendingOverlapAlertRef = useRef(false);
+  const isRemoteApi = form.training.compute_provider === "remote_api";
+  const datasetSource = form.training?.dataset_api?.source || (form.training?.dataset_api?.enabled ? "api" : "path");
+  const useDatasetApi = isRemoteApi && datasetSource === "api";
 
   const setNested = (scope, key, value) => {
     setForm((prev) => ({
       ...prev,
       [scope]: { ...prev[scope], [key]: value }
     }));
+  };
+
+  const updateTrainingNested = (section, patch) => {
+    setForm((prev) => ({
+      ...prev,
+      training: {
+        ...prev.training,
+        [section]: { ...prev.training?.[section], ...patch }
+      }
+    }));
+  };
+
+  const normalizeWandbForUi = (wandb) => {
+    const next = { ...wandb };
+    if (Array.isArray(next.tags)) {
+      next.tags = next.tags.map((t) => String(t).trim()).filter(Boolean).join(", ");
+    }
+    return next;
+  };
+
+  const buildConfigPayload = (sourceForm) => {
+    const payload = JSON.parse(JSON.stringify(sourceForm || {}));
+    const wandb = payload.wandb || {};
+    const rawTags = wandb.tags;
+    if (typeof rawTags === "string") {
+      wandb.tags = rawTags
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    } else if (!Array.isArray(rawTags)) {
+      wandb.tags = [];
+    }
+    payload.wandb = wandb;
+    return payload;
   };
 
   const pickLocalPath = async ({ kind = "file", title = "选择路径", initialPath = "", filters = [] } = {}) => {
@@ -223,12 +325,20 @@ function TrainingPanel({ toast }) {
   };
 
   const mergeConfig = (config) => {
+    const inferredProvider = inferComputeProviderFromConfig(config, form.training?.compute_provider || "local");
     setForm((prev) => ({
       ...prev,
       ...config,
       distillation: { ...prev.distillation, ...config?.distillation },
-      training: { ...prev.training, ...config?.training },
-      output: { ...prev.output, ...config?.output }
+      training: {
+        ...prev.training,
+        ...config?.training,
+        cloud_api: { ...prev.training?.cloud_api, ...config?.training?.cloud_api },
+        dataset_api: { ...prev.training?.dataset_api, ...config?.training?.dataset_api },
+        compute_provider: inferredProvider
+      },
+      output: { ...prev.output, ...config?.output },
+      wandb: { ...prev.wandb, ...normalizeWandbForUi(config?.wandb) }
     }));
   };
 
@@ -379,8 +489,26 @@ function TrainingPanel({ toast }) {
   const saveConfig = async () => {
     await apiRequest("/api/config/save", {
       method: "POST",
-      body: JSON.stringify({ name: "distill_config.yaml", config: form })
+      body: JSON.stringify({ name: "distill_config.yaml", config: buildConfigPayload(form) })
     });
+  };
+
+  const applyComputePreset = (provider) => {
+    const preset = COMPUTE_PRESETS[provider] || COMPUTE_PRESETS.local;
+    setForm((prev) => ({
+      ...prev,
+      training: {
+        ...prev.training,
+        compute_provider: provider,
+        device: String(prev.training?.device || "").trim() ? prev.training.device : preset.device
+      },
+      output: {
+        ...prev.output,
+        project: preset.outputProject
+      }
+    }));
+    refreshRunNameSuggestion(preset.outputProject, form.output.name, true);
+    refreshResumeCandidates(preset.outputProject, false);
   };
 
   const startTraining = async () => {
@@ -388,7 +516,10 @@ function TrainingPanel({ toast }) {
     const teacherWeight = form.distillation.teacher_weight?.trim();
     const dataYaml = form.training.data_yaml?.trim();
     if (!studentWeight) return toast("请选择学生模型权重文件", "warning");
-    if (!dataYaml) return toast("请填写数据集配置文件路径", "warning");
+    if (!useDatasetApi && !dataYaml) return toast("请填写数据集配置文件路径", "warning");
+    if (useDatasetApi && !form.training?.dataset_api?.resolve_url?.trim()) {
+      return toast("已选择数据集 API，请填写数据集 API URL", "warning");
+    }
     if (mode !== "resume" && !teacherWeight) return toast("请选择教师模型权重文件", "warning");
     if (mode === "resume" && resumeCandidates.length === 0) {
       return toast("当前没有可用断点，请先完成一次训练或切换到蒸馏训练", "warning");
@@ -570,8 +701,8 @@ function TrainingPanel({ toast }) {
             <h3 className="card-header">输出配置</h3>
             <div className="form-row stacked-row">
               <div className="form-group">
-                <label>项目目录</label>
                 <PathField
+                  label="项目目录"
                   value={form.output.project || ""}
                   onChange={(project) => {
                     setNested("output", "project", project);
@@ -597,30 +728,33 @@ function TrainingPanel({ toast }) {
                 />
               </div>
               <div className="form-group">
-                <label>运行名称</label>
-                <input
-                  ref={outputNameInputRef}
-                  className="md-input"
-                  value={form.output.name || ""}
-                  onChange={(e) => {
-                    const nextName = e.target.value;
-                    setNested("output", "name", nextName);
-                  }}
-                  onBlur={() => {
-                    const overlapKey = `${currentOutputProject}/${(form.output.name || "").trim()}`;
-                    const shouldAlertOnBlur = Boolean(
-                      isOutputPathOverlap &&
-                      (pendingOverlapAlertRef.current || overlapAlertShownRef.current !== overlapKey)
-                    );
-                    if (shouldAlertOnBlur) {
-                      pendingOverlapAlertRef.current = false;
-                      overlapAlertShownRef.current = overlapKey;
-                      window.alert(`路径重合：${overlapKey}`);
-                      toast(`路径重合：${overlapKey}`, "warning");
-                    }
-                  }}
-                  disabled={running}
-                />
+                <div className={`md-field ${(form.output.name || "").trim() ? "has-value" : ""}`}>
+                  <input
+                    ref={outputNameInputRef}
+                    className="md-input"
+                    placeholder=" "
+                    value={form.output.name || ""}
+                    onChange={(e) => {
+                      const nextName = e.target.value;
+                      setNested("output", "name", nextName);
+                    }}
+                    onBlur={() => {
+                      const overlapKey = `${currentOutputProject}/${(form.output.name || "").trim()}`;
+                      const shouldAlertOnBlur = Boolean(
+                        isOutputPathOverlap &&
+                        (pendingOverlapAlertRef.current || overlapAlertShownRef.current !== overlapKey)
+                      );
+                      if (shouldAlertOnBlur) {
+                        pendingOverlapAlertRef.current = false;
+                        overlapAlertShownRef.current = overlapKey;
+                        window.alert(`路径重合：${overlapKey}`);
+                        toast(`路径重合：${overlapKey}`, "warning");
+                      }
+                    }}
+                    disabled={running}
+                  />
+                  <label className="md-field-label">运行名称</label>
+                </div>
                 <small className={`hint ${isOutputPathOverlap ? "warning" : ""}`}>{renderedHint || runHint}</small>
               </div>
             </div>
@@ -629,11 +763,10 @@ function TrainingPanel({ toast }) {
             <h3 className="card-header">续训历史</h3>
             <div className="form-group">
               <label>请选择历史运行</label>
-              <select
-                className="md-select"
+              <M3Select
                 value={String(selectedResumeIndex)}
-                onChange={(e) => {
-                  const idx = Number(e.target.value) || 0;
+                onChange={(nextValue) => {
+                  const idx = Number(nextValue) || 0;
                   setSelectedResumeIndex(idx);
                   const c = resumeCandidates[idx];
                   if (c) {
@@ -643,13 +776,14 @@ function TrainingPanel({ toast }) {
                     }));
                   }
                 }}
+                options={
+                  resumeCandidates.length === 0
+                    ? [{ value: "0", label: "暂无可用候选" }]
+                    : resumeCandidates.map((item, idx) => ({ value: String(idx), label: item.display_name }))
+                }
                 disabled={mode !== "resume" || running || resumeCandidates.length === 0}
-              >
-                {resumeCandidates.length === 0 ? <option value="0">暂无可用候选</option> : null}
-                {resumeCandidates.map((item, idx) => (
-                  <option key={`${item.project}-${item.name}-${idx}`} value={idx}>{item.display_name}</option>
-                ))}
-              </select>
+                ariaLabel="请选择历史运行"
+              />
             </div>
           </div>
         </div>
@@ -749,19 +883,81 @@ function TrainingPanel({ toast }) {
                     toast(error.message, "error");
                   }
                 }}
-                disabled={running}
+                disabled={running || useDatasetApi}
               />
               <SelectField
-                label="设备"
-                value={form.training.device}
-                onChange={(v) => setNested("training", "device", v)}
+                label="云算力配置"
+                value={form.training.compute_provider || "local"}
+                onChange={(v) => applyComputePreset(v)}
                 options={[
-                  { value: "0", label: "GPU 0" },
-                  { value: "1", label: "GPU 1" },
-                  { value: "cpu", label: "CPU" }
+                  { value: "local", label: "本地" },
+                  { value: "autodl", label: "autoDL 云算力" },
+                  { value: "colab", label: "Google Colab 云算力" },
+                  { value: "remote_api", label: "远程云算力 API" }
                 ]}
                 disabled={running}
               />
+              {isRemoteApi ? (
+                <>
+                  <SelectField
+                    label="数据集来源"
+                    value={datasetSource}
+                    onChange={(v) => updateTrainingNested("dataset_api", { source: v, enabled: v === "api" })}
+                    options={[
+                      { value: "path", label: "本地/YAML 路径" },
+                      { value: "api", label: "数据集 API" }
+                    ]}
+                    disabled={running}
+                  />
+                  <TextField
+                    label="云训练 API Base URL"
+                    value={form.training?.cloud_api?.base_url || ""}
+                    onChange={(v) => updateTrainingNested("cloud_api", { base_url: v })}
+                    disabled={running}
+                  />
+                  <TextField
+                    label="云训练 API Token (可选)"
+                    value={form.training?.cloud_api?.token || ""}
+                    onChange={(v) => updateTrainingNested("cloud_api", { token: v })}
+                    disabled={running}
+                  />
+                  {useDatasetApi ? (
+                    <>
+                      <TextField
+                        label="数据集 API URL"
+                        value={form.training?.dataset_api?.resolve_url || ""}
+                        onChange={(v) => updateTrainingNested("dataset_api", { resolve_url: v })}
+                        disabled={running}
+                      />
+                      <TextField
+                        label="数据集 API Token (可选，默认复用云训练 Token)"
+                        value={form.training?.dataset_api?.token || ""}
+                        onChange={(v) => updateTrainingNested("dataset_api", { token: v })}
+                        disabled={running}
+                      />
+                      <TextField
+                        label="数据集名称/别名 (可选)"
+                        value={form.training?.dataset_api?.dataset_name || ""}
+                        onChange={(v) => updateTrainingNested("dataset_api", { dataset_name: v })}
+                        disabled={running}
+                      />
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+              {form.training.compute_provider === "local" ? (
+                <SelectField
+                  label="设备"
+                  value={form.training.device}
+                  onChange={(v) => setNested("training", "device", v)}
+                  options={[
+                    { value: "0", label: "GPU 0" },
+                    { value: "1", label: "GPU 1" },
+                    { value: "cpu", label: "CPU" }
+                  ]}
+                  disabled={running}
+                />
+              ) : null}
               <NumberField label="训练轮数 Epochs" value={form.training.epochs} step="1" onChange={(v) => setNested("training", "epochs", v)} disabled={running} />
               <NumberField label="图像尺寸 imgsz" value={form.training.imgsz} step="1" onChange={(v) => setNested("training", "imgsz", v)} disabled={running} />
               <NumberField label="Batch Size" value={form.training.batch} step="1" onChange={(v) => setNested("training", "batch", v)} disabled={running} />
@@ -778,6 +974,76 @@ function TrainingPanel({ toast }) {
                   <input type="checkbox" checked={Boolean(form.training.amp)} onChange={(e) => setNested("training", "amp", e.target.checked)} disabled={running} />
                 </label>
               </div>
+            </div>
+          </div>
+
+          <div className="config-card">
+            <h3 className="card-header">W&B 配置</h3>
+            <div className="form-grid">
+              <div className="form-group switch-group">
+                <label>启用 Weights & Biases</label>
+                <label className="md-switch">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.wandb?.enabled)}
+                    onChange={(e) => setNested("wandb", "enabled", e.target.checked)}
+                    disabled={running}
+                  />
+                </label>
+              </div>
+              <SelectField
+                label="运行模式"
+                value={form.wandb?.mode || "online"}
+                onChange={(v) => setNested("wandb", "mode", v)}
+                options={[
+                  { value: "online", label: "online" },
+                  { value: "offline", label: "offline" },
+                  { value: "disabled", label: "disabled" }
+                ]}
+                disabled={running || !form.wandb?.enabled}
+              />
+              <TextField
+                label="Project"
+                value={form.wandb?.project || ""}
+                onChange={(v) => setNested("wandb", "project", v)}
+                disabled={running || !form.wandb?.enabled}
+              />
+              <TextField
+                label="Entity (可选)"
+                value={form.wandb?.entity || ""}
+                onChange={(v) => setNested("wandb", "entity", v)}
+                disabled={running || !form.wandb?.enabled}
+              />
+              <TextField
+                label="Run Name (可选)"
+                value={form.wandb?.name || ""}
+                onChange={(v) => setNested("wandb", "name", v)}
+                disabled={running || !form.wandb?.enabled}
+              />
+              <TextField
+                label="Group (可选)"
+                value={form.wandb?.group || ""}
+                onChange={(v) => setNested("wandb", "group", v)}
+                disabled={running || !form.wandb?.enabled}
+              />
+              <TextField
+                label="Job Type (可选)"
+                value={form.wandb?.job_type || ""}
+                onChange={(v) => setNested("wandb", "job_type", v)}
+                disabled={running || !form.wandb?.enabled}
+              />
+              <TextField
+                label="Tags (逗号分隔，可选)"
+                value={form.wandb?.tags || ""}
+                onChange={(v) => setNested("wandb", "tags", v)}
+                disabled={running || !form.wandb?.enabled}
+              />
+              <TextField
+                label="Notes (可选)"
+                value={form.wandb?.notes || ""}
+                onChange={(v) => setNested("wandb", "notes", v)}
+                disabled={running || !form.wandb?.enabled}
+              />
             </div>
           </div>
         </div>
@@ -875,20 +1141,24 @@ function QuickStat({ label, value }) {
 }
 
 function TextField({ label, value, onChange, disabled }) {
+  const hasValue = value !== undefined && value !== null && String(value) !== "";
   return (
     <div className="form-group">
-      <label>{label}</label>
-      <input className="md-input" value={value || ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} />
+      <div className={`md-field ${hasValue ? "has-value" : ""}`}>
+        <input className="md-input" value={value || ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} placeholder=" " />
+        <label className="md-field-label">{label}</label>
+      </div>
     </div>
   );
 }
 
 function PathField({ label, value, onChange, onBrowse, disabled }) {
+  const hasValue = value !== undefined && value !== null && String(value) !== "";
   return (
     <div className="form-group">
-      {label ? <label>{label}</label> : null}
-      <div className="file-input-wrapper">
-        <input className="md-input" value={value || ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} />
+      <div className={`file-input-wrapper md-field ${hasValue ? "has-value" : ""}`}>
+        <input className="md-input" value={value || ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} placeholder=" " />
+        {label ? <label className="md-field-label">{label}</label> : null}
         <button type="button" className="file-picker-label" onClick={onBrowse} disabled={disabled} title="浏览本地路径">
           <span className="material-icons">folder_open</span>
         </button>
@@ -898,23 +1168,92 @@ function PathField({ label, value, onChange, onBrowse, disabled }) {
 }
 
 function NumberField({ label, value, onChange, step, disabled }) {
+  const hasValue = value !== undefined && value !== null && String(value) !== "";
   return (
     <div className="form-group">
-      <label>{label}</label>
-      <input className="md-input" type="number" step={step} value={value ?? ""} onChange={(e) => onChange(Number(e.target.value))} disabled={disabled} />
+      <div className={`md-field ${hasValue ? "has-value" : ""}`}>
+        <input className="md-input" type="number" step={step} value={value ?? ""} onChange={(e) => onChange(Number(e.target.value))} disabled={disabled} placeholder=" " />
+        <label className="md-field-label">{label}</label>
+      </div>
+    </div>
+  );
+}
+
+function M3Select({ value, onChange, options, disabled, className = "", ariaLabel = "选择项" }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const normalizedValue = value == null ? "" : String(value);
+  const normalizedOptions = Array.isArray(options) ? options.map((opt) => ({ ...opt, value: String(opt.value) })) : [];
+  const selected = normalizedOptions.find((opt) => opt.value === normalizedValue) || normalizedOptions[0];
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocPointerDown = (event) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDocPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onDocPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className={`m3-select ${open ? "open" : ""} ${disabled ? "disabled" : ""} ${className}`.trim()}>
+      <button
+        type="button"
+        className="m3-select-trigger md-input"
+        onClick={() => {
+          if (disabled) return;
+          setOpen((prev) => !prev);
+        }}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={ariaLabel}
+        disabled={disabled}
+      >
+        <span className="m3-select-value">{selected?.label || ""}</span>
+        <span className="material-icons m3-select-arrow">expand_more</span>
+      </button>
+      {open ? (
+        <div className="m3-select-menu" role="listbox">
+          {normalizedOptions.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              role="option"
+              aria-selected={opt.value === normalizedValue}
+              className={`m3-select-option ${opt.value === normalizedValue ? "selected" : ""}`}
+              onClick={() => {
+                onChange(opt.value);
+                setOpen(false);
+              }}
+            >
+              <span>{opt.label}</span>
+              {opt.value === normalizedValue ? <span className="material-icons">check</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function SelectField({ label, value, onChange, options, disabled }) {
+  const hasValue = value !== undefined && value !== null && String(value) !== "";
   return (
     <div className="form-group">
-      <label>{label}</label>
-      <select className="md-select" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>{opt.label}</option>
-        ))}
-      </select>
+      <div className={`md-field md-field-select ${hasValue ? "has-value" : ""}`}>
+        <M3Select value={value} onChange={onChange} options={options} disabled={disabled} ariaLabel={label} />
+        <label className="md-field-label">{label}</label>
+      </div>
     </div>
   );
 }
@@ -1079,31 +1418,34 @@ function MetricsPanel({ toast }) {
     <div className="tab-panel active" id="panel-metrics">
       <div className="metrics-toolbar">
         <div className="toolbar-left">
-          <button className="md-btn md-btn-outlined" onClick={() => refreshSources(true)}>
+          <button className="md-btn md-btn-outlined metrics-refresh-btn" onClick={() => refreshSources(true)}>
             <span className="material-icons">refresh</span>刷新数据
           </button>
-          <select className="md-select" value={source} onChange={(e) => setSource(e.target.value)}>
-            {sources.length === 0 ? <option value="">暂无训练结果可选</option> : null}
-            {sources.map((item) => (
-              <option key={item.path} value={item.path}>
-                {item.display_name || item.name}
-              </option>
-            ))}
-          </select>
+          <M3Select
+            className="metrics-source-select"
+            value={source}
+            onChange={(next) => setSource(next)}
+            options={
+              sources.length === 0
+                ? [{ value: "", label: "暂无训练结果可选" }]
+                : sources.map((item) => ({ value: item.path, label: item.display_name || item.name }))
+            }
+            ariaLabel="选择指标来源"
+          />
         </div>
-        <div className="auto-refresh-bar">
-          <label className="auto-refresh-label">
-            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
-            自动刷新图表数据
-          </label>
-          <span className="auto-refresh-interval">{autoRefresh ? `${refreshLeft}s 后刷新` : "--"}</span>
-        </div>
-        <div className="toolbar-right">
+        <div className="toolbar-right metrics-toolbar-right">
           <div className="chip-group">
             <button className={`chip ${chartType === "loss" ? "active" : ""}`} onClick={() => setChartType("loss")}>损失</button>
             <button className={`chip ${chartType === "accuracy" ? "active" : ""}`} onClick={() => setChartType("accuracy")}>精度</button>
             <button className={`chip ${chartType === "lr" ? "active" : ""}`} onClick={() => setChartType("lr")}>学习率</button>
             <button className={`chip ${chartType === "all" ? "active" : ""}`} onClick={() => setChartType("all")}>全部</button>
+          </div>
+          <div className="auto-refresh-bar">
+            <label className="auto-refresh-label">
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+              自动刷新图表数据
+            </label>
+            <span className="auto-refresh-interval">{autoRefresh ? `${refreshLeft}s 后刷新` : "--"}</span>
           </div>
         </div>
       </div>
@@ -1129,11 +1471,17 @@ function MetricsPanel({ toast }) {
               <div className="chart-header">
                 <h3>训练损失曲线</h3>
                 <div className="chart-actions">
-                  <select className="md-select mini-select" value={lossRange} onChange={(e) => setLossRange(e.target.value)}>
-                    <option value="all">全部 Epochs</option>
-                    <option value="last30">最近 30</option>
-                    <option value="last10">最近 10</option>
-                  </select>
+                  <M3Select
+                    className="mini-select"
+                    value={lossRange}
+                    onChange={(next) => setLossRange(next)}
+                    options={[
+                      { value: "all", label: "全部 Epochs" },
+                      { value: "last30", label: "最近 30" },
+                      { value: "last10", label: "最近 10" }
+                    ]}
+                    ariaLabel="选择损失范围"
+                  />
                   <button className="btn-icon-sm" onClick={() => exportChart(lossRef, "loss-chart")}><span className="material-icons">download</span></button>
                 </div>
               </div>
@@ -1491,6 +1839,52 @@ function AgentPanel({ toast }) {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [approvalBody, setApprovalBody] = useState("");
   const [approvalToken, setApprovalToken] = useState("");
+  const chatTextareaRef = useRef(null);
+  const resizeChatInput = () => {
+    const el = chatTextareaRef.current;
+    if (!el) return;
+    const computed = window.getComputedStyle(el);
+    const lineHeight = parseFloat(computed.lineHeight) || 20;
+    const paddingTop = parseFloat(computed.paddingTop) || 0;
+    const paddingBottom = parseFloat(computed.paddingBottom) || 0;
+    const borderTop = parseFloat(computed.borderTopWidth) || 0;
+    const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+    const maxHeight = lineHeight * 3 + paddingTop + paddingBottom + borderTop + borderBottom;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
+  };
+
+  useEffect(() => {
+    const el = chatTextareaRef.current;
+    if (!el) return;
+    resizeChatInput();
+    const computed = window.getComputedStyle(el);
+    // #region agent log
+    fetch("http://127.0.0.1:7683/ingest/597ab011-8d14-4d9b-8374-f910e434ea52", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ba85b8" },
+      body: JSON.stringify({
+        sessionId: "ba85b8",
+        runId: "post-fix",
+        hypothesisId: "H1",
+        location: "web/src/App.jsx:AgentPanel",
+        message: "textarea computed layout snapshot",
+        data: {
+          rowsAttr: el.getAttribute("rows"),
+          clientHeight: el.clientHeight,
+          scrollHeight: el.scrollHeight,
+          computedHeight: computed.height,
+          computedMinHeight: computed.minHeight,
+          computedPaddingTop: computed.paddingTop,
+          computedPaddingBottom: computed.paddingBottom,
+          lineHeight: computed.lineHeight
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  }, [input]);
 
   const saveConfig = () => {
     window.localStorage.setItem("edge_distill_agent_api_url", apiUrl.trim());
@@ -1664,18 +2058,27 @@ function AgentPanel({ toast }) {
             </div>
             <div className="chat-input-area">
               <div className="chat-input-wrapper">
-                <textarea
-                  rows={2}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  placeholder="输入消息；外部 API 可返回 patch 字段..."
-                />
+                <div className={`md-field ${input ? "has-value" : ""}`}>
+                  <textarea
+                    ref={chatTextareaRef}
+                    rows={1}
+                    className="md-input"
+                    value={input || ""}
+                    onChange={(e) => {
+                      setInput(e.target.value);
+                      resizeChatInput();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        send();
+                      }
+                    }}
+                    placeholder=" "
+                  >
+                  </textarea>
+                  <label className="md-field-label">输入消息</label>
+                </div>
                 <button className="md-btn md-btn-filled primary send-btn" type="button" onClick={send} disabled={loading}>
                   <span className="material-icons">send</span>
                 </button>

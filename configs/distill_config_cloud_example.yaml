@@ -1,0 +1,41 @@
+distillation:
+  student_weight: /root/autodl-tmp/models/yolov8n.pt
+  teacher_weight: /root/autodl-tmp/models/yolov8m.pt
+  alpha_init: 0.5
+  T_max: 6.0
+  T_min: 1.5
+  warm_epochs: 5
+  w_kd: 0.5
+  w_focal: 0.3
+  w_feat: 0.0
+  scale_boost: 2.0
+  focal_gamma: 2.0
+
+training:
+  # 可选: local | autodl | colab
+  # 如果未填写，前端会根据 data_yaml / output.project 自动推断
+  compute_provider: autodl
+  data_yaml: /root/autodl-tmp/datasets/your_dataset/data.yaml
+  device: "0"
+  epochs: 150
+  imgsz: 640
+  batch: 16
+  workers: 0
+  lr0: 0.01
+  lrf: 0.1
+  warmup_epochs: 3
+  mosaic: 0.8
+  mixup: 0.1
+  close_mosaic: 20
+  amp: true
+
+output:
+  project: /root/autodl-tmp/runs/distill
+  name: cloud_exp1
+
+# Google Colab 参考:
+# training:
+#   compute_provider: colab
+#   data_yaml: /content/datasets/your_dataset/data.yaml
+# output:
+#   project: /content/runs/distill
