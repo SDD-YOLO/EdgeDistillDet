@@ -1,0 +1,82 @@
+[
+  {
+    "epoch": 1,
+    "phase": "warm",
+    "task_loss": 23.328423,
+    "kd_loss": 0.0,
+    "alpha": 0.45,
+    "temperature": 6.000227
+  },
+  {
+    "epoch": 2,
+    "phase": "warm",
+    "task_loss": 22.220933,
+    "kd_loss": 0.0,
+    "alpha": 0.45,
+    "temperature": 6.000227
+  },
+  {
+    "epoch": 3,
+    "phase": "warm",
+    "task_loss": 21.878002,
+    "kd_loss": 0.0,
+    "alpha": 0.45,
+    "temperature": 6.000227
+  },
+  {
+    "epoch": 4,
+    "phase": "warm",
+    "task_loss": 20.585413,
+    "kd_loss": 0.0,
+    "alpha": 0.45,
+    "temperature": 6.000227
+  },
+  {
+    "epoch": 5,
+    "phase": "warm",
+    "task_loss": 21.770526,
+    "kd_loss": 0.0,
+    "alpha": 0.45,
+    "temperature": 6.000227
+  },
+  {
+    "epoch": 6,
+    "phase": "distill",
+    "task_loss": 21.111913,
+    "kd_loss": 16.089894,
+    "alpha": 0.45,
+    "temperature": 4.000326
+  },
+  {
+    "epoch": 7,
+    "phase": "distill",
+    "task_loss": 20.658614,
+    "kd_loss": 8.236492,
+    "alpha": 0.45,
+    "temperature": 3.382323
+  },
+  {
+    "epoch": 8,
+    "phase": "distill",
+    "task_loss": 20.059655,
+    "kd_loss": 6.283082,
+    "alpha": 0.450393,
+    "temperature": 2.824814
+  },
+  {
+    "epoch": 9,
+    "phase": "distill",
+    "task_loss": 20.426838,
+    "kd_loss": 4.879632,
+    "alpha": 0.450654,
+    "temperature": 2.382372
+  },
+  {
+    "epoch": 10,
+    "phase": "distill",
+    "task_loss": 19.305879,
+    "kd_loss": 3.867606,
+    "alpha": 0.451025,
+    "temperature": 2.098307
+  }
+]

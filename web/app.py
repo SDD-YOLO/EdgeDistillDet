@@ -6,21 +6,27 @@ EdgeDistillDet Local UI
 使用方法: python web/app.py
 """
 
+import copy
 import csv
 import json
 import os
-import queue
 import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 import yaml
-from flask import Flask, Response, jsonify, render_template, request
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+import uvicorn
 
 # ==================== 路径配置（必须在项目内 import 之前） ====================
 WEB_DIR = Path(__file__).resolve().parent
@@ -31,94 +37,245 @@ TEMPLATE_FILE = WEB_DIR / 'templates' / 'index.html'
 STATIC_DIR = WEB_DIR / 'static'
 
 from utils import expand_env_vars
-from flask_cors import CORS
 
-# ==================== 训练互斥锁（跨平台） ====================
+
+def _is_warning_like(text: str) -> bool:
+    return bool(re.search(r'(\bwarn(ing)?\b|警告|告警|⚠|\[W\]|^\s*W\d*:|\bignoring\b|忽略|已忽略|\bdeprecated\b)', str(text or ''), re.IGNORECASE))
+
+# ==================== 训练互斥锁（OS 级别真实文件锁，彻底杜绝竞态） ====================
 _TRAIN_LOCK_FILE = BASE_DIR / '.training.lock'
+# 【核心】线程级互斥锁：防止 Flask 多线程并发穿透文件锁检查
+_train_thread_lock = threading.Lock()
+# 全局文件锁句柄（进程生命周期内持有）
+_train_fd = None
 
 
-class _TrainingLock:
-    """基于文件 + PID 检查的跨平台训练互斥锁"""
+def _acquire_os_file_lock(lock_path: Path, timeout: float = 0) -> bool:
+    """
+    获取 OS 级别独占文件锁。
+    
+    与旧版 _TrainingLock 的本质区别：
+      旧版用 write_text+rename 模拟锁 → 存在 TOCTOU 竞态窗口
+      此版本使用 fcntl.flock / msvcrt.locking → 内核保证原子性
+    
+    Args:
+        lock_path: 锁文件路径
+        timeout: 超时秒数，0=非阻塞立即返回
+    
+    Returns:
+        True=获取成功，False=被其他进程持有
+    """
+    global _train_fd
+    try:
+        import msvcrt
+        fd = open(str(lock_path), 'w')
+        # Windows: LOCK_EX | LOCK_NB（非阻塞排他锁）
+        msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+        _train_fd = fd
+        fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
+        fd.flush()
+        return True
+    except ImportError:
+        pass
+    except (OSError, IOError):
+        return False
 
-    def __init__(self, lock_path: Path):
-        self._path = lock_path
-        self._held = False
+    # Linux/macOS: fcntl.flock
+    try:
+        import fcntl
+        fd = open(str(lock_path), 'w')
+        flags = fcntl.LOCK_EX | fcntl.LOCK_NB  # 排他 + 非阻塞
+        fcntl.flock(fd.fileno(), flags)
+        _train_fd = fd
+        fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
+        fd.flush()
+        return True
+    except (OSError, IOError):
+        return False
 
-    def acquire(self) -> bool:
-        """
-        尝试获取锁。返回 True 表示成功。
-        原理：原子性地创建/更新锁文件，写入当前 PID。
-        如果文件已存在且对应进程存活，返回 False。
-        """
+
+def _release_os_file_lock():
+    """释放 OS 文件锁"""
+    global _train_fd
+    if _train_fd is not None:
         try:
-            pid = os.getpid()
-            ts = datetime.now().isoformat()
-            content = f"{pid}\n{ts}\n"
-
-            # 原子性写入：先写临时文件，再 rename（跨平台原子操作）
-            tmp_path = self._path.with_suffix('.tmp')
-            for _ in range(3):  # 重试 3 次
-                try:
-                    # 检查是否有活跃进程持有锁
-                    if self._path.exists():
-                        existing = self._path.read_text().strip().split('\n')
-                        old_pid = int(existing[0]) if existing else -1
-                        if self._is_process_alive(old_pid):
-                            return False  # 进程仍存活，获取失败
-                    # 写入新锁
-                    tmp_path.write_text(content)
-                    tmp_path.replace(self._path)  # 原子替换
-                    self._held = True
-                    return True
-                except FileExistsError:
-                    time.sleep(0.1)
-                except Exception:
-                    time.sleep(0.1)
-            return False
-        except Exception:
-            return False
-
-    def release(self):
-        """释放锁"""
-        if self._held or self._path.exists():
-            self._held = False
-            try:
-                self._path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            try:
-                tmp = self._path.with_suffix('.tmp')
-                if tmp.exists():
-                    tmp.unlink()
-            except Exception:
-                pass
-
-    @staticmethod
-    def _is_process_alive(pid: int) -> bool:
-        """检查进程是否存活"""
-        if pid <= 0:
-            return False
-        try:
-            import psutil as _psutil
-            return _psutil.pid_exists(pid)
+            import msvcrt
+            msvcrt.unlocking(_train_fd.fileno(), 1)
         except ImportError:
-            # 无 psutil 时用简单方法
-            try:
-                os.kill(pid, 0)
-                return True
-            except (OSError, ProcessLookupError):
-                return False
+            pass
+        except Exception:
+            pass
+        try:
+            import fcntl
+            fcntl.flock(_train_fd.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            _train_fd.close()
+        except Exception:
+            pass
+        _train_fd = None
 
 
-_train_lock = _TrainingLock(_TRAIN_LOCK_FILE)
-
-
-def _acquire_training_lock() -> bool:
-    return _train_lock.acquire()
+def _acquire_training_lock(timeout: float = 0) -> bool:
+    """获取训练互斥锁的统一入口"""
+    return _acquire_os_file_lock(_TRAIN_LOCK_FILE, timeout)
 
 
 def _release_training_lock():
-    _train_lock.release()
+    """释放训练互斥锁的统一入口"""
+    _release_os_file_lock()
+
+
+def _is_process_alive(pid: int) -> bool:
+    """跨平台进程存活检测"""
+    if pid <= 0:
+        return False
+    try:
+        import psutil as _psutil
+        return _psutil.pid_exists(pid)
+    except ImportError:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+
+def _kill_process_tree(pid: int, force: bool = False) -> int:
+    """
+    杀死整个进程树（主进程 + 所有子/孙进程）。
+    
+    【关键改进】旧版 _kill_old_training 只杀直接子进程 Popen 对象，
+    实际上 ultralytics 训练运行在孙子进程中（Popen→python→ultralytics），
+    导致孙子进程逃逸 → GPU 显存不释放 → 新旧进程同时占 GPU → OOM。
+    
+    Returns:
+        成功终止的进程数量
+    """
+    killed_count = 0
+    try:
+        import psutil
+    except ImportError:
+        # 无 psutil 时降级为基础 kill
+        try:
+            os.kill(pid, signal.SIGTERM if not force else signal.SIGKILL)
+            return 1
+        except Exception:
+            return 0
+
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+        
+        # 先杀所有子进程
+        for child in children:
+            try:
+                child.terminate()
+                killed_count += 1
+            except psutil.NoSuchProcess:
+                pass
+        
+        # 等待子进程退出（最多 3 秒）
+        gone, alive = psutil.wait_procs(children, timeout=3)
+        
+        # 还活着的暴力杀
+        for p in alive:
+            try:
+                p.kill()
+                killed_count += 1
+            except psutil.NoSuchProcess:
+                pass
+        
+        # 最后杀主进程
+        try:
+            parent.terminate()
+            killed_count += 1
+        except psutil.NoSuchProcess:
+            pass
+        
+        try:
+            parent.wait(timeout=3)
+        except psutil.TimeoutExpired:
+            try:
+                parent.kill()
+            except Exception:
+                pass
+        
+        return killed_count
+    except psutil.NoSuchProcess:
+        return 0
+    except Exception:
+        return 0
+
+
+def _scan_and_kill_stale_training_processes(exclude_pid: int = None) -> dict:
+    """
+    扫描并杀死残留的训练进程。
+    
+    场景：Web 服务重启后内存中的 training_process 引用丢失，
+    但旧的 python.exe 训练进程仍在占用 GPU。
+    通过扫描 .training.lock 文件和进程命令行特征来发现并清理。
+    
+    Returns:
+        {'found': int, 'killed': int, 'details': str}
+    """
+    result = {'found': 0, 'killed': 0, 'details': ''}
+    stale_pids = []
+    
+    # 1. 从锁文件读取 PID
+    if _TRAIN_LOCK_FILE.exists():
+        try:
+            content = _TRAIN_LOCK_FILE.read_text().strip().split('\n')
+            old_pid = int(content[0]) if content else -1
+            if old_pid > 0 and old_pid != exclude_pid and _is_process_alive(old_pid):
+                stale_pids.append(old_pid)
+        except (ValueError, IndexError, OSError):
+            pass
+    
+    # 2. 扫描包含训练特征的 python 进程（补充检测）
+    try:
+        import psutil
+        our_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'cmdline', 'name']):
+            try:
+                if proc.pid == our_pid or proc.pid == exclude_pid:
+                    continue
+                if proc.info['name'] != 'python.exe' and proc.info['name'] != 'python':
+                    continue
+                cmdline = proc.info['cmdline'] or []
+                cmdline_str = ' '.join(cmdline).lower()
+                # 匹配训练脚本的特征命令行
+                if any(kw in cmdline_str for kw in [
+                    'train_with_distill', 'main.py train', 
+                    'yolo train', 'ultralytics',
+                    '--resume'
+                ]):
+                    if proc.pid not in stale_pids:
+                        stale_pids.append(proc.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    
+    result['found'] = len(stale_pids)
+    
+    # 3. 杀死所有发现的残留进程
+    for spid in stale_pids:
+        k = _kill_process_tree(spid, force=True)
+        result['killed'] += k
+        result['details'] += f"PID={spid}(killed={k}); "
+    
+    # 4. 删除僵尸锁文件
+    if stale_pids:
+        try:
+            _TRAIN_LOCK_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+    
+    return result
 
 try:
     from utils.edge_profiler import EdgeProfiler
@@ -142,6 +299,33 @@ def _resolve_project_path(project: str) -> Path:
     if str(project_path).startswith(str(Path(BASE_DIR).resolve())) is False and str(Path(BASE_DIR).resolve()) not in str(project_path):
         raise ValueError('项目目录必须在仓库根目录下')
     return project_path
+
+
+def _candidate_output_roots(project_path: Path):
+    candidates = [project_path.resolve()]
+    try:
+        rel = project_path.resolve().relative_to(BASE_DIR.resolve())
+    except Exception:
+        rel = None
+    if rel is None:
+        return candidates
+
+    for prefix in ('runs/detect', 'detect/runs'):
+        alt = (BASE_DIR / prefix / rel).resolve()
+        if str(alt).startswith(str(BASE_DIR.resolve())) and alt not in candidates:
+            candidates.append(alt)
+
+    if str(rel).replace('\\', '/') == 'runs':
+        fallback = (BASE_DIR / 'runs' / 'detect' / 'runs').resolve()
+        if str(fallback).startswith(str(BASE_DIR.resolve())) and fallback not in candidates:
+            candidates.append(fallback)
+    # 兼容旧训练产物目录：当 project 是 runs/distill 时，历史结果常落在 runs/detect/runs
+    if str(rel).replace('\\', '/') == 'runs/distill':
+        legacy = (BASE_DIR / 'runs' / 'detect' / 'runs').resolve()
+        if str(legacy).startswith(str(BASE_DIR.resolve())) and legacy not in candidates:
+            candidates.append(legacy)
+
+    return candidates
 
 
 def _load_yaml_file(path: Path):
@@ -567,27 +751,35 @@ def _build_metric_series(rows, columns, run_dir):
         }
     else:
         chart['pr_curve'] = None
-
     chart['class_performance'] = _extract_class_performance(rows, columns, None, run_dir)
     return chart
 
 
-# ==================== Flask App ====================
+# ==================== FastAPI App ====================
 
-app = Flask(
-    __name__,
-    template_folder=str(WEB_DIR / 'templates'),
-    static_folder=str(STATIC_DIR),
-    static_url_path='/static'
+api = FastAPI(title='EdgeDistillDet Backend')
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
-CORS(app)
+api.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
 
-@app.route('/favicon.ico')
+
+def _error(message: str, status_code: int = 400):
+    return JSONResponse(status_code=status_code, content={'error': message})
+
+
+@api.get('/favicon.ico')
 def favicon():
-    return app.send_static_file('favicon.ico')
+    favicon_path = STATIC_DIR / 'favicon.ico'
+    if not favicon_path.exists():
+        return _error('favicon 不存在', 404)
+    return FileResponse(str(favicon_path))
 
 training_process = None
-log_queue = queue.Queue(maxsize=500)
 training_status = {
     'running': False,
     'pid': None,
@@ -598,172 +790,366 @@ training_status = {
     'total_epochs': 0,
     'logs': [],
 }
+# 保护 logs / running 等与 SSE、子进程读线程的并发访问（Flask 多线程 + 后台训练线程）
+_train_state_lock = threading.RLock()
+_train_log_cond = threading.Condition(_train_state_lock)
 last_saved_config = None
 
 
+def _strip_ansi(text: str) -> str:
+    """去掉 ESC 序列（ultralytics 自带 TQDM 使用 \\r + \\033[K，原样进管道会触发误过滤）。"""
+    if not text:
+        return text
+    return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+
+
+def _extract_epoch_progress(line: str):
+    """从不同训练日志格式中提取 (current_epoch, total_epochs)。"""
+    if not line:
+        return None
+
+    patterns = [
+        # 结构化日志: [EPOCH_START] epoch=1 total=10 / [EPOCH_PROGRESS] epoch=1 total=10
+        r"\bepoch\s*=\s*(\d+)\s+total\s*=\s*(\d+)\b",
+        # 常见格式: Epoch 1/10 或 Epoch: 1 / 10
+        r"\bEpoch\s*[:=]?\s*(\d+)\s*/\s*(\d+)\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, line, re.IGNORECASE)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            if total > 0 and 0 <= current <= total:
+                return current, total
+
+    # 兼容 YOLO 训练进度行（包含显存列）:
+    # " 1/10  2.98G  1.266 1.555 ... 640: 12% ... 1/8 1.7s/it"
+    # 注意：实时行通常不含 "GPU_mem/box_loss" 字面表头，因此不再依赖这些关键词。
+    yolo_row = re.search(r"^\s*(\d+)\s*/\s*(\d+)\s+\d+(?:\.\d+)?G\b", line)
+    if yolo_row:
+        current = int(yolo_row.group(1))
+        total = int(yolo_row.group(2))
+        if total > 0 and 0 <= current <= total:
+            return current, total
+
+    # 兜底：保留历史裸格式 + 关键词判定
+    bare = re.search(r"^\s*(\d+)\s*/\s*(\d+)\b", line)
+    if bare and re.search(r"\b(GPU_mem|box_loss|cls_loss|dfl_loss|Instances|Size|it/s|s/it)\b", line, re.IGNORECASE):
+        current = int(bare.group(1))
+        total = int(bare.group(2))
+        if total > 0 and 0 <= current <= total:
+            return current, total
+
+    return None
+
+
 def _update_status_line(line: str):
+    """原样转发 Ultralytics / 训练子进程输出（仅剥 ANSI、去首尾空白）；不做语义过滤与去重。"""
     if not line:
         return
-    clean_line = line.rstrip('\r\n')
-
-    # ═══ 日志过滤：去掉 ultralytics 噪音和重复内容 ═══
-    # 1. 空行/纯空白
+    clean_line = _strip_ansi(line).rstrip('\r\n')
     if not clean_line.strip():
         return
-    # 2. ultralytics 进度条（ANSI 转义序列 + 进度百分比行）
-    #    格式: "     3/10      3.98G ..." 或含 \x1b[ 的行
-    if '\x1b[' in clean_line and ('Epoch' not in clean_line):
-        return
-    # 3. ultralytics 版本提示
-    if 'New https://pypi.org/project/ultralytics/' in clean_line:
-        return
-    # 4. AMP 检查通过（无意义）
-    if 'AMP: checks passed' in clean_line or 'AMP: running Automatic Mixed Precision' in clean_line:
-        return
-    # 5. optimizer 自动选择信息（冗长）
-    if clean_line.startswith("optimizer:"):
-        return
-    # 6. 数据集扫描缓存信息（太详细）
-    if 'Scanning' in clean_line and '.cache...' in clean_line:
-        return
-    # 7. 模型摘要（太长，保留精简版）
-    if 'Model summary' in clean_line and 'GFLOPs' in clean_line:
-        return
-    # 8. Transferred 权重信息
-    if clean_line.startswith('Transferred'):
-        return
-    # 9. Freezing layer 信息
-    if clean_line.startswith('Freezing'):
-        return
-    # 10. 验证进度行（"all      128        929..."）
-    stripped = clean_line.strip()
-    if re.match(r'^\s*all\s+\d+\s+\d+', stripped) and 'Class' not in clean_line:
-        return
-    # 11. Speed 行（每张图片速度，噪音太多）
-    if stripped.startswith('Speed:'):
-        return
-    # 12. Results saved 行
-    if stripped.startswith('Results saved to'):
-        return
-    # 13. Optimizer stripped 行
-    if stripped.startswith('Optimizer stripped from'):
-        return
-    # 14. Validating 行
-    if stripped.startswith('Validating ') and 'Model summary' not in clean_line:
-        return
 
-    # ═══ 日志去重：连续相同内容只保留一条 ═══
-    logs = training_status['logs']
-    if logs and logs[-1] == clean_line:
-        return  # 连续重复，跳过
+    with _train_state_lock:
+        training_status['logs'].append(clean_line)
+        _train_log_cond.notify_all()
+        # 仅在训练未运行时裁剪：训练中裁剪会打乱长连接按索引追赶 logs 的语义，导致漏推尾部日志
+        if len(training_status['logs']) > 8000 and not training_status['running']:
+            training_status['logs'] = training_status['logs'][-4000:]
 
-    training_status['logs'].append(clean_line)
-    try:
-        log_queue.put_nowait(clean_line)
-    except queue.Full:
-        pass
-    if len(training_status['logs']) > 500:
-        training_status['logs'] = training_status['logs'][-200:]
+        progress = _extract_epoch_progress(clean_line)
+        if progress:
+            training_status['current_epoch'], training_status['total_epochs'] = progress
 
-    match = re.search(r"Epoch\s*(\d+)\s*/\s*(\d+)", clean_line, re.IGNORECASE)
-    if match:
-        training_status['current_epoch'] = int(match.group(1))
-        training_status['total_epochs'] = int(match.group(2))
+
+def _iter_pipe_lines(stdout_pipe, chunk_size: int = 4096):
+    """按块读取 stdout，并将 \\r/\\n 统一视为行结束，保证 tqdm 刷新也能实时输出。"""
+    if stdout_pipe is None:
+        return
+    pending = ''
+    while True:
+        raw = stdout_pipe.read(chunk_size)
+        if not raw:
+            break
+        text = raw.decode('utf-8', errors='replace') if isinstance(raw, (bytes, bytearray)) else str(raw)
+        if not text:
+            continue
+        normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+        pending += normalized
+        while '\n' in pending:
+            line, pending = pending.split('\n', 1)
+            yield line
+    if pending:
+        yield pending
 
 
 def _kill_old_training():
-    """强制终止旧训练进程并等待其完全退出，防止 GPU 显存重叠导致 OOM"""
+    """
+    强制终止旧训练进程树并等待完全退出 — 彻底版
+    
+    【关键改进】使用 _kill_process_tree 杀整个进程树，不再只杀 Popen 直接子进程。
+    解决：Popen 启动的 python.exe → ultralytics 子进程逃逸 → GPU 显存不释放
+    """
     global training_process
     if training_process is None:
         return
     old_pid = getattr(training_process, 'pid', None)
+
+    killed = 0
     try:
-        # 1. 发送终止信号
-        if os.name == 'nt':
-            training_process.send_signal(signal.CTRL_C_EVENT)
-        else:
-            training_process.send_signal(signal.SIGINT)
-
-        # 2. 给进程正常退出的时间窗口（5秒）
-        try:
-            training_process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-
-        # 3. 如果还在跑，暴力杀掉（kill -9 等效）
-        if training_process.poll() is None:
-            training_process.terminate()
+        if old_pid and old_pid > 0:
+            # 先尝试优雅终止
             try:
-                training_process.wait(timeout=3)
+                if os.name == 'nt':
+                    training_process.send_signal(signal.CTRL_C_EVENT)
+                else:
+                    training_process.send_signal(signal.SIGINT)
+            except Exception:
+                pass
+
+            # 等待正常退出
+            try:
+                training_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                training_process.kill()
+                pass
+
+            # 还活着就暴力杀进程树
+            if training_process.poll() is None:
+                killed = _kill_process_tree(old_pid, force=False)
+
+                # 等一下看是否都死了
+                time.sleep(1)
+                if _is_process_alive(old_pid):
+                    _kill_process_tree(old_pid, force=True)
+                    time.sleep(0.5)
+
+            # 关闭 stdout pipe
+            if training_process.stdout and not training_process.stdout.closed:
                 try:
-                    training_process.wait(timeout=2)
+                    training_process.stdout.close()
                 except Exception:
                     pass
 
-        # 4. 关闭 stdout pipe 防止资源泄漏
-        if training_process.stdout and not training_process.stdout.closed:
-            training_process.stdout.close()
-
-        logger_msg = f"旧训练进程已终止 (PID={old_pid})"
-        try:
-            log_queue.put_nowait(logger_msg)
-        except queue.Full:
-            pass
-    except Exception as e:
-        pass
+        msg = f"旧训练进程已终止 (PID={old_pid}, 树中杀死={killed}个)"
+        _update_status_line(msg)
     finally:
-        training_status['running'] = False
-        training_status['pid'] = None
+        with _train_state_lock:
+            training_status['running'] = False
+            training_status['pid'] = None
         training_process = None
 
 
-def _run_training_process(cmd):
+def _run_training_process_safe(cmd):
+    """
+    安全版训练进程启动 — 在锁已持有的前提下执行
+    
+    此函数的调用者 (start_training) 必须已经：
+      1. 持有 _train_thread_lock
+      2. 已获取 _TRAIN_LOCK_FILE 的 OS 文件锁
+      3. 已杀掉所有旧训练进程
+      4. 已清理 GPU 资源
+      
+    本函数只负责：启动新子进程 → 实时内存监控 → 读取日志 → 进程结束 → 清理状态
+    【新增】内置内存超限检测：一旦子进程树总内存超过阈值立即杀掉整棵进程树
+    """
     global training_process
-    try:
-        # 【OOM修复】启动新训练前，必须先杀死旧进程并等待 GPU 资源释放！
-        _kill_old_training()
 
+    # 内存监控配置（单位：字节）
+    # 默认限制 12GB — 超过此值视为异常（正常蒸馏训练约 4-8GB）
+    MAX_MEMORY_BYTES = int(os.environ.get('EDGE_TRAIN_MAX_MEM_GB', '12')) * 1024 * 1024 * 1024
+    # 监控间隔：每隔多少行日志检查一次内存（平衡性能与响应速度）
+    MEMORY_CHECK_INTERVAL = 50
+    # 连续超限次数阈值（防止瞬时峰值误杀）
+    MEMORY_OVERLIMIT_THRESHOLD = 3
+
+    proc = None
+    try:
         env = os.environ.copy()
         env['PYTHONIOENCODING'] = 'utf-8'
         env['PYTHONUTF8'] = '1'
+        # 子进程无 TTY 时强制行缓冲，避免 ultralytics / logging 长时间不刷到管道
+        env['PYTHONUNBUFFERED'] = '1'
+        # 训练子进程内将 TQDM 的 \\r 刷新改为按行输出，否则管道 readline 只能收到表头收不到每 batch 数值行
+        env['EDGE_WEB_LOG'] = '1'
 
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
         preexec_fn = None if os.name == 'nt' else os.setsid
 
-        training_process = subprocess.Popen(
+        # Windows 上 text=True + bufsize=1 对管道往往仍块缓冲，改为二进制 bufsize=0 + readline，尽快收到每一行
+        proc = subprocess.Popen(
             cmd,
             cwd=str(BASE_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            bufsize=1,
+            bufsize=0,
             env=env,
             creationflags=creationflags,
             preexec_fn=preexec_fn,
         )
-        training_status['pid'] = training_process.pid
+        training_process = proc
+        with _train_state_lock:
+            training_status['pid'] = proc.pid
 
-        for raw_line in training_process.stdout:
+        _update_status_line(f'[MEM_GUARD] 内存监控已启用 | 上限={MAX_MEMORY_BYTES // (1024**3)}GB | '
+                           f'检查间隔={MEMORY_CHECK_INTERVAL}行 | 连续超限={MEMORY_OVERLIMIT_THRESHOLD}次')
+
+        line_count = 0
+
+        # 全程使用局部 proc，避免 stop_training 把全局 training_process 置 None 后出现 .wait() 竞态
+        for raw_line in _iter_pipe_lines(proc.stdout):
+            line_count += 1
             _update_status_line(raw_line)
 
-        training_process.wait()
+            # ════════════════════════════════════════════
+            # 定期内存安全检查
+            # ════════════════════════════════════════════
+            if line_count % MEMORY_CHECK_INTERVAL != 0:
+                continue
+
+            if not _check_and_enforce_memory_limit(
+                pid=proc.pid,
+                max_bytes=MAX_MEMORY_BYTES,
+                threshold=MEMORY_OVERLIMIT_THRESHOLD,
+            ):
+                # _check_and_enforce_memory_limit 返回 False 表示已触发杀戮
+                # 此时进程已被杀死或正在被杀，退出循环
+                break
+
+        try:
+            if proc.stdout and not proc.stdout.closed:
+                proc.stdout.close()
+        except Exception:
+            pass
+
+        # 等待进程完全退出（如果还没退的话）
+        if proc.poll() is None:
+            proc.wait()
+            
     except Exception as e:
         _update_status_line(f"训练异常: {e}")
     finally:
-        # 清理状态 + 释放锁
-        training_status['running'] = False
-        training_status['pid'] = None
+        # 清理状态 + 释放文件锁
+        with _train_state_lock:
+            training_status['running'] = False
+            training_status['pid'] = None
         training_process = None
         _release_training_lock()
 
 
+# 内存监控模块内部状态
+_mem_overlimit_count = 0
+
+
+
+def _check_and_enforce_memory_limit(pid: int, max_bytes: int, threshold: int) -> bool:
+    """
+    检查指定 PID 及其子进程的总内存占用。
+    
+    Returns:
+        True  = 内存正常，继续运行
+        False = 已触发强制杀戮，调用者应停止读取日志循环
+    """
+    global _mem_overlimit_count
+    
+    total_rss = 0
+    process_list = []
+    
+    try:
+        import psutil
+        
+        try:
+            parent = psutil.Process(pid)
+            process_list.append(parent)
+            process_list.extend(parent.children(recursive=True))
+        except psutil.NoSuchProcess:
+            return True  # 进程已死，不算异常
+        
+        # 累加所有进程的 RSS（常驻物理内存）
+        for proc in process_list:
+            try:
+                mem_info = proc.memory_info()
+                total_rss += mem_info.rss
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+                
+    except ImportError:
+        return True  # 无 psutil 时跳过监控
+    
+    except Exception:
+        return True  # 其他异常跳过本次检查
+    
+    # 判断是否超限
+    mb_used = total_rss / (1024 * 1024)
+    mb_limit = max_bytes / (1024 * 1024)
+    
+    if total_rss > max_bytes:
+        _mem_overlimit_count += 1
+        
+        if _mem_overlimit_count >= threshold:
+            # 连续超限达到阈值 → 强制杀掉整棵进程树
+            msg = (f"[MEM_ALERT] ⚠️ 内存严重超标！当前 {mb_used:.1f}MB > 限制 {mb_limit:.0f}MB "
+                   f"(连续{_mem_overlimit_count}次)，强制终止训练进程树...")
+            _update_status_line(msg)
+            killed = _kill_process_tree(pid, force=True)
+            time.sleep(1)  # 等待系统回收
+            _update_status_line(f"[MEM_ALERT] 已强制终止 {killed} 个进程，释放 {mb_used:.0f}MB 内存")
+            return False
+        else:
+            # 未达阈值但已超限 → 警告
+            _update_status_line(
+                f"[MEM_WARN] 内存偏高: {mb_used:.0f}MB / {mb_limit:.0f}MB "
+                f"({_mem_overlimit_count}/{threshold})，继续观察..."
+            )
+            return True
+    else:
+        # 内存正常 → 重置计数器
+        if _mem_overlimit_count > 0:
+            _mem_overlimit_count = 0
+        return True
+
+
 # ==================== 路由定义 ====================
 
-@app.route('/')
+class SaveConfigRequest(BaseModel):
+    name: str = 'distill_config.yaml'
+    config: dict = Field(default_factory=dict)
+
+
+class UploadConfigRequest(BaseModel):
+    content: str
+
+
+class DialogFilterItem(BaseModel):
+    name: str = "All Files"
+    patterns: list[str] = Field(default_factory=lambda: ["*.*"])
+
+
+class DialogPickRequest(BaseModel):
+    kind: str = "file"
+    title: str = "选择路径"
+    initial_path: str | None = None
+    filters: list[DialogFilterItem] = Field(default_factory=list)
+
+
+class AgentPatchPreviewRequest(BaseModel):
+    patch: dict = Field(default_factory=dict)
+
+
+class AgentPatchApplyRequest(BaseModel):
+    approval_token: str | None = None
+    token: str | None = None
+
+
+class TrainStartRequest(BaseModel):
+    config: str = 'distill_config.yaml'
+    mode: str = 'distill'
+    checkpoint: str | None = None
+    allow_overwrite: bool = False
+
+
+@api.get('/', response_class=HTMLResponse)
 def index():
     """读取 HTML 并手动替换 Jinja2 url_for（避免模板查找问题）"""
     with open(str(TEMPLATE_FILE), 'r', encoding='utf-8') as f:
@@ -784,279 +1170,689 @@ def index():
         html
     )
 
-    return html
+    return HTMLResponse(content=html)
 
 
 # ---- Config API ----
 
-@app.route('/api/configs', methods=['GET'])
+@api.get('/api/configs')
 def get_configs():
     configs = []
     if CONFIG_DIR.exists():
         for path in sorted(CONFIG_DIR.iterdir()):
             if path.is_file() and path.suffix in {'.yaml', '.yml'}:
                 configs.append(path.name)
-    return jsonify({'status': 'ok', 'configs': configs})
+    return {'status': 'ok', 'configs': configs}
 
 
-@app.route('/api/config/<config_name>', methods=['GET'])
+@api.get('/api/config/{config_name}')
 def get_config(config_name):
     config_path = CONFIG_DIR / config_name
     config = _load_yaml_file(config_path)
     if config is None:
-        return jsonify({'error': f'配置文件不存在: {config_name}'}), 404
-    return jsonify({'status': 'ok', 'config': config})
+        return _error(f'配置文件不存在: {config_name}', 404)
+    return {'status': 'ok', 'config': config}
 
 
-@app.route('/api/config/recent', methods=['GET'])
+@api.get('/api/config/recent')
 def get_recent_config():
     global last_saved_config
     if last_saved_config is not None:
-        return jsonify({'status': 'ok', 'name': last_saved_config['name'], 'config': last_saved_config['config']})
+        return {'status': 'ok', 'name': last_saved_config['name'], 'config': last_saved_config['config']}
 
     default_path = CONFIG_DIR / 'distill_config.yaml'
     config = _load_yaml_file(default_path) or {}
-    return jsonify({'status': 'ok', 'name': 'distill_config.yaml', 'config': config})
+    return {'status': 'ok', 'name': 'distill_config.yaml', 'config': config}
 
 
-@app.route('/api/config/save', methods=['POST'])
-def save_config():
+@api.post('/api/config/save')
+def save_config(payload: SaveConfigRequest):
     global last_saved_config
-    payload = request.json or {}
-    name = payload.get('name', 'distill_config.yaml')
-    config = payload.get('config', {})
+    name = payload.name
+    config = payload.config
     if not isinstance(name, str) or not isinstance(config, dict):
-        return jsonify({'error': '请求格式错误'}), 400
+        return _error('请求格式错误', 400)
     if not name.endswith(('.yaml', '.yml')):
         name = f'{name}.yaml'
     config_path = CONFIG_DIR / name
     _save_yaml_file(config_path, config)
     last_saved_config = {'name': name, 'config': config}
-    return jsonify({'status': 'ok', 'message': f'配置已保存: {name}'})
+    return {'status': 'ok', 'message': f'配置已保存: {name}'}
 
 
-@app.route('/api/config/upload', methods=['POST'])
-def upload_config():
-    payload = request.json or {}
-    content = payload.get('content')
+@api.post('/api/config/upload')
+def upload_config(payload: UploadConfigRequest):
+    content = payload.content
     if not isinstance(content, str):
-        return jsonify({'error': '请求格式错误'}), 400
+        return _error('请求格式错误', 400)
 
     try:
         config = expand_env_vars(yaml.safe_load(content) or {})
         if not isinstance(config, dict):
-            return jsonify({'error': '配置文件必须包含顶层映射对象'}), 400
-        return jsonify({'status': 'ok', 'config': config})
+            return _error('配置文件必须包含顶层映射对象', 400)
+        return {'status': 'ok', 'config': config}
     except yaml.YAMLError as exc:
-        return jsonify({'error': f'YAML 解析失败: {exc}'}), 400
+        return _error(f'YAML 解析失败: {exc}', 400)
+
+
+@api.post('/api/dialog/pick')
+def pick_path_dialog(payload: DialogPickRequest):
+    """打开本机原生文件/目录选择窗口，返回用户选择路径。"""
+    kind = (payload.kind or "file").strip().lower()
+    if kind not in {"file", "directory"}:
+        return _error("kind 仅支持 file 或 directory", 400)
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        return _error(f'当前环境不支持本机文件选择窗口: {exc}', 500)
+
+    initial_dir = None
+    initial_file = None
+    if payload.initial_path:
+        try:
+            initial = Path(payload.initial_path).expanduser()
+            if initial.exists():
+                if initial.is_dir():
+                    initial_dir = str(initial)
+                else:
+                    initial_dir = str(initial.parent)
+                    initial_file = initial.name
+            else:
+                parent = initial.parent
+                if parent and str(parent) not in {"", "."}:
+                    initial_dir = str(parent)
+                if initial.suffix:
+                    initial_file = initial.name
+        except Exception:
+            initial_dir = None
+            initial_file = None
+
+    selected = ""
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+            root.update()
+        except Exception:
+            pass
+
+        if kind == "directory":
+            selected = filedialog.askdirectory(
+                title=payload.title or "选择目录",
+                initialdir=initial_dir
+            ) or ""
+        else:
+            filetypes = []
+            for item in payload.filters or []:
+                pats = [str(p).strip() for p in (item.patterns or []) if str(p).strip()]
+                if not pats:
+                    continue
+                filetypes.append((item.name or "文件", tuple(pats)))
+            if not filetypes:
+                filetypes = [("All Files", "*.*")]
+            selected = filedialog.askopenfilename(
+                title=payload.title or "选择文件",
+                initialdir=initial_dir,
+                initialfile=initial_file,
+                filetypes=filetypes
+            ) or ""
+    except Exception as exc:
+        return _error(f'打开文件选择窗口失败: {exc}', 500)
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+    return {'status': 'ok', 'path': selected}
+
+
+# ---- Agent: 用户审批后写入训练配置（与前端表单 / distill_config.yaml 对齐） ----
+
+_AGENT_PATCH_TTL = 600.0
+_agent_patch_store = {}
+
+
+def _prune_agent_patch_store():
+    now = time.time()
+    for k, rec in list(_agent_patch_store.items()):
+        if rec.get('expires', 0) < now:
+            _agent_patch_store.pop(k, None)
+
+
+def _deep_merge_shallow(dst: dict, src: dict) -> dict:
+    out = copy.deepcopy(dst) if isinstance(dst, dict) else {}
+    for k, v in (src or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge_shallow(out[k], v)
+        else:
+            out[k] = copy.deepcopy(v)
+    return out
+
+
+def _merge_distill_patch(base: dict, patch: dict) -> dict:
+    allowed = frozenset({'distillation', 'training', 'output'})
+    if not isinstance(patch, dict) or not patch:
+        raise ValueError('patch 必须为非空对象')
+    extra = set(patch.keys()) - allowed
+    if extra:
+        raise ValueError('不允许的顶层键: ' + ', '.join(sorted(extra)))
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for top in patch:
+        sub = patch[top]
+        if not isinstance(sub, dict):
+            merged[top] = copy.deepcopy(sub)
+            continue
+        cur = merged.get(top)
+        merged[top] = _deep_merge_shallow(cur if isinstance(cur, dict) else {}, sub)
+    return merged
+
+
+@api.get('/api/agent/config-schema')
+def agent_config_schema():
+    """供外部 LLM / Agent 与前端对齐：当前 distill 配置与允许改动的顶层分区。"""
+    path = CONFIG_DIR / 'distill_config.yaml'
+    cfg = _load_yaml_file(path) or {}
+    return {
+        'status': 'ok',
+        'config_file': 'distill_config.yaml',
+        'allowed_top_level': ['distillation', 'training', 'output'],
+        'current': cfg,
+        'hint': '外部 Agent 请在 JSON 中返回 patch 字段；用户在前端确认后调用 /api/agent/patch/preview 再 /api/agent/patch/apply。',
+    }
+
+
+@api.post('/api/agent/patch/preview')
+def agent_patch_preview(payload: AgentPatchPreviewRequest):
+    """合并 patch 到 distill_config.yaml 的内存预览，并签发短时审批令牌。"""
+    global last_saved_config
+    _prune_agent_patch_store()
+    patch = payload.patch
+    if not isinstance(patch, dict) or not patch:
+        return _error('patch 必须为非空对象', 400)
+    path = CONFIG_DIR / 'distill_config.yaml'
+    base = _load_yaml_file(path) or {}
+    try:
+        merged = _merge_distill_patch(base, patch)
+    except ValueError as e:
+        return _error(str(e), 400)
+    except Exception as e:
+        return _error(str(e), 500)
+    tok = str(uuid.uuid4())
+    _agent_patch_store[tok] = {'merged': merged, 'expires': time.time() + _AGENT_PATCH_TTL}
+    patch_yaml = yaml.dump(patch, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    return {
+        'status': 'ok',
+        'approval_token': tok,
+        'expires_in_sec': int(_AGENT_PATCH_TTL),
+        'patch_yaml': patch_yaml,
+        'merged_preview': merged,
+    }
+
+
+@api.post('/api/agent/patch/apply')
+def agent_patch_apply(payload: AgentPatchApplyRequest):
+    """凭审批令牌将预览中的合并结果写入 configs/distill_config.yaml。"""
+    global last_saved_config
+    _prune_agent_patch_store()
+    tok = payload.approval_token or payload.token
+    if not isinstance(tok, str) or not tok:
+        return _error('缺少 approval_token', 400)
+    rec = _agent_patch_store.pop(tok, None)
+    if not rec or rec.get('expires', 0) < time.time():
+        return _error('审批令牌无效或已过期，请重新预览', 400)
+    merged = rec.get('merged')
+    if not isinstance(merged, dict):
+        return _error('内部数据损坏', 500)
+    out_path = CONFIG_DIR / 'distill_config.yaml'
+    try:
+        _save_yaml_file(out_path, merged)
+        last_saved_config = {'name': 'distill_config.yaml', 'config': merged}
+        return {'status': 'ok', 'message': '已写入 configs/distill_config.yaml', 'config': merged}
+    except Exception as e:
+        return _error(str(e), 500)
 
 
 # ---- Output Check ----
 
-@app.route('/api/output/check', methods=['GET'])
-def output_check():
-    project = request.args.get('project', 'runs/distill') or 'runs/distill'
+@api.get('/api/output/check')
+def output_check(project: str = Query('runs/distill')):
+    project = project or 'runs/distill'
     try:
         project_path = _resolve_project_path(project)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return _error(str(e), 400)
 
     existing_names = []
     next_exp = 'exp1'
-    if project_path.exists() and project_path.is_dir():
-        for item in sorted(project_path.iterdir()):
-            if item.is_dir():
-                existing_names.append(item.name)
-        exp_numbers = [-1]
-        for name in existing_names:
-            if name.startswith('exp'):
-                try:
-                    exp_numbers.append(int(name[3:] or 0))
-                except ValueError:
-                    pass
-        next_exp = f'exp{max(exp_numbers) + 1}' if exp_numbers else 'exp1'
+    candidate_roots = _candidate_output_roots(project_path)
+    merged_names = set()
+    for root in candidate_roots:
+        if root.exists() and root.is_dir():
+            for item in sorted(root.iterdir()):
+                if item.is_dir():
+                    merged_names.add(item.name)
+    existing_names = sorted(merged_names)
 
-    return jsonify({
+    exp_numbers = []
+    for name in existing_names:
+        if name.startswith('exp'):
+            try:
+                exp_numbers.append(int(name[3:] or 0))
+            except ValueError:
+                pass
+    next_exp = f'exp{max(exp_numbers) + 1}' if exp_numbers else 'exp1'
+    return {
         'status': 'ok',
         'project': str(project_path.relative_to(BASE_DIR)),
         'existing_names': existing_names,
         'next_exp_name': next_exp,
-    })
+    }
 
 
 # ---- Training API ----
 
-@app.route('/api/train/start', methods=['POST'])
-def start_training():
-    global training_status
+def _cleanup_gpu_resources():
+    """清理残留 GPU 显存资源"""
+    try:
+        import gc as _gc2
+        import torch as _torch2
+        _gc2.collect()
+        if _torch2.cuda.is_available():
+            _torch2.cuda.empty_cache()
+            _torch2.cuda.reset_peak_memory_stats()
+            if hasattr(_torch2.cuda, 'synchronize'):
+                try:
+                    _torch2.cuda.synchronize()
+                except Exception:
+                    pass
+    except ImportError:
+        pass
+    except Exception:
+        pass
 
-    payload = request.json or {}
-    config_name = payload.get('config', 'distill_config.yaml')
-    mode = payload.get('mode', 'distill')
-    checkpoint = payload.get('checkpoint')
+
+def _wait_for_gpu_free(timeout_sec: float = 15.0) -> bool:
+    """
+    等待 GPU 显存释放到安全水平。
+    
+    通过 nvidia-smi 或 torch 检测 GPU 使用情况，
+    在启动新训练前确保旧进程的显存已被回收。
+    
+    Returns:
+        True=GPU 已就绪可使用，False=超时
+    """
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            import torch as _t
+            if _t.cuda.is_available():
+                try:
+                    test_tensor = _t.zeros(1, device='cuda')
+                    del test_tensor
+                    _t.cuda.empty_cache()
+                    return True
+                except RuntimeError as _e:
+                    if 'out of memory' in str(_e).lower():
+                        _update_status_line(f'[GPU] 等待显存释放中... ({int(deadline - time.time())}s)')
+                        time.sleep(2)
+                        continue
+            return True
+        except ImportError:
+            return True
+        except Exception:
+            time.sleep(2)
+    return False
+
+
+@api.post('/api/train/start')
+def start_training(payload: TrainStartRequest):
+    """
+    启动训练 — 五层防护，坚决杜绝双进程同时运行
+    
+    ═══════ 防护层次（由外到内）══════
+      Layer-0: 线程级互斥锁     → 防 Flask 多线程并发穿透
+      Layer-1: 残留进程扫描     → 防重启后丢失引用的僵尸进程
+      Layer-2: 内存状态检查     → 防 running=True 的已知进程逃逸  
+      Layer-3: OS 级文件锁       → 防多实例/多 Web 进程并发（内核原子保证）
+      Layer-4: GPU 安全等待     → 确保显存真正释放后才启动
+    """
+    global training_status, training_process
+
+    config_name = payload.config
+    mode = payload.mode
+    checkpoint = payload.checkpoint
+    allow_overwrite = bool(payload.allow_overwrite)
 
     if mode not in {'distill', 'resume'}:
-        return jsonify({'error': f'不支持的训练模式: {mode}'}), 400
+        return _error(f'不支持的训练模式: {mode}', 400)
 
-    # 【OOM修复】resume 模式下，即使旧进程显示为 running 也允许启动（会先杀掉旧进程）
-    if mode == 'resume' and training_status['running']:
-        _update_status_line('[RESUME] 检测到旧训练进程正在运行，将先终止再启动续训...')
-        _kill_old_training()
-        # 等待 GPU 资源释放
-        time.sleep(2)
-    elif training_status['running']:
-        return jsonify({'error': '已有训练任务在运行中，请先停止或等待完成'}), 400
+    # ════════════════════════════════════════════════════════
+    # Layer-0：线程级互斥锁 — 防止 Flask 多线程并发穿透
+    # ════════════════════════════════════════════════════════
+    acquired = _train_thread_lock.acquire(blocking=False)
+    if not acquired:
+        return _error('系统繁忙：另一个请求正在处理中，请稍后再试', 503)
 
-    # 【关键】文件锁双重保护，防止竞态条件导致重复启动
-    if not _acquire_training_lock():
-        # 检查是否是僵尸锁（原进程已死但锁文件残留）
-        try:
-            if _TRAIN_LOCK_FILE.exists():
-                content = _TRAIN_LOCK_FILE.read_text().strip().split('\n')
-                old_pid = int(content[0]) if content else -1
-                # 检查旧进程是否存在
-                import psutil as _psutil
-                if not _psutil.pid_exists(old_pid):
-                    _release_training_lock()  # 清除僵尸锁
-                else:
-                    return jsonify({'error': f'训练进程 (PID={old_pid}) 仍在运行中'}), 400
+    try:
+        # ═══════════════════════════════════════════════════
+        # Layer-1：扫描残留/僵尸训练进程（Web 重启后丢失引用的场景）
+        # ═══════════════════════════════════════════════════
+        our_pid = os.getpid()
+        stale = _scan_and_kill_stale_training_processes(exclude_pid=our_pid)
+        if stale['found'] > 0:
+            _update_status_line(f"[GUARD] 发现 {stale['found']} 个残留训练进程，已清理: {stale['details']}")
+            time.sleep(3)
+
+        # ═══════════════════════════════════════════════════
+        # Layer-2：杀掉内存中已知的旧训练进程（resume 模式允许覆盖）
+        # ═══════════════════════════════════════════════════
+        with _train_state_lock:
+            busy = training_status['running']
+        if busy or training_process is not None:
+            if mode == 'resume':
+                _update_status_line('[RESUME] 检测到旧训练进程，正在终止...')
+                _kill_old_training()
+                time.sleep(3)
+                _cleanup_gpu_resources()
+                time.sleep(1)
             else:
-                return jsonify({'error': '无法获取训练锁，可能有其他实例在运行'}), 400
-        except Exception:
-            return jsonify({'error': '训练任务正在运行中（文件锁被占用）'}), 400
+                return _error('已有训练任务在运行中，请先停止或等待完成', 400)
 
-    config_path = CONFIG_DIR / config_name
-    if not config_path.exists():
-        _release_training_lock()
-        return jsonify({'error': f'配置文件不存在: {config_name}'}), 404
+        # ═══════════════════════════════════════════════════
+        # Layer-3：获取 OS 级别文件排他锁（内核原子保证，非模拟！）
+        # ═══════════════════════════════════════════════════
+        lock_ok = _acquire_training_lock()
+        if not lock_ok:
+            err_msg = '训练互斥锁被占用'
+            try:
+                if _TRAIN_LOCK_FILE.exists():
+                    content = _TRAIN_LOCK_FILE.read_text().strip().split('\n')
+                    holder_pid = int(content[0]) if content else -1
+                    if holder_pid > 0:
+                        alive = _is_process_alive(holder_pid)
+                        if not alive:
+                            _release_os_file_lock()
+                            _TRAIN_LOCK_FILE.unlink(missing_ok=True)
+                            lock_ok = _acquire_training_lock()
+                            if lock_ok:
+                                _update_status_line(f'[GUARD] 已清除僵尸锁 (原PID={holder_pid})，重新获取成功')
+                        else:
+                            err_msg = f'训练进程 (PID={holder_pid}) 仍在运行中'
+                    else:
+                        err_msg = '训练锁文件损坏'
+            except Exception:
+                pass
+            
+            if not lock_ok:
+                return _error(err_msg, 400)
 
-    cmd = [sys.executable]
-    if mode == 'distill':
-        cmd.extend(['-u', '-m', 'scripts.train_with_distill', '--config', str(config_path)])
-    else:
-        main_py = BASE_DIR / 'main.py'
-        cmd.extend([str(main_py), 'train', '--config', str(config_path)])
-        if checkpoint:
-            checkpoint_path = Path(checkpoint)
-            if not checkpoint_path.is_absolute():
-                checkpoint_path = (BASE_DIR / checkpoint_path).resolve()
-            cmd.extend(['--resume', str(checkpoint_path)])
-        else:
-            cmd.append('--resume')
+        # ═══════════════════════════════════════════════════
+        # Layer-4：二次验证 + GPU 安全等待
+        # ═══════════════════════════════════════════════════
+        
+        # 二次验证：再次扫描残留（防御性编程）
+        recheck_stale = _scan_and_kill_stale_training_processes(exclude_pid=our_pid)
+        if recheck_stale['found'] > 0:
+            _update_status_line(f'[GUARD] 二次扫描发现 {recheck_stale["found"]} 个漏网进程，已清理')
+            time.sleep(2)
 
-    training_status.update({
-        'running': True,
-        'pid': None,
-        'config': config_name,
-        'mode': mode,
-        'start_time': time.time(),
-        'current_epoch': 0,
-        'total_epochs': 0,
-        'logs': ['正在启动训练...'],
-    })
+        # 验证配置文件
+        config_path = CONFIG_DIR / config_name
+        if not config_path.exists():
+            _release_training_lock()
+            return _error(f'配置文件不存在: {config_name}', 404)
 
-    thread = threading.Thread(target=_run_training_process, args=(cmd,), daemon=True)
-    thread.start()
-    return jsonify({'status': 'ok', 'message': '训练已启动'})
+        cfg = _load_yaml_file(config_path) or {}
+        output_cfg = dict(cfg.get('output', {}) or {})
+        target_project = str(output_cfg.get('project', 'runs/distill') or 'runs/distill')
+        target_name = str(output_cfg.get('name', 'exp') or 'exp').strip()
+        try:
+            project_path = _resolve_project_path(target_project)
+        except ValueError:
+            _release_training_lock()
+            return _error(f'输出目录非法: {target_project}', 400)
+        candidate_roots = _candidate_output_roots(project_path)
+        target_run_paths = [(root / target_name).resolve() for root in candidate_roots]
+        existing_target_path = next((p for p in target_run_paths if p.exists()), None)
+
+        if mode != 'resume' and target_name and existing_target_path is not None and not allow_overwrite:
+            _release_training_lock()
+            conflict_project = target_project
+            try:
+                conflict_project = str(existing_target_path.parent.relative_to(BASE_DIR))
+            except Exception:
+                pass
+            return JSONResponse(status_code=409, content={
+                'error': f'输出目录已存在：{conflict_project}/{target_name}',
+                'requires_confirmation': True,
+                'project': conflict_project,
+                'name': target_name,
+            })
+
+        # 构建命令：蒸馏 / 断点续训 共用同一子进程入口，避免双栈逻辑与重复加载
+        cmd = [sys.executable, '-u', '-m', 'scripts.train_with_distill', '--config', str(config_path)]
+        if mode == 'resume':
+            if checkpoint:
+                checkpoint_path = Path(checkpoint)
+                if not checkpoint_path.is_absolute():
+                    checkpoint_path = (BASE_DIR / checkpoint_path).resolve()
+                cmd.extend(['--resume', str(checkpoint_path)])
+            else:
+                cmd.append('--resume')
+                cmd.append('auto')
+        elif allow_overwrite:
+            cmd.append('--allow-overwrite')
+
+        # GPU 安全等待：确保显存真正释放后再启动新训练
+        _cleanup_gpu_resources()
+        gpu_ready = _wait_for_gpu_free(timeout_sec=20.0)
+        if not gpu_ready:
+            _release_training_lock()
+            return JSONResponse(status_code=503, content={
+                'error': 'GPU 显存未能在超时时间内释放，可能仍有残留训练进程',
+                'hint': '请手动结束占用 GPU 的进程后重试',
+            })
+
+        # 最终步骤：更新状态并启动新训练线程
+        with _train_state_lock:
+            training_status.update({
+                'running': True,
+                'pid': None,
+                'config': config_name,
+                'mode': mode,
+                'start_time': time.time(),
+                'current_epoch': 0,
+                'total_epochs': 0,
+                'logs': [f"{'[RESUME] 断点续训' if mode == 'resume' else '[TRAIN] 训练'} 已启动..."],
+            })
+
+        thread = threading.Thread(target=_run_training_process_safe, args=(cmd,), daemon=True)
+        thread.start()
+        return {'status': 'ok', 'message': f"{'断点续训' if mode == 'resume' else '训练'}已启动"}
+
+    finally:
+        # 【关键】线程锁在 finally 中释放。
+        # 文件锁仍由子线程 (_run_training_process_safe) 持有直到训练结束。
+        _train_thread_lock.release()
 
 
-@app.route('/api/train/stop', methods=['POST'])
+@api.post('/api/train/stop')
 def stop_training():
+    """
+    停止训练进程 — 彻底版
+    
+    修复：解决多线程竞态条件导致进程残留的问题
+    1. 先关闭 stdout pipe → 让后台日志循环立即退出（不再阻塞）
+    2. 本地引用 proc → 防止竞态条件下 training_process 被置为 None
+    3. 分阶段杀戮：SIGINT → 优雅 terminate → 暴力 kill
+    4. 多次验证进程存活状态
+    5. 清理 GPU 显存资源
+    """
     global training_process, training_status
-    if not training_status['running']:
-        return jsonify({'warning': '没有运行中的训练任务'})
-    if training_process:
+    with _train_state_lock:
+        running = training_status['running']
+    if not running:
+        return {'warning': '没有运行中的训练任务'}
+
+    # 【关键】立即保存本地引用，防止与后台线程产生竞态
+    proc = training_process
+    old_pid = getattr(proc, 'pid', None) if proc else None
+
+    if proc and old_pid and old_pid > 0:
+        # ═══ Step 1: 先关闭 stdout pipe → 让 _run_training_process_safe 的 for 循环立即退出 ═══
+        if proc.stdout and not proc.stdout.closed:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+
+        # ═══ Step 2: 发送中断信号（请求优雅退出）═══
         try:
             if os.name == 'nt':
-                training_process.send_signal(signal.CTRL_C_EVENT)
+                proc.send_signal(signal.CTRL_C_EVENT)
             else:
-                training_process.send_signal(signal.SIGINT)
+                proc.send_signal(signal.SIGINT)
         except Exception:
-            training_process.terminate()
-        training_status['running'] = False
-        training_process = None
-        _release_training_lock()
-        stop_msg = "训练已被用户停止"
-        training_status['logs'].append(stop_msg)
-        try:
-            log_queue.put_nowait(stop_msg)
-        except queue.Full:
             pass
-    return jsonify({'status': 'ok', 'message': '训练已停止'})
+
+        # ═══ Step 3: 等待进程自行退出（最多 8 秒）═══
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            pass
+
+        # ═══ Step 4: 还活着 → 优雅杀进程树 ═══
+        if _is_process_alive(old_pid):
+            _kill_process_tree(old_pid, force=False)
+            time.sleep(1.5)
+
+        # ═══ Step 5: 仍活着 → 暴力杀进程树 ═══
+        if _is_process_alive(old_pid):
+            _kill_process_tree(old_pid, force=True)
+            time.sleep(1)
+
+        # ═══ Step 6: 最终验证 + 告警 ═══
+        if _is_process_alive(old_pid):
+            warn_msg = f"[STOP_WARN] 进程 PID={old_pid} 停止失败！请手动结束该进程以释放 GPU 显存"
+            _update_status_line(warn_msg)
+
+    # ═══ Step 7: 先写入停止日志再清 running，避免 SSE 在 running=False 瞬间关流漏掉本行 ═══
+    _update_status_line('训练已被用户停止')
+
+    # ═══ Step 8: 统一更新全局状态（无论是否需要杀进程都执行）═══
+    with _train_state_lock:
+        training_status['running'] = False
+        training_status['pid'] = None
+    training_process = None
+
+    # ═══ Step 9: 释放锁 + 清理 GPU 显存 ═══
+    _release_training_lock()
+    _cleanup_gpu_resources()
+
+    return {'status': 'ok', 'message': '训练已停止'}
 
 
-@app.route('/api/train/status', methods=['GET'])
+@api.get('/api/train/status')
 def get_training_status():
-    return jsonify({'status': 'ok', **training_status, 'log_count': len(training_status['logs'])})
+    with _train_state_lock:
+        snap = {k: (list(v) if k == 'logs' and isinstance(v, list) else v) for k, v in training_status.items()}
+    snap['log_count'] = len(snap.get('logs') or [])
+    return {'status': 'ok', **snap}
 
 
-@app.route('/api/train/resume_candidates', methods=['GET'])
-def get_resume_candidates():
-    project = request.args.get('project', 'runs/distill') or 'runs/distill'
+@api.get('/api/train/resume_candidates')
+def get_resume_candidates(project: str = Query('runs/distill')):
+    project = project or 'runs/distill'
     try:
         project_path = _resolve_project_path(project)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return _error(str(e), 400)
     candidates = _list_resume_candidates(project_path)
-    return jsonify({
+    return {
         'status': 'ok',
         'project': str(project_path.relative_to(BASE_DIR)),
         'candidates': candidates
-    })
+    }
 
 
-@app.route('/api/train/logs', methods=['GET'])
-def get_training_logs():
-    offset = max(0, int(request.args.get('offset', 0)))
-    limit = min(500, max(1, int(request.args.get('limit', 100))))
-    logs = training_status['logs']
+@api.get('/api/train/logs')
+def get_training_logs(offset: int = Query(0), limit: int = Query(100)):
+    offset = max(0, int(offset))
+    limit = min(5000, max(1, int(limit)))
+    with _train_state_lock:
+        logs = list(training_status['logs'])
     total = len(logs)
     if offset > total:
         offset = total
-    return jsonify({'status': 'ok', 'logs': logs[offset:offset + limit], 'total': total, 'offset': offset, 'limit': limit})
+    return {'status': 'ok', 'logs': logs[offset:offset + limit], 'total': total, 'offset': offset, 'limit': limit}
 
 
-@app.route('/api/train/logs/stream')
-def stream_training_logs():
+@api.get('/api/train/logs/download')
+def download_training_logs():
+    """导出当前内存中的训练日志为纯文本（与 /api/train/logs 同源）。"""
+    with _train_state_lock:
+        text = '\n'.join(training_status.get('logs') or [])
+    return PlainTextResponse(
+        text + ('\n' if text and not text.endswith('\n') else ''),
+        headers={'Content-Disposition': 'attachment; filename=training_log.txt'},
+    )
+
+
+@api.get('/api/train/logs/stream')
+def stream_training_logs(offset: int = Query(0)):
+    offset = max(0, int(offset))
+
     def generate():
-        # 新连接时先从 logs 列表补全历史消息（仅一次），之后只从 queue 读取新增消息
-        _sent_count = 0
-        logs = training_status['logs']
-        # 首次连接：补全已有日志
-        while _sent_count < len(logs):
-            line = logs[_sent_count]
-            _sent_count += 1
-            yield f"data: {json.dumps({'line': line}, ensure_ascii=False)}\n\n"
-
-        # 之后只从 queue 消费新消息，避免与 logs 列表双重推送
+        # 基于 offset 线性追赶日志，保证重连后不会漏行也不会重复刷整屏。
+        next_idx = offset
         while True:
-            if not training_status['running']:
-                # 训练结束后再补一次可能遗漏的末尾日志
-                remaining_logs = training_status['logs']
-                while _sent_count < len(remaining_logs):
-                    line = remaining_logs[_sent_count]
-                    _sent_count += 1
-                    yield f"data: {json.dumps({'line': line}, ensure_ascii=False)}\n\n"
+            batch = []
+            batch_start = next_idx
+            with _train_state_lock:
+                buf = training_status['logs']
+                n = len(buf)
+                running = training_status['running']
+                if next_idx < n:
+                    batch = list(buf[next_idx:n])
+                    batch_start = next_idx
+                    next_idx = n
+                elif running:
+                    _train_log_cond.wait(timeout=2.0)
+                else:
+                    break
+
+            if batch:
+                for idx, line in enumerate(batch, start=batch_start + 1):
+                    payload = {'line': line, 'idx': idx}
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                continue
+
+            with _train_state_lock:
+                is_done = (not training_status['running']) and next_idx >= len(training_status['logs'])
+            if is_done:
                 break
-            try:
-                line = log_queue.get(timeout=2)
-                _sent_count += 1
-                yield f"data: {json.dumps({'line': line}, ensure_ascii=False)}\n\n"
-            except queue.Empty:
+
+            if not batch:
                 yield ': keepalive\n\n'
         yield 'event: done\ndata: {}\n\n'
 
-    return Response(
+    return StreamingResponse(
         generate(),
-        mimetype='text/event-stream',
+        media_type='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', 'Connection': 'keep-alive'}
     )
 
 
 # ---- Metrics API (完整自包含实现) ----
 
-@app.route('/api/metrics', methods=['GET'])
-def get_metrics():
+@api.get('/api/metrics')
+def get_metrics(source: str = Query('')):
     runs_dir = BASE_DIR / 'runs'
     base_resolved = Path(BASE_DIR).resolve()
     metrics_data = []
@@ -1093,7 +1889,7 @@ def get_metrics():
         except Exception:
             pass
 
-    selected_path = request.args.get('source', '').strip()
+    selected_path = source.strip()
     selected_data = None
     if selected_path:
         try:
@@ -1157,19 +1953,20 @@ def get_metrics():
     }
     if selected_data:
         response.update(selected_data)
-    return jsonify(response)
+    return response
 
 
 if __name__ == '__main__':
+    _port = int(os.environ.get('EDGE_BACKEND_PORT', os.environ.get('EDGE_FLASK_PORT', '5000')))
     print('=' * 60)
     print('  EdgeDistillDet Local UI')
     print(f"  BASE_DIR : {BASE_DIR}")
     print(f"  Template : {TEMPLATE_FILE} (exists: {TEMPLATE_FILE.exists()})")
-    print("  http://localhost:5000")
+    print(f"  http://localhost:{_port}")
     print('=' * 60)
 
     if not TEMPLATE_FILE.exists():
         print(f"[FATAL] Template file not found: {TEMPLATE_FILE}")
         sys.exit(1)
 
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    uvicorn.run(api, host='0.0.0.0', port=_port, log_level='info')

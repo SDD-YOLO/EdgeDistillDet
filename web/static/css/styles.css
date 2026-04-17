@@ -257,15 +257,21 @@ body {
 }
 
 .train-launcher {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
     gap: 18px;
+    align-items: stretch;
     background: color-mix(in srgb, var(--md-surface) 85%, var(--md-primary-container) 15%);
     border: 1px solid var(--md-outline-variant);
     border-radius: var(--radius-lg);
     padding: 20px;
     margin-bottom: 20px;
     box-shadow: var(--shadow-1);
+}
+
+.launcher-left,
+.launcher-side {
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .launcher-grid {
@@ -516,11 +522,26 @@ body {
     padding: 8px 12px;
 }
 
+.chart-header > .sm-btn {
+    margin-left: auto;
+    min-width: auto;
+    flex: 0 0 auto;
+}
+
 .panel-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 18px;
     align-items: stretch;
+}
+
+.panel-grid > .config-section,
+.panel-grid > .log-section {
+    height: 100%;
+}
+
+.panel-grid > .log-section {
+    max-height: none;
 }
 
 .config-section,
@@ -529,6 +550,10 @@ body {
     flex-direction: column;
     gap: 14px;
     min-height: 0;
+}
+
+.log-section {
+    max-height: min(68vh, 760px);
 }
 
 .section-title {
@@ -716,6 +741,11 @@ body {
 .file-picker-label:hover {
     background: color-mix(in srgb, var(--md-primary-container) 80%, transparent);
     border-color: var(--md-primary);
+}
+
+.file-picker-label:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .slider-with-value {
@@ -978,9 +1008,10 @@ body {
 }
 
 .log-container {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-height: 0;
-    max-height: 100%;
+    height: auto;
+    max-height: none;
     border-radius: var(--radius-md);
     background: var(--log-bg);
     color: var(--log-text);
@@ -1181,11 +1212,15 @@ body {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid color-mix(in srgb, var(--md-outline-variant) 55%, transparent);
 }
 
 .chart-header h3 {
     margin: 0;
     font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
 }
 
 .chart-actions {
@@ -1197,6 +1232,15 @@ body {
 .chart-body {
     height: 280px;
     position: relative;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--md-outline-variant) 48%, transparent);
+    background:
+      radial-gradient(120% 130% at 8% 2%, color-mix(in srgb, var(--md-primary) 11%, transparent) 0%, transparent 42%),
+      linear-gradient(180deg, color-mix(in srgb, var(--md-surface-container) 70%, transparent), color-mix(in srgb, var(--md-surface-container-low) 92%, transparent));
+    padding: 10px;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--md-surface-bright) 38%, transparent),
+      0 6px 18px rgba(0, 0, 0, 0.08);
 }
 
 .chart-card.wide .chart-body {
@@ -1390,13 +1434,128 @@ body {
 .agent-note {
     margin-top: 4px;
     display: flex;
-    align-items: center;
-    gap: 6px;
+    align-items: flex-start;
+    gap: 8px;
     font-size: 11px;
+    line-height: 1.45;
     color: var(--md-on-surface-variant);
     border-radius: 10px;
     padding: 8px 10px;
     background: color-mix(in srgb, var(--md-secondary-container) 50%, transparent);
+}
+
+.agent-note code {
+    font-size: 10px;
+    word-break: break-all;
+}
+
+.agent-local-tools {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--md-primary-container) 18%, var(--md-surface));
+    border: 1px solid var(--md-outline-variant);
+}
+
+.tools-title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--md-on-surface);
+}
+
+.tools-title .material-icons {
+    font-size: 18px;
+    color: var(--md-primary);
+}
+
+.tools-desc {
+    margin: 0 0 10px;
+    font-size: 11px;
+    color: var(--md-on-surface-variant);
+    line-height: 1.45;
+}
+
+.tools-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.md-btn-compact {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 12px;
+}
+
+.md-btn-compact .material-icons {
+    font-size: 18px;
+}
+
+/* HTML dialog — Material 3 风格 */
+.md-dialog {
+    border: none;
+    padding: 0;
+    border-radius: var(--radius-lg);
+    max-width: calc(100vw - 32px);
+    width: min(560px, 100%);
+    box-shadow: var(--shadow-2);
+    background: transparent;
+}
+
+.md-dialog::backdrop {
+    background: rgba(15, 21, 20, 0.45);
+    backdrop-filter: blur(2px);
+}
+
+[data-theme="dark"] .md-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.58);
+}
+
+.md-dialog-surface {
+    padding: 22px 22px 16px;
+    background: var(--md-surface);
+    color: var(--md-on-surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--md-outline-variant);
+}
+
+.md-dialog-title {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.md-dialog-support {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: var(--md-on-surface-variant);
+    line-height: 1.45;
+}
+
+.md-dialog-pre {
+    margin: 0 0 16px;
+    padding: 12px;
+    max-height: 42vh;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.4;
+    background: var(--md-surface-variant);
+    color: var(--md-on-surface);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--md-outline-variant);
+}
+
+.md-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-top: 4px;
 }
 
 .agent-main {
@@ -1671,10 +1830,30 @@ body {
 /* ---- 3. Chart Gradient Fill Enhancement ---- */
 .chart-body canvas {
     will-change: auto;
+    border-radius: 10px;
 }
 
 .chart-body:hover canvas {
     transition: filter 0.3s ease;
+}
+
+.chart-card {
+    transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+}
+
+.chart-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+    border-color: color-mix(in srgb, var(--md-primary) 28%, var(--md-outline-variant));
+}
+
+.chart-card .btn-icon-sm {
+    border-radius: 10px;
+}
+
+.chart-card .btn-icon-sm:hover {
+    background: color-mix(in srgb, var(--md-primary-container) 72%, transparent);
+    color: var(--md-primary);
 }
 
 /* ---- 5. CountUp Number Animation ---- */

@@ -120,9 +120,30 @@ class EdgeProfiler:
     # ── 提取模型基础指标 ──────────────────────────────────────────────────────
     @staticmethod
     def _count_params_from_checkpoint(path: str) -> float:
+        import importlib
         import torch
 
-        raw = torch.load(path, map_location='cpu')
+        try:
+            raw = torch.load(path, map_location='cpu')
+        except Exception:
+            safe_globals = []
+            try:
+                ul_spec = importlib.util.find_spec("ultralytics")
+                if ul_spec:
+                    ul = importlib.import_module("ultralytics")
+                    if hasattr(ul, "nn") and hasattr(ul.nn, "tasks") and hasattr(ul.nn.tasks, "DetectionModel"):
+                        safe_globals.append(ul.nn.tasks.DetectionModel)
+            except Exception:
+                pass
+
+            try:
+                if safe_globals and hasattr(torch.serialization, "safe_globals"):
+                    with torch.serialization.safe_globals(safe_globals):
+                        raw = torch.load(path, map_location="cpu", weights_only=False)
+                else:
+                    raw = torch.load(path, map_location="cpu", weights_only=False)
+            except Exception:
+                raise
         state_dict = None
         if hasattr(raw, 'state_dict'):
             state_dict = raw.state_dict()

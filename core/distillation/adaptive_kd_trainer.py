@@ -61,7 +61,6 @@ class AdaptiveAlphaScheduler:
     def current_alpha(self): return self.alpha
     
     def update(self, task_loss):
-        from .adaptive_kd_trainer import _safe_scalar
         v = _safe_scalar(task_loss)
         self._ema_loss = v if self._ema_loss is None else self.ema_decay * self._ema_loss + (1-self.ema_decay)*v
         if self._prev_ema is not None:
@@ -333,13 +332,17 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 f"phase={phase}"
             )
 
-        # Warm-up 阶段：纯原始损失（直接委托，无额外开销）
+        # Warm-up 阶段：复用 _distill_model_loss 里已算好的学生预测，避免同 batch 二次前向
         batch = self._batch
         if warm_phase:
+            warm_preds = self._cached_student_preds
             try:
-                loss, loss_items = self._orig_loss(batch, preds=batch.get('preds') if isinstance(batch, dict) else None)
+                loss, loss_items = self._orig_loss(batch, preds=warm_preds)
             except TypeError:
-                loss, loss_items = self._orig_loss(batch)
+                try:
+                    loss, loss_items = self._orig_loss(batch, preds=batch.get('preds') if isinstance(batch, dict) else None)
+                except TypeError:
+                    loss, loss_items = self._orig_loss(batch)
             self._accumulate_losses(task_loss=loss)
             return loss, loss_items
 
@@ -399,8 +402,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
         return total_loss, loss_items
     
     def _setup_train(self):
-        """重写 setup_train：强制 workers=0 避免 Windows 多进程问题"""
-        orig_workers = getattr(self.args, 'workers', 0)
+        """重写 setup_train：全程锁定 workers=0，避免 DataLoader 子进程与主训练争内存。"""
         self.args.workers = 0
 
         # 【关键修复】保存配置文件中的 epochs 值，防止 resume 时被 checkpoint 覆盖
@@ -409,30 +411,30 @@ class AdaptiveKDTrainer(DetectionTrainer):
         cfg_epochs = getattr(self.args, 'epochs', None)
 
         total_batches = "unknown"
-        try:
-            super()._setup_train()
+        super()._setup_train()
 
-            # 强制将 epochs 恢复为配置文件中的值（而非 checkpoint 里的旧值）
-            if cfg_epochs is not None and hasattr(self.args, 'epochs'):
-                restored = int(cfg_epochs)
-                if self.args.epochs != restored:
-                    logger.info(
-                        f"[RESUME_FIX] epochs 已被 checkpoint 覆盖 → "
-                        f"强制恢复为配置文件值: {self.args.epochs} → {restored}"
-                    )
-                    self.args.epochs = restored
+        # 再次强制 workers=0：checkpoint 内的 args 可能在 super() 里把 workers 改回非 0
+        self.args.workers = 0
 
-            for attr in ('dataloader', 'train_dataloader', 'train_loader', 'loader', 'data_loader'):
-                loader = getattr(self, attr, None)
-                if loader is not None:
-                    try:
-                        total_batches = len(loader)
-                        break
-                    except Exception:
-                        continue
-            self._known_total_batches = total_batches if isinstance(total_batches, int) else None
-        finally:
-            self.args.workers = orig_workers
+        # 强制将 epochs 恢复为配置文件中的值（而非 checkpoint 里的旧值）
+        if cfg_epochs is not None and hasattr(self.args, 'epochs'):
+            restored = int(cfg_epochs)
+            if self.args.epochs != restored:
+                logger.info(
+                    f"[RESUME_FIX] epochs 已被 checkpoint 覆盖 → "
+                    f"强制恢复为配置文件值: {self.args.epochs} → {restored}"
+                )
+                self.args.epochs = restored
+
+        for attr in ('dataloader', 'train_dataloader', 'train_loader', 'loader', 'data_loader'):
+            loader = getattr(self, attr, None)
+            if loader is not None:
+                try:
+                    total_batches = len(loader)
+                    break
+                except Exception:
+                    continue
+        self._known_total_batches = total_batches if isinstance(total_batches, int) else None
         logger.info(
             f"[INIT 6/6] 数据集加载完成 ✓ | "
             f"total_batches={total_batches} | batch_size={self.args.batch} | "
@@ -717,10 +719,6 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 map_val = cm.get('map')
                 prec_val = cm.get('p')
                 rec_val = cm.get('r')
-                if prec_val is None and map_val is not None:
-                    prec_val = 0.0
-                if rec_val is None and map_val is not None:
-                    rec_val = 0.0
                 map_l.append(map_val)
                 prec_l.append(prec_val)
                 rec_l.append(rec_val)
@@ -903,7 +901,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
         labels, map_l, prec_l, rec_l = [], [], [], []
         for i in range(nc):
             labels.append(class_names.get(i, f'class{i}'))
-            map_l.append(float(_maps[i]) if _maps and i < len(_maps) else 0.0)
+            map_l.append(float(_maps[i]) if _maps and i < len(_maps) else None)
             try:
                 cr = box.class_result(i) if hasattr(box, 'class_result') else None
                 if cr is not None:
@@ -915,23 +913,23 @@ class AdaptiveKDTrainer(DetectionTrainer):
                         matches = [j for j, v in enumerate(idx_map) if int(v) == i]
                         if matches:
                             j = matches[0]
-                            prec_l.append(float(box.p[j]) if box.p is not None else 0.0)
-                            rec_l.append(float(box.r[j]) if box.r is not None else 0.0)
+                            prec_l.append(float(box.p[j]) if box.p is not None else None)
+                            rec_l.append(float(box.r[j]) if box.r is not None else None)
                         else:
-                            prec_l.append(0.0); rec_l.append(0.0)
+                            prec_l.append(None); rec_l.append(None)
                     else:
                         p_arr = getattr(box, 'p', None)
                         r_arr = getattr(box, 'r', None)
                         if p_arr is not None and r_arr is not None and i < len(p_arr) and i < len(r_arr):
                             try:
-                                prec_l.append(float(p_arr[i]) if p_arr[i] is not None else 0.0)
-                                rec_l.append(float(r_arr[i]) if r_arr[i] is not None else 0.0)
+                                prec_l.append(float(p_arr[i]) if p_arr[i] is not None else None)
+                                rec_l.append(float(r_arr[i]) if r_arr[i] is not None else None)
                             except Exception:
-                                prec_l.append(0.0); rec_l.append(0.0)
+                                prec_l.append(None); rec_l.append(None)
                         else:
-                            prec_l.append(0.0); rec_l.append(0.0)
+                            prec_l.append(None); rec_l.append(None)
             except Exception:
-                prec_l.append(0.0); rec_l.append(0.0)
+                prec_l.append(None); rec_l.append(None)
 
         output = {
             'labels': labels, 'map': map_l, 'precision': prec_l, 'recall': rec_l,

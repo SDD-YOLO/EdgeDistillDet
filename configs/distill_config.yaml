@@ -16,7 +16,7 @@ training:
   epochs: 10
   imgsz: 640
   batch: 16
-  workers: 4
+  workers: 0
   lr0: 0.01
   lrf: 0.08
   warmup_epochs: 3
@@ -26,4 +26,5 @@ training:
   amp: true
 output:
   project: runs
-  name: yolov8n
+  name: exp1
+__agentPreConfirmedOverlap: true

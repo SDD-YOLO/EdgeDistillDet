@@ -4,10 +4,17 @@
   "description": "EdgeDistillDet Web UI with Material Design",
   "main": "app.py",
   "scripts": {
-    "start": "python app.py"
+    "start": "python app.py",
+    "dev": "vite",
+    "build": "vite build"
   },
   "dependencies": {
-    "flask": "^3.0.0",
-    "flask-cors": "^4.0.0"
+    "chart.js": "^4.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "vite": "^5.4.19"
   }
 }
