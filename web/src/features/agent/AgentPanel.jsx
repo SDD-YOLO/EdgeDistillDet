@@ -1,15 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { executeAgentTool, fetchAgentConfigSchema, fetchAgentTools, previewAgentPatch } from "../../api/agentApi";
-import { fetchMetricsBySource, fetchMetricsList } from "../../api/metricsApi";
-import { fetchTrainStatus } from "../../api/trainApi";
+import { executeAgentTool, fetchAgentTools, previewAgentPatch } from "../../api/agentApi";
+import { fetchDistillConfig } from "../../api/configApi";
+import { broadcastDistillConfigUpdate } from "../../constants/distillConfigSync";
 import AgentPanelView from "./AgentPanelView";
 import {
   buildDisplayReplyAndReasoning,
   extractPatchFromResult,
   extractReplyAndReasoningFromPayload,
   extractToolCallFromText,
-  formatAgentTerminalOutput,
-  hasConfigMutationAfter
+  formatChangeSummaryForChat,
+  hasConfigMutationAfter,
+  summarizeToolResultForTrace
 } from "./agentHelpers";
 import { requestAgentWithFallback } from "./agentRuntime";
 
@@ -23,41 +24,74 @@ const isArkApiUrl = (apiUrl) => {
   return text.includes("ark.") && text.includes("/api/v");
 };
 
-const DEFAULT_AGENT_OUTPUT_PLACEHOLDER = "请先配置外部 Agent API，然后开始对话或调用动作。";
+const AGENT_CHAT_STORAGE_KEY = "edge_distill_agent_chat_messages_v1";
 
-function AgentPanel({ toast, active, metricsCsvPath }) {
+function loadStoredAgentMessages() {
+  try {
+    const raw = window.localStorage.getItem(AGENT_CHAT_STORAGE_KEY);
+    if (!raw) return [];
+    const p = JSON.parse(raw);
+    return Array.isArray(p) ? p : [];
+  } catch {
+    return [];
+  }
+}
+
+function AgentPanel({ toast, active }) {
   const [apiUrl, setApiUrl] = useState(() => window.localStorage.getItem("edge_distill_agent_api_url") || "");
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem("edge_distill_agent_api_key") || "");
   const [apiModel, setApiModel] = useState(() => window.localStorage.getItem("edge_distill_agent_api_model") || "");
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => loadStoredAgentMessages());
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [outputText, setOutputText] = useState(DEFAULT_AGENT_OUTPUT_PLACEHOLDER);
   const [approvalOpen, setApprovalOpen] = useState(false);
-  const [approvalBody, setApprovalBody] = useState("");
+  const [approvalChangeSummary, setApprovalChangeSummary] = useState(null);
   const [approvalToken, setApprovalToken] = useState("");
   const [approvalRunId, setApprovalRunId] = useState("default");
   const [approvalRequestHash, setApprovalRequestHash] = useState("");
   const chatTextareaRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const agentSlotIndexRef = useRef(-1);
+  const chatStickToBottomRef = useRef(true);
+  const chatScrollRafRef = useRef(0);
 
-  useLayoutEffect(() => {
+  const scheduleScrollRef = useRef(() => {});
+  scheduleScrollRef.current = () => {
     const el = chatMessagesRef.current;
     if (!el || !active) return;
-    const applyScroll = () => {
-      el.scrollTop = el.scrollHeight;
-    };
-    applyScroll();
-    window.requestAnimationFrame(applyScroll);
+    if (!chatStickToBottomRef.current) return;
+    if (chatScrollRafRef.current) return;
+    chatScrollRafRef.current = window.requestAnimationFrame(() => {
+      chatScrollRafRef.current = 0;
+      const box = chatMessagesRef.current;
+      if (!box || !active || !chatStickToBottomRef.current) return;
+      box.scrollTop = box.scrollHeight;
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (!active) return;
+    scheduleScrollRef.current();
   }, [messages, loading, active]);
+
+  useEffect(() => {
+    const el = chatMessagesRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      chatStickToBottomRef.current = dist < 100;
+    };
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [active]);
 
   useEffect(() => {
     const el = chatMessagesRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       if (!active) return;
-      el.scrollTop = el.scrollHeight;
+      scheduleScrollRef.current();
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -82,6 +116,31 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
     if (!chatTextareaRef.current) return;
     resizeChatInput();
   }, [input]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(AGENT_CHAT_STORAGE_KEY, JSON.stringify(messages));
+    } catch {
+      /* quota or private mode */
+    }
+  }, [messages]);
+
+  const exportAgentSession = () => {
+    try {
+      const blob = new Blob(
+        [JSON.stringify({ exportedAt: new Date().toISOString(), messages }, null, 2)],
+        { type: "application/json" }
+      );
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `edgedistilldet-agent-chat-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("已导出会话 JSON", "success");
+    } catch (error) {
+      toast(`导出失败: ${error.message}`, "error");
+    }
+  };
 
   const saveConfig = () => {
     window.localStorage.setItem("edge_distill_agent_api_url", apiUrl.trim());
@@ -108,10 +167,12 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
       "当需要调用工具时，你必须只输出一个 JSON 对象（不要输出其他文本）：",
       '{"tool":"agent.get_context","args":{"run_id":"default"}}',
       "工具结果会在下一轮以 tool 消息回传给你。",
-      "**修改 distill 配置（configs/distill_config.yaml）时**：优先输出 `{\"tool\":\"agent.preview_patch\",\"args\":{\"patch\":{...}}}`（可先 `agent.validate_patch`）；若只调用了 `agent.propose_patch`，界面也会自动用返回的 patch 请求预览并在左侧栏显示「批准修改训练配置」面板。**禁止**在最终答复里用「是否需要我执行/是否生成补丁」等话术向用户索要确认。",
+      "**修改 distill 配置（configs/distill_config.yaml）时**：优先输出 `{\"tool\":\"agent.preview_patch\",\"args\":{\"patch\":{...}}}`（可先 `agent.validate_patch`）；若只调用了 `agent.propose_patch`，界面也会自动用返回的 patch 请求预览并在对话区显示「批准修改训练配置」。**禁止**在最终答复里用「是否需要我执行/是否生成补丁」等话术向用户索要确认。",
+      "**`patch` 必须与审批内容严格一致**：只包含你打算改动的顶层段（distillation / training / output）及其字段；**禁止**在 patch 里附带未在答复中说明的参数（例如只讨论 kd loss 却写入 temperature）。自然语言列出的每一项都必须在 patch 中出现且数值一致。",
+      "在输出 tool JSON 前后，用一两句话概括拟修改的字段与意图；**字段级旧值→新值以对话区审批摘要与聊天中的服务端摘要为准**，避免与 patch 不一致。",
       "终端里的训练命令（```powershell``` / ```bash```）只能作为补充说明；真正写入配置必须经过上述工具链或界面审批。",
-      "当不再需要工具、输出最终答复时：用自然语言说明变更理由与风险；若已调用 `agent.preview_patch`，只需提示用户在左侧栏「批准修改训练配置」面板中批准，不要重复询问。仅在确定无法走工具链时，才用 JSON 代码块给出结构化 patch 作为兜底。",
-      "**审批/写入流程结束后**：若用户未主动要求继续改配置，你**不得**主动提出新的修改建议、不得追问「要不要继续调整」「是否还要改某参数」「需不需要再预览一版」等；**不得**自动再发起 `agent.propose_patch` / `agent.preview_patch` 或引导用户进入下一轮审批。此时只做简短收尾（例如已写入/已按侧栏操作即可训练），然后停止。",
+      "当不再需要工具、输出最终答复时：用自然语言说明变更理由与风险；若已调用 `agent.preview_patch`，只需提示用户在对话区「批准修改训练配置」中批准，不要重复询问。仅在确定无法走工具链时，才用 JSON 代码块给出结构化 patch 作为兜底。",
+      "**审批/写入流程结束后**：若用户未主动要求继续改配置，你**不得**主动提出新的修改建议、不得追问「要不要继续调整」「是否还要改某参数」「需不需要再预览一版」等；**不得**自动再发起 `agent.propose_patch` / `agent.preview_patch` 或引导用户进入下一轮审批。此时只做简短收尾（例如已写入/已按对话区审批操作即可训练），然后停止。",
       "**仅当用户明确说出**要改配置、改某字段、再优化、再出一版 patch 等意图时，你才可以再次使用配置相关工具或给出修改建议。"
     ].join("\n");
   };
@@ -121,6 +182,7 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
     const systemPrompt = await buildAgentSystemPrompt();
     const convo = [...messages, { role: "user", content: userText }];
     const toolLogs = [];
+    const traceRounds = [];
     const allowMutationTools = /修改|调参|调整|优化|patch|preview|采纳|批准|写入|apply|执行|变更|改配置|再来一版|继续改/i.test(
       String(userText || "")
     );
@@ -143,6 +205,29 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
     const finalizeAfterMutation =
       "配置变更已通过工具落盘。请仅用一两句自然语言确认完成（不要输出 JSON 代码块、不要调用任何工具）。在用户未明确要求继续改配置前，禁止主动提出修改建议、禁止追问是否继续调整、禁止再次调用 propose_patch / preview_patch / apply_patch / rollback 相关工具。";
     let continuationSuffix = defaultContinue;
+
+    const flushTrace = (reply, reasoning, toolInfo, execRes) => {
+      traceRounds.push({
+        round: traceRounds.length + 1,
+        reply,
+        reasoning: reasoning || "",
+        tool: toolInfo ? { name: toolInfo.tool, args: toolInfo.args || {} } : null,
+        toolResultSummary:
+          execRes !== undefined && execRes !== null
+            ? summarizeToolResultForTrace(toolInfo?.tool, execRes)
+            : undefined
+      });
+      if (prefersRelayGlobal && agentSlotIndexRef.current >= 0) {
+        setMessages((prev) => {
+          const next = [...prev];
+          const idx = agentSlotIndexRef.current;
+          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
+            next[idx] = { ...next[idx], traceRounds: [...traceRounds] };
+          }
+          return next;
+        });
+      }
+    };
 
     for (let round = 0; round < maxRounds; round += 1) {
       const transcriptText = convo
@@ -306,8 +391,10 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
             content: JSON.stringify(execResult, null, 2)
           });
           continuationSuffix = defaultContinue;
+          flushTrace(displayReply, displayReasoning, fallbackCall, execResult);
           continue;
         }
+        flushTrace(displayReply, displayReasoning, null, null);
         return {
           payload,
           reply,
@@ -315,10 +402,12 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
           displayReasoning,
           target,
           toolLogs,
-          streamedRelay: target?.kind === "backend-relay"
+          streamedRelay: target?.kind === "backend-relay",
+          traceRounds
         };
       }
       if (mutationTools.has(toolCall.tool) && !allowMutationTools) {
+        flushTrace(displayReply, displayReasoning, toolCall, { blocked: true, reason: "mutation_not_allowed" });
         return {
           payload,
           reply,
@@ -327,23 +416,27 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
           displayReasoning,
           target,
           toolLogs,
-          streamedRelay: target?.kind === "backend-relay"
+          streamedRelay: target?.kind === "backend-relay",
+          traceRounds
         };
       }
       if (toolCall.tool === "agent.apply_patch_with_approval") {
+        flushTrace(displayReply, displayReasoning, toolCall, { blocked: true, reason: "apply_via_sidebar" });
         return {
           payload,
           reply,
           displayReply:
-            "已拦截自动写入请求。请先在左侧审批面板核对 patch，再使用“让 agent 执行”按钮完成写入。",
+            "已拦截自动写入请求。请先在对话区审批区核对 patch，再使用「让 agent 执行」完成写入。",
           displayReasoning,
           target,
           toolLogs,
-          streamedRelay: target?.kind === "backend-relay"
+          streamedRelay: target?.kind === "backend-relay",
+          traceRounds
         };
       }
       const execResult = await executeAgentTool({ tool: toolCall.tool, args: toolCall.args || {} });
       toolLogs.push({ call: toolCall, result: execResult });
+      flushTrace(displayReply, displayReasoning, toolCall, execResult);
       if (toolCall.tool === "agent.apply_patch_with_approval" && execResult && execResult.status === "ok") {
         continuationSuffix = finalizeAfterMutation;
       } else if (toolCall.tool === "agent.rollback_run_config" && execResult && execResult.status === "ok") {
@@ -372,33 +465,26 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
     throw new Error("工具调用达到上限，请缩小问题范围后重试。");
   };
 
-  const applyPreviewResponseToUi = (preview, terminalOut, source) => {
-    setApprovalBody(
-      `${preview.patch_yaml || ""}\n\n--- merged_preview ---\n${JSON.stringify(preview.merged_preview || {}, null, 2)}`
-    );
+  const applyPreviewResponseToUi = (preview, source) => {
+    const cs = preview.change_summary && typeof preview.change_summary === "object" ? preview.change_summary : null;
+    setApprovalChangeSummary(cs);
     setApprovalToken(preview.approval_token || "");
     setApprovalRunId(String(preview.run_id || "default"));
     setApprovalRequestHash(String(preview.request_hash || ""));
     setApprovalOpen(true);
-    const suffix =
-      source === "tool"
-        ? "已通过工具 agent.preview_patch 签发审批票据；请在左侧栏核对 merged_preview，批准后将写入 configs/distill_config.yaml。"
-        : source === "propose"
-          ? "已根据 agent.propose_patch 的建议调用预览并签发审批票据；请在左侧栏核对 merged_preview，批准后将写入 configs/distill_config.yaml。"
-          : "请在左侧栏查看 YAML 与 merged_preview；批准后将写入 configs/distill_config.yaml。";
-    setOutputText(`${terminalOut}\n\n# --- Patch 预览 ---\n${suffix}`);
+    setMessages((prev) => [...prev, { role: "agent", content: formatChangeSummaryForChat(cs), kind: "config_summary" }]);
     toast(
       source === "tool"
-        ? "已通过工具触发审批预览，可在左侧栏「批准修改训练配置」面板中采纳。"
+        ? "已通过工具触发审批预览，可在对话区「批准修改训练配置」中采纳。"
         : source === "propose"
-          ? "已从 propose_patch 生成审批预览，可在左侧栏「批准修改训练配置」面板中采纳。"
-          : "已生成配置 patch 预览，可在左侧栏「批准修改训练配置」面板中采纳或让 Agent 执行。",
+          ? "已从 propose_patch 生成审批预览，可在对话区「批准修改训练配置」中采纳。"
+          : "已生成配置 patch 预览，可在对话区「批准修改训练配置」中采纳或让 Agent 执行。",
       "success"
     );
   };
 
   /** 从工具链中的 agent.preview_patch 结果同步审批票据（与仅解析回复 Markdown 互补） */
-  const syncApprovalFromToolLogs = (toolLogs, terminalOut) => {
+  const syncApprovalFromToolLogs = (toolLogs) => {
     if (!Array.isArray(toolLogs) || !toolLogs.length) return false;
     for (let i = toolLogs.length - 1; i >= 0; i -= 1) {
       const { call, result } = toolLogs[i];
@@ -409,7 +495,7 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
       const tok = result.approval_token;
       if (!tok) continue;
       if (result.status && result.status !== "ok") continue;
-      applyPreviewResponseToUi(result, terminalOut || "", "tool");
+      applyPreviewResponseToUi(result, "tool");
       return true;
     }
     return false;
@@ -419,7 +505,7 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
    * agent.propose_patch 只返回建议 patch，不签发审批令牌；此处代为调用 /api/agent/patch/preview。
    * 工具响应形态：{ status, tool, result: { goal, patch, need_approval } }
    */
-  const syncProposePatchViaPreview = async (toolLogs, terminalOut) => {
+  const syncProposePatchViaPreview = async (toolLogs) => {
     if (!Array.isArray(toolLogs) || !toolLogs.length) return false;
     for (let i = toolLogs.length - 1; i >= 0; i -= 1) {
       const { call, result } = toolLogs[i];
@@ -441,7 +527,7 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
           operator: "agent",
           reason: "agent.propose_patch"
         });
-        applyPreviewResponseToUi(preview, terminalOut || "", "propose");
+        applyPreviewResponseToUi(preview, "propose");
         return true;
       } catch (error) {
         toast(`无法从 propose_patch 生成审批预览: ${error.message}`, "error");
@@ -465,7 +551,7 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
     if (!patch) return;
     try {
       const preview = await previewAgentPatch({ patch });
-      applyPreviewResponseToUi(preview, formatAgentTerminalOutput(replyText, []), "markdown");
+      applyPreviewResponseToUi(preview, "markdown");
     } catch (error) {
       setMessages((prev) => [...prev, { role: "agent", content: `Patch 校验失败: ${error.message}` }]);
       toast(`Patch 校验失败: ${error.message}`, "error");
@@ -478,13 +564,15 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
       toast("请先填写 Agent API 地址", "warning");
       return;
     }
+    chatStickToBottomRef.current = true;
     setLoading(true);
     if (clearInput) setInput("");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     try {
-      const { payload, reply, displayReply, displayReasoning, target, toolLogs, streamedRelay } = await runAgentWithTools({
-        userText: text
-      });
+      const { payload, reply, displayReply, displayReasoning, target, toolLogs, streamedRelay, traceRounds } =
+        await runAgentWithTools({
+          userText: text
+        });
       const data = payload;
       if (!streamedRelay) {
         const names = toolLogs.map((t) => t.call.tool);
@@ -494,26 +582,37 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
             role: "agent",
             content: displayReply,
             toolsUsed: names,
-            ...(displayReasoning ? { reasoningApi: displayReasoning } : {})
+            ...(displayReasoning ? { reasoningApi: displayReasoning } : {}),
+            ...(traceRounds?.length ? { traceRounds } : {})
           }
         ]);
       }
-      const terminalOut = formatAgentTerminalOutput(displayReply, toolLogs);
-      setOutputText(terminalOut);
       if (target.kind === "openai") {
         toast("已通过 OpenAI 兼容接口完成请求", "success");
       } else if (target.kind === "backend-relay") {
         toast("已通过本地中转完成请求（已绕过浏览器跨域）", "success");
       }
-      /* 已成功 apply/rollback 时：不得再跑 syncApprovalFromToolLogs，否则会命中同一条 toolLogs 里更早的 preview_patch，再次打开审批侧栏（死循环） */
+      /* 已成功 apply/rollback 时：不得再跑 syncApprovalFromToolLogs，否则会命中同一条 toolLogs 里更早的 preview_patch，再次打开对话区审批（死循环） */
       const configMutationDone = toolLogs.some(
         (t) =>
           (t.call?.tool === "agent.apply_patch_with_approval" || t.call?.tool === "agent.rollback_run_config") &&
           t.result?.status === "ok"
       );
+      if (configMutationDone) {
+        for (let i = toolLogs.length - 1; i >= 0; i -= 1) {
+          const { call, result } = toolLogs[i];
+          if (!result || result.status !== "ok") continue;
+          if (call?.tool === "agent.rollback_run_config" && result.config && typeof result.config === "object") {
+            const mt =
+              typeof result.file_mtime_ns === "number" ? { file_mtime_ns: result.file_mtime_ns } : {};
+            broadcastDistillConfigUpdate(result.config, "agent-chat-rollback", mt);
+            break;
+          }
+        }
+      }
       if (!configMutationDone) {
-        if (!syncApprovalFromToolLogs(toolLogs, terminalOut)) {
-          if (!(await syncProposePatchViaPreview(toolLogs, terminalOut))) {
+        if (!syncApprovalFromToolLogs(toolLogs)) {
+          if (!(await syncProposePatchViaPreview(toolLogs))) {
             await maybeHandlePatch(data, reply);
           }
         }
@@ -557,79 +656,6 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
     }
   };
 
-  const loadSchema = async () => {
-    try {
-      const data = await fetchAgentConfigSchema();
-      setOutputText(JSON.stringify(data, null, 2));
-      toast("已加载配置结构", "success");
-    } catch (error) {
-      toast(error.message, "error");
-    }
-  };
-
-  const parseClipboardPatch = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      const patch = extractPatchFromResult(null, text);
-      if (!patch) return toast("剪贴板中未识别到 patch", "warning");
-      await maybeHandlePatch({ patch }, "");
-    } catch {
-      toast("无法读取剪贴板（需浏览器权限）", "warning");
-    }
-  };
-
-  const generateMetricsReport = async () => {
-    try {
-      let trainStatus = null;
-      try {
-        trainStatus = await fetchTrainStatus();
-      } catch {
-        trainStatus = null;
-      }
-      if (trainStatus?.running) {
-        toast("训练尚未结束，已阻止生成基于未完成结果的指标报告。", "warning");
-        return;
-      }
-      let sourcePath = (metricsCsvPath || "").trim();
-      if (!sourcePath) {
-        const list = await fetchMetricsList();
-        const available = Array.isArray(list.csv_metrics) ? list.csv_metrics.filter((x) => x.has_results) : [];
-        if (!available.length) {
-          toast("暂无训练结果（未找到 results.csv），无法生成指标快照", "warning");
-          return;
-        }
-        sourcePath = available[0].path;
-      }
-      const data = await fetchMetricsBySource(sourcePath);
-      if (data?.error) {
-        toast(`生成报告失败: ${data.error}`, "error");
-        return;
-      }
-      const stats = data?.overview_stats || {};
-      const summary = data?.summary_metrics || {};
-      const map50 = stats["ov-map50"] || "--";
-      const modelSize = stats["ov-model-size"] || "--";
-      const params = stats["ov-params"] || "--";
-      const flops = stats["ov-flops"] || "--";
-      const trainTime = stats["ov-time"] || "--";
-      const report = [
-        "训练指标分析报告",
-        `- mAP50: ${map50}`,
-        `- 模型大小: ${modelSize}`,
-        `- 参数量: ${params}`,
-        `- FLOPs: ${flops}`,
-        `- 训练时长: ${trainTime}`,
-        "",
-        "关键指标摘要:",
-        JSON.stringify(summary, null, 2)
-      ].join("\n");
-      setOutputText(report);
-      toast("分析报告已生成，请在右侧输出查看详情。", "success");
-    } catch (error) {
-      toast(`生成报告失败: ${error.message}`, "error");
-    }
-  };
-
   const sendAgentExecuteApproval = async () => {
     if (!approvalToken) {
       toast("暂无待执行的审批票据", "warning");
@@ -646,18 +672,30 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
         }
       });
       setApprovalOpen(false);
+      setApprovalChangeSummary(null);
       setApprovalToken("");
       setApprovalRunId("default");
       setApprovalRequestHash("");
-      setOutputText(
-        [
-          "# 已通过工具执行写入",
-          "agent.apply_patch_with_approval",
-          "",
-          JSON.stringify(execResult, null, 2)
-        ].join("\n")
-      );
       toast("已执行 agent.apply_patch_with_approval", "success");
+      let cfgToBroadcast = execResult?.config;
+      let mtimeExtra = {};
+      if (typeof execResult?.file_mtime_ns === "number") {
+        mtimeExtra = { file_mtime_ns: execResult.file_mtime_ns };
+      }
+      if (!cfgToBroadcast || typeof cfgToBroadcast !== "object") {
+        try {
+          const data = await fetchDistillConfig();
+          cfgToBroadcast = data?.config;
+          if (typeof data?.file_mtime_ns === "number") {
+            mtimeExtra = { file_mtime_ns: data.file_mtime_ns };
+          }
+        } catch {
+          cfgToBroadcast = null;
+        }
+      }
+      if (cfgToBroadcast && typeof cfgToBroadcast === "object") {
+        broadcastDistillConfigUpdate(cfgToBroadcast, "agent-ui-apply", mtimeExtra);
+      }
     } catch (error) {
       toast(`执行失败: ${error.message}`, "error");
     }
@@ -675,25 +713,25 @@ function AgentPanel({ toast, active, metricsCsvPath }) {
       loading={loading}
       saveConfig={saveConfig}
       testAgentApi={testAgentApi}
-      loadSchema={loadSchema}
-      parseClipboardPatch={parseClipboardPatch}
-      generateMetricsReport={generateMetricsReport}
       approvalOpen={approvalOpen}
-      approvalBody={approvalBody}
-      onCloseApproval={() => setApprovalOpen(false)}
+      approvalChangeSummary={approvalChangeSummary}
+      onCloseApproval={() => {
+        setApprovalOpen(false);
+        setApprovalChangeSummary(null);
+      }}
       sendAgentExecuteApproval={sendAgentExecuteApproval}
       approvalToken={approvalToken}
       sendPresetMessage={sendPresetMessage}
       messages={messages}
       onClearMessages={() => setMessages([])}
+      onExportSession={exportAgentSession}
+      relayReasoningHint={!/^https?:\/\//i.test(String(apiUrl || "").trim())}
       chatMessagesRef={chatMessagesRef}
       chatTextareaRef={chatTextareaRef}
       input={input}
       setInput={setInput}
       resizeChatInput={resizeChatInput}
       send={send}
-      outputText={outputText}
-      outputIsPlaceholder={outputText === DEFAULT_AGENT_OUTPUT_PLACEHOLDER}
     />
   );
 }

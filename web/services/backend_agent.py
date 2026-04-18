@@ -30,6 +30,7 @@ _AGENT_PATCH_TTL = 600.0
 _agent_patch_store = {}
 
 _AGENT_ALLOWED_TOP_LEVEL = frozenset({'distillation', 'training', 'output'})
+_AGENT_PATCH_TOP_ORDER = ('distillation', 'training', 'output')
 
 _AGENT_MAX_ROLLBACKS_PER_RUN = 5
 
@@ -93,6 +94,121 @@ def _merge_distill_patch(base: dict, patch: dict) -> dict:
         cur = merged.get(top)
         merged[top] = _deep_merge_shallow(cur if isinstance(cur, dict) else {}, sub)
     return merged
+
+
+def _serialize_diff_value(val: Any) -> Any:
+    """JSON 友好、适合前端展示的叶子值。"""
+    if val is None:
+        return None
+    if isinstance(val, (bool, int, float, str)):
+        return val
+    try:
+        json.dumps(val, ensure_ascii=False)
+        return val
+    except (TypeError, ValueError):
+        return repr(val)
+
+
+def _leaf_config_diff(base: dict | None, merged: dict | None) -> dict[str, Any]:
+    """
+    对比合并前后的 distill 配置，产出叶子级路径变更（仅 distillation / training / output）。
+    path 使用点号连接，如 training.lr0。
+    """
+    rows: list[dict[str, Any]] = []
+
+    def walk(b: Any, m: Any, path: str) -> None:
+        if isinstance(b, dict) and isinstance(m, dict):
+            keys = set(b.keys()) | set(m.keys())
+            for k in sorted(keys, key=lambda x: str(x)):
+                sub_path = f'{path}.{k}' if path else str(k)
+                if k not in b:
+                    walk(None, m[k], sub_path)
+                elif k not in m:
+                    walk(b[k], None, sub_path)
+                else:
+                    walk(b[k], m[k], sub_path)
+            return
+        if b is None and isinstance(m, dict):
+            for k in sorted(m.keys(), key=lambda x: str(x)):
+                sub_path = f'{path}.{k}' if path else str(k)
+                walk(None, m[k], sub_path)
+            return
+        if m is None and isinstance(b, dict):
+            for k in sorted(b.keys(), key=lambda x: str(x)):
+                sub_path = f'{path}.{k}' if path else str(k)
+                walk(b[k], None, sub_path)
+            return
+        if b == m:
+            return
+        if b is None:
+            kind = 'added'
+        elif m is None:
+            kind = 'removed'
+        else:
+            kind = 'changed'
+        rows.append({
+            'path': path or '(root)',
+            'kind': kind,
+            'before': _serialize_diff_value(b),
+            'after': _serialize_diff_value(m),
+        })
+
+    b0 = base if isinstance(base, dict) else {}
+    m0 = merged if isinstance(merged, dict) else {}
+    for top in sorted(_AGENT_ALLOWED_TOP_LEVEL):
+        if top not in b0 and top not in m0:
+            continue
+        if top not in b0:
+            walk(None, m0[top], top)
+        elif top not in m0:
+            walk(b0[top], None, top)
+        else:
+            walk(b0[top], m0[top], top)
+
+    return {
+        'paths': rows,
+        'stats': {
+            'changed': len(rows),
+        },
+    }
+
+
+def _collect_leaf_paths_from_patch(patch: dict | None) -> set[str]:
+    """Patch 中显式出现的叶子路径（点号），用于审批摘要仅反映 Agent 声明要改动的键。"""
+    out: set[str] = set()
+
+    def walk(obj: Any, prefix: str) -> None:
+        if not isinstance(obj, dict):
+            return
+        for k, v in obj.items():
+            sub_path = f'{prefix}.{k}' if prefix else str(k)
+            if isinstance(v, dict) and v:
+                walk(v, sub_path)
+            else:
+                out.add(sub_path)
+
+    if not isinstance(patch, dict):
+        return out
+    for top in _AGENT_PATCH_TOP_ORDER:
+        if top not in patch:
+            continue
+        sub = patch[top]
+        if isinstance(sub, dict):
+            walk(sub, top)
+        else:
+            out.add(top)
+    return out
+
+
+def _filter_change_summary_to_patch_declared(change_summary: dict, patch: dict) -> dict:
+    """仅保留 patch 叶子路径上的 diff 行，避免审批表列出未在 patch 中声明的字段（含类型漂移导致的伪差异）。"""
+    allowed = _collect_leaf_paths_from_patch(patch)
+    paths = [r for r in (change_summary.get('paths') or []) if isinstance(r, dict) and r.get('path') in allowed]
+    return {
+        'paths': paths,
+        'stats': {'changed': len(paths)},
+    }
+
 
 def _agent_record_history(run_id: str, before_cfg: dict, after_cfg: dict, operator: str, reason: str, action: str) -> dict:
     hist = _agent_load_history(run_id)
@@ -228,6 +344,64 @@ def _agent_analyze_params(run_id: str, objective: str, config_name: str = 'disti
         advice.append({'focus': '通用优化', 'suggestion': '先小步调整 alpha_init、w_kd、lr0 并观察曲线', 'risk': '需多轮试验'})
     return {'run_id': _safe_run_id(run_id), 'objective': objective, 'analysis': advice, 'need_approval': True, 'context': ctx}
 
+
+def _bump_declared_leaf(v: Any) -> Any | None:
+    """对「补丁声明值与磁盘相同」的叶子做极小变更，便于产生可审批 diff；无法处理则返回 None。"""
+    if isinstance(v, bool):
+        return not v
+    if isinstance(v, int) and not isinstance(v, bool):
+        return int(v) + 1
+    if isinstance(v, float):
+        return float(v) + 1e-6 if v != 0.0 else 1e-6
+    return None
+
+
+def _single_leaf_epsilon_declared_patch(base: dict, declared: dict) -> dict:
+    """
+    当声明的 patch 与磁盘合并后无差异时，仅在 **declared 中已出现的叶子路径** 上改一个字段，
+    不引入任何未在 declared 中出现的键（避免审批 kd 却写入 temperature 等）。
+    遍历顺序：distillation → training → output；段内键名按字典序，先命中先 bump。
+    """
+    if not isinstance(declared, dict) or not declared:
+        return {}
+    for top in _AGENT_PATCH_TOP_ORDER:
+        if top not in declared or top not in _AGENT_ALLOWED_TOP_LEVEL:
+            continue
+        sub = declared[top]
+        if not isinstance(sub, dict):
+            cur = base.get(top)
+            if cur == sub:
+                b = _bump_declared_leaf(sub)
+                if b is not None:
+                    return {top: b}
+            continue
+        base_sub = base.get(top) if isinstance(base.get(top), dict) else {}
+        for k in sorted(sub.keys()):
+            v = sub[k]
+            if isinstance(v, dict):
+                base_inner = base_sub.get(k) if isinstance(base_sub.get(k), dict) else {}
+                if not isinstance(base_inner, dict):
+                    base_inner = {}
+                for k2 in sorted(v.keys()):
+                    v2 = v[k2]
+                    if isinstance(v2, dict):
+                        continue
+                    cur2 = base_inner.get(k2) if isinstance(base_inner, dict) else None
+                    if cur2 != v2:
+                        continue
+                    b2 = _bump_declared_leaf(v2)
+                    if b2 is not None:
+                        return {top: {k: {k2: b2}}}
+                continue
+            cur = base_sub.get(k) if isinstance(base_sub, dict) else None
+            if cur != v:
+                continue
+            b = _bump_declared_leaf(v)
+            if b is not None:
+                return {top: {k: b}}
+    return {}
+
+
 def _agent_propose_patch(goal: str = '', constraints: dict | None = None) -> dict:
     c = constraints or {}
     low_goal = str(goal or '').lower()
@@ -245,8 +419,21 @@ def _agent_propose_patch(goal: str = '', constraints: dict | None = None) -> dic
     elif any(x in low_goal for x in ('accuracy', 'map', '精度')):
         patch = {'training': {'epochs': 200}, 'distillation': {'w_kd': 0.6, 'w_focal': 0.35}}
     else:
-        # 兜底给出最小可审批补丁，避免前端因空 patch 无法进入审批流程
-        patch = {'training': {'epochs': 120}, 'distillation': {'w_kd': 0.55}}
+        # 兜底仅触及蒸馏侧 kd 权重，避免无端带上 training 等未讨论字段
+        patch = {'distillation': {'w_kd': 0.55}}
+    path = CONFIG_DIR / 'distill_config.yaml'
+    base_dbg = _load_yaml_file(path) or {}
+    declared_snapshot = copy.deepcopy(patch)
+    try:
+        merged_dbg = _merge_distill_patch(base_dbg, patch)
+        cs_dbg = _leaf_config_diff(base_dbg, merged_dbg)
+        if not (cs_dbg.get('paths') or []):
+            eps = _single_leaf_epsilon_declared_patch(base_dbg, declared_snapshot)
+            if eps:
+                patch = eps
+                _merge_distill_patch(base_dbg, patch)
+    except Exception:
+        pass
     return {'goal': goal, 'patch': patch, 'need_approval': True}
 
 def _extract_openai_text(data: Any) -> str:
@@ -503,19 +690,6 @@ def _agent_invoke_model(payload: AgentModelInvokeRequest) -> dict:
         return _invoke_model_custom(payload)
     raise ValueError(f'不支持的 provider: {provider}')
 
-def agent_config_schema():
-    """供外部 LLM / Agent 与前端对齐：当前 distill 配置与允许改动的顶层分区。"""
-    path = CONFIG_DIR / 'distill_config.yaml'
-    cfg = _load_yaml_file(path) or {}
-    return {
-        'status': 'ok',
-        'config_file': 'distill_config.yaml',
-        'allowed_top_level': sorted(_AGENT_ALLOWED_TOP_LEVEL),
-        'current': cfg,
-        'tool_contract_version': AGENT_TOOL_CONTRACT_VERSION,
-        'hint': '外部 Agent 请在 JSON 中返回 patch 字段；用户在前端确认后调用 /api/agent/patch/preview 再 /api/agent/patch/apply。',
-    }
-
 def agent_patch_validate(payload: AgentPatchValidateRequest):
     result = _agent_validate_patch(payload.patch, strict=bool(payload.strict))
     return {'status': 'ok', **result}
@@ -552,6 +726,8 @@ def agent_patch_preview(payload: AgentPatchPreviewRequest):
         'expires': time.time() + _AGENT_PATCH_TTL,
     }
     patch_yaml = yaml.dump(patch, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    change_summary_raw = _leaf_config_diff(base, merged)
+    change_summary = _filter_change_summary_to_patch_declared(change_summary_raw, patch)
     return {
         'status': 'ok',
         'approval_token': tok,
@@ -562,6 +738,7 @@ def agent_patch_preview(payload: AgentPatchPreviewRequest):
         'patch_yaml': patch_yaml,
         'merged_preview': merged,
         'validation': valid_result,
+        'change_summary': change_summary,
     }
 
 def agent_patch_apply(payload: AgentPatchApplyRequest):
@@ -599,12 +776,17 @@ def agent_patch_apply(payload: AgentPatchApplyRequest):
             reason=payload.reason or rec.get('reason') or '',
             action='apply_patch',
         )
+        try:
+            file_mtime_ns = int(out_path.stat().st_mtime_ns)
+        except OSError:
+            file_mtime_ns = 0
         return {
             'status': 'ok',
             'message': '已写入 configs/distill_config.yaml',
             'config': merged,
             'run_id': expect_run_id,
             'history_version': hist_rec.get('version'),
+            'file_mtime_ns': file_mtime_ns,
         }
     except Exception as e:
         return _error(str(e), 500)
@@ -660,12 +842,17 @@ def agent_run_rollback(run_id: str, payload: AgentRunHistoryRollbackRequest):
             reason=payload.reason,
             action=f'rollback_to_v{target.get("version")}',
         )
+        try:
+            file_mtime_ns = int(out_path.stat().st_mtime_ns)
+        except OSError:
+            file_mtime_ns = 0
         return {
             'status': 'ok',
             'run_id': rid,
             'rolled_back_to_version': target.get('version'),
             'history_version': new_rec.get('version'),
             'config': restore_cfg,
+            'file_mtime_ns': file_mtime_ns,
         }
     except Exception as e:
         return _error(str(e), 500)

@@ -1,12 +1,22 @@
 import { TextField } from "../../components/forms/TextField";
-import { AGENT_QUICK_PROMPTS } from "./agentHelpers";
+import { AGENT_QUICK_PROMPTS, softenAgentBubbleText } from "./agentHelpers";
 
-function ChatBubbleBody({ role, content, reasoningApi, toolsUsed, streaming }) {
-  const text = content ?? "";
+function ChatBubbleBody({ role, content, reasoningApi, toolsUsed, streaming, messageKind, traceRounds, relayMayMissReasoning }) {
+  const rawText = content ?? "";
+  const text =
+    role === "agent" && messageKind !== "config_summary" ? softenAgentBubbleText(rawText, !!streaming) : rawText;
   const reasoningText = typeof reasoningApi === "string" && reasoningApi.trim() ? reasoningApi.trim() : "";
   const tools = Array.isArray(toolsUsed) ? toolsUsed.filter(Boolean) : [];
+  const rounds = Array.isArray(traceRounds) ? traceRounds : [];
   if (role !== "agent") {
     return <div className="chat-plain chat-pre-wrap">{text}</div>;
+  }
+  if (messageKind === "config_summary") {
+    return (
+      <div className="agent-bubble-config-summary chat-pre-wrap">
+        {text}
+      </div>
+    );
   }
   const parts = [];
   const fenceRe = /```([^\n`]*)\n?([\s\S]*?)```/g;
@@ -63,6 +73,32 @@ function ChatBubbleBody({ role, content, reasoningApi, toolsUsed, streaming }) {
           </summary>
           <pre className="agent-reasoning-pre">{reasoningText}</pre>
         </details>
+      ) : relayMayMissReasoning ? (
+        <p className="agent-reasoning-missing">本连接未返回思考字段（非流式中继时部分服务商不提供）。</p>
+      ) : null}
+      {rounds.length > 0 ? (
+        <details className="agent-trace-details">
+          <summary className="agent-trace-summary">回合轨迹（可回溯）</summary>
+          <ol className="agent-trace-list">
+            {rounds.map((r, tidx) => (
+              <li key={`trace-${tidx}-${r.round}`} className="agent-trace-item">
+                <div className="agent-trace-round-title">第 {r.round} 轮</div>
+                {r.reasoning ? <pre className="agent-trace-pre">{r.reasoning}</pre> : null}
+                <div className="agent-trace-reply-snippet">{typeof r.reply === "string" ? r.reply.slice(0, 2000) : ""}</div>
+                <div className="agent-trace-tool">
+                  {r.tool?.name ? (
+                    <>
+                      <span className="agent-trace-tool-label">工具: {r.tool.name}</span>
+                      <pre className="agent-trace-pre">{JSON.stringify(r.toolResultSummary ?? {}, null, 2)}</pre>
+                    </>
+                  ) : (
+                    <span className="agent-trace-tool-none">本回合未通过 JSON 触发工具</span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </details>
       ) : null}
       {reasoningText ? <div className="agent-answer-body">{answerBlock}</div> : answerBlock}
     </div>
@@ -80,25 +116,22 @@ function AgentPanelView({
   loading,
   saveConfig,
   testAgentApi,
-  loadSchema,
-  parseClipboardPatch,
-  generateMetricsReport,
   approvalOpen,
-  approvalBody,
+  approvalChangeSummary,
   onCloseApproval,
   sendAgentExecuteApproval,
   approvalToken,
   sendPresetMessage,
   messages,
   onClearMessages,
+  onExportSession = () => {},
+  relayReasoningHint = false,
   chatMessagesRef,
   chatTextareaRef,
   input,
   setInput,
   resizeChatInput,
-  send,
-  outputText,
-  outputIsPlaceholder
+  send
 }) {
   return (
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-agent" aria-hidden={!active}>
@@ -120,63 +153,10 @@ function AgentPanelView({
                 <span className="material-icons">bolt</span>测试连接
               </button>
             </div>
-            <div className="agent-sidebar-aux-tools">
-              <button type="button" className="md-btn md-btn-tonal md-btn-compact" onClick={loadSchema} disabled={loading}>
-                <span className="material-icons">schema</span>配置结构
-              </button>
-              <button type="button" className="md-btn md-btn-outlined md-btn-compact" onClick={parseClipboardPatch} disabled={loading}>
-                <span className="material-icons">content_paste</span>剪贴板 Patch
-              </button>
-              <button type="button" className="md-btn md-btn-tonal md-btn-compact" onClick={generateMetricsReport} disabled={loading}>
-                <span className="material-icons">summarize</span>指标快照
-              </button>
-            </div>
-          </div>
-          <div
-            className="agent-approval-sidebar agent-approval-sidebar-frame md3-surface-container"
-            role="region"
-            aria-labelledby="agent-approval-dialog-title"
-          >
-            {approvalOpen ? (
-              <>
-                <h2 id="agent-approval-dialog-title" className="md-dialog-title md3-dialog-headline">
-                  批准修改训练配置？
-                </h2>
-                <p className="md-dialog-support md3-dialog-supporting">
-                  确认后请使用下方按钮让 Agent 调用工具写入 configs/distill_config.yaml 并刷新训练配置表单。
-                </p>
-                <pre className="md-dialog-pre md3-dialog-body-scroll">{approvalBody}</pre>
-                <div className="md-dialog-actions md3-dialog-actions agent-approval-sidebar-actions">
-                  <button type="button" className="md-btn md-btn-text" onClick={onCloseApproval}>
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    className="md-btn md-btn-filled primary md-btn-compact"
-                    onClick={sendAgentExecuteApproval}
-                    disabled={loading || !approvalToken}
-                  >
-                    <span className="material-icons">smart_toy</span>让 agent 执行
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h2 id="agent-approval-dialog-title" className="md-dialog-title agent-approval-sidebar-idle-title">
-                  <span className="material-icons" aria-hidden>
-                    verified_user
-                  </span>
-                  审批区
-                </h2>
-                <p className="tools-desc agent-approval-sidebar-idle-desc">
-                  外部 Agent 返回的 patch 仅预览；通过预览签发票据后，将在此显示 YAML 与 merged_preview，并可使用「让 agent 执行」写入配置。
-                </p>
-              </>
-            )}
           </div>
           <div className="agent-common-tools md3-surface-container">
             <h4 className="tools-title"><span className="material-icons">build</span>常用工具</h4>
-            <p className="tools-desc">点击后将对应问句发送到左侧对话，并自动请求 Agent；右侧输出优先展示可复制的终端命令。</p>
+            <p className="tools-desc">点击后将对应问句发送到对话，并自动请求 Agent。</p>
             <div className="tools-actions" style={{ flexWrap: "wrap" }}>
               {AGENT_QUICK_PROMPTS.map((p) => (
                 <button
@@ -198,6 +178,15 @@ function AgentPanelView({
             <div className="chat-header">
               <h3><span className="material-icons">chat</span>对话</h3>
               <div className="chat-controls">
+                <button
+                  type="button"
+                  className="btn-icon-sm"
+                  title="导出会话 JSON（审计）"
+                  onClick={onExportSession}
+                  aria-label="导出会话"
+                >
+                  <span className="material-icons">download</span>
+                </button>
                 <button className="btn-icon-sm" onClick={onClearMessages}><span className="material-icons">delete_sweep</span></button>
               </div>
             </div>
@@ -214,6 +203,11 @@ function AgentPanelView({
                       reasoningApi={msg.reasoningApi}
                       toolsUsed={msg.toolsUsed}
                       streaming={msg.streaming}
+                      messageKind={msg.kind}
+                      traceRounds={msg.traceRounds}
+                      relayMayMissReasoning={
+                        msg.role === "agent" && relayReasoningHint && !msg.reasoningApi && !msg.kind
+                      }
                     />
                   </div>
                 </div>
@@ -225,6 +219,60 @@ function AgentPanelView({
                 </div>
               ) : null}
             </div>
+            {approvalOpen ? (
+              <div
+                className="agent-approval-in-chat agent-approval-sidebar-frame md3-surface-container"
+                role="region"
+                aria-labelledby="agent-approval-dialog-title"
+              >
+                <h2 id="agent-approval-dialog-title" className="md-dialog-title md3-dialog-headline">
+                  批准修改训练配置？
+                </h2>
+                <p className="md-dialog-support md3-dialog-supporting">
+                  确认后请使用下方按钮让 Agent 调用工具写入 configs/distill_config.yaml 并刷新训练配置表单。
+                </p>
+                {approvalChangeSummary && Array.isArray(approvalChangeSummary.paths) && approvalChangeSummary.paths.length > 0 ? (
+                  <div className="agent-approval-diff-wrap">
+                    <h3 className="agent-approval-diff-title">变更摘要（服务端核对）</h3>
+                    <table className="agent-approval-diff-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">字段</th>
+                          <th scope="col">类型</th>
+                          <th scope="col">旧值</th>
+                          <th scope="col">新值</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {approvalChangeSummary.paths.map((row) => (
+                          <tr key={row.path}>
+                            <td className="agent-diff-path">{row.path}</td>
+                            <td>{row.kind || "—"}</td>
+                            <td><code>{row.before === undefined || row.before === null ? "—" : JSON.stringify(row.before)}</code></td>
+                            <td><code>{row.after === undefined || row.after === null ? "—" : JSON.stringify(row.after)}</code></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="agent-approval-diff-empty">未检测到字段级差异（或与当前配置等价）；请结合上方聊天气泡中的摘要确认。</p>
+                )}
+                <div className="md-dialog-actions md3-dialog-actions agent-approval-actions">
+                  <button type="button" className="md-btn md-btn-text" onClick={onCloseApproval}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="md-btn md-btn-filled primary md-btn-compact"
+                    onClick={sendAgentExecuteApproval}
+                    disabled={loading || !approvalToken}
+                  >
+                    <span className="material-icons">smart_toy</span>让 agent 执行
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <div className="chat-input-area">
               <div className="chat-input-wrapper">
                 <div className={`md-field ${input ? "has-value" : ""}`}>
@@ -252,14 +300,6 @@ function AgentPanelView({
                   <span className="material-icons">send</span>
                 </button>
               </div>
-            </div>
-          </div>
-          <div className="agent-status-panel log-card">
-            <div className="status-header log-header">
-              <h3><span className="material-icons">terminal</span>Agent 输出</h3>
-            </div>
-            <div id="agent-output" className="agent-output log-container">
-              <pre id="agent-output-content" className={outputIsPlaceholder ? "agent-output-placeholder" : ""}>{outputText}</pre>
             </div>
           </div>
         </div>

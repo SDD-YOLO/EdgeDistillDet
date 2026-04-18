@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   checkOutputPath,
   fetchDistillConfig,
@@ -13,9 +14,39 @@ import { NumberField } from "../../components/forms/NumberField";
 import { PathField } from "../../components/forms/PathField";
 import { SelectField } from "../../components/forms/SelectField";
 import { TextField } from "../../components/forms/TextField";
+import { DISTILL_CONFIG_UPDATED_EVENT } from "../../constants/distillConfigSync";
 import { DEFAULT_FORM, COMPUTE_PRESETS, inferComputeProviderFromConfig } from "../../constants/trainingDefaults";
 import { detectLogLevel } from "../../utils/logging";
 import { formatTime } from "../../utils/time";
+
+function normalizeWandbForUi(wandb) {
+  if (!wandb || typeof wandb !== "object") return wandb;
+  const next = { ...wandb };
+  if (Array.isArray(next.tags)) {
+    next.tags = next.tags.map((t) => String(t).trim()).filter(Boolean).join(", ");
+  }
+  return next;
+}
+
+/** 将服务端/Agent 返回的 distill 配置片段合并进表单 state（与 mergeConfig 行为一致） */
+function mergeDistillConfigIntoForm(prev, config) {
+  if (!config || typeof config !== "object") return prev;
+  const inferredProvider = inferComputeProviderFromConfig(config, prev.training?.compute_provider || "local");
+  return {
+    ...prev,
+    ...config,
+    distillation: { ...prev.distillation, ...config?.distillation },
+    training: {
+      ...prev.training,
+      ...config?.training,
+      cloud_api: { ...prev.training?.cloud_api, ...config?.training?.cloud_api },
+      dataset_api: { ...prev.training?.dataset_api, ...config?.training?.dataset_api },
+      compute_provider: inferredProvider
+    },
+    output: { ...prev.output, ...config?.output },
+    wandb: { ...prev.wandb, ...normalizeWandbForUi(config?.wandb) }
+  };
+}
 
 function TrainingPanel({ toast, active }) {
   const [form, setForm] = useState(DEFAULT_FORM);
@@ -39,6 +70,8 @@ function TrainingPanel({ toast, active }) {
   const overlapAlertShownRef = useRef("");
   const outputNameInputRef = useRef(null);
   const pendingOverlapAlertRef = useRef(false);
+  /** 与 `configs/distill_config.yaml` 磁盘 mtime 对齐，用于检测 Agent 等外部写入 */
+  const distillFileMtimeNsRef = useRef(0);
   const isRemoteApi = form.training.compute_provider === "remote_api";
   const datasetSource = form.training?.dataset_api?.source || (form.training?.dataset_api?.enabled ? "api" : "path");
   const useDatasetApi = isRemoteApi && datasetSource === "api";
@@ -59,14 +92,6 @@ function TrainingPanel({ toast, active }) {
         [section]: { ...prev.training?.[section], ...patch }
       }
     }));
-  };
-
-  const normalizeWandbForUi = (wandb) => {
-    const next = { ...wandb };
-    if (Array.isArray(next.tags)) {
-      next.tags = next.tags.map((t) => String(t).trim()).filter(Boolean).join(", ");
-    }
-    return next;
   };
 
   const buildConfigPayload = (sourceForm) => {
@@ -96,27 +121,31 @@ function TrainingPanel({ toast, active }) {
   };
 
   const mergeConfig = (config) => {
-    const inferredProvider = inferComputeProviderFromConfig(config, form.training?.compute_provider || "local");
-    setForm((prev) => ({
-      ...prev,
-      ...config,
-      distillation: { ...prev.distillation, ...config?.distillation },
-      training: {
-        ...prev.training,
-        ...config?.training,
-        cloud_api: { ...prev.training?.cloud_api, ...config?.training?.cloud_api },
-        dataset_api: { ...prev.training?.dataset_api, ...config?.training?.dataset_api },
-        compute_provider: inferredProvider
-      },
-      output: { ...prev.output, ...config?.output },
-      wandb: { ...prev.wandb, ...normalizeWandbForUi(config?.wandb) }
-    }));
+    setForm((prev) => mergeDistillConfigIntoForm(prev, config));
   };
+
+  useEffect(() => {
+    const onDistillConfigUpdated = (ev) => {
+      const cfg = ev.detail?.config;
+      if (!cfg || typeof cfg !== "object") return;
+      flushSync(() => {
+        setForm((prev) => mergeDistillConfigIntoForm(prev, cfg));
+      });
+      if (typeof ev.detail?.file_mtime_ns === "number") {
+        distillFileMtimeNsRef.current = ev.detail.file_mtime_ns;
+      }
+    };
+    window.addEventListener(DISTILL_CONFIG_UPDATED_EVENT, onDistillConfigUpdated);
+    return () => window.removeEventListener(DISTILL_CONFIG_UPDATED_EVENT, onDistillConfigUpdated);
+  }, []);
 
   const fetchDefaultConfig = async () => {
     try {
       const data = await fetchDistillConfig();
       mergeConfig(data.config || {});
+      if (typeof data.file_mtime_ns === "number") {
+        distillFileMtimeNsRef.current = data.file_mtime_ns;
+      }
     } catch {
       // 使用默认配置
     }
@@ -374,7 +403,10 @@ function TrainingPanel({ toast, active }) {
   }, [currentOutputProject, currentOutputName, isOutputPathOverlap, isResumeMode]);
 
   const saveConfig = async () => {
-    await saveDistillConfig(buildConfigPayload(form));
+    const res = await saveDistillConfig(buildConfigPayload(form));
+    if (res && typeof res.file_mtime_ns === "number") {
+      distillFileMtimeNsRef.current = res.file_mtime_ns;
+    }
   };
 
   const applyComputePreset = (provider) => {
@@ -435,7 +467,22 @@ function TrainingPanel({ toast, active }) {
     }
 
     try {
-      await saveConfig();
+      const data = await fetchDistillConfig();
+      const serverMtime = Number(data.file_mtime_ns) || 0;
+      const localMtime = distillFileMtimeNsRef.current;
+      let merged = form;
+      const diskDrift =
+        (localMtime !== 0 && serverMtime !== localMtime) || (localMtime === 0 && serverMtime > 0);
+      if (diskDrift) {
+        merged = mergeDistillConfigIntoForm(form, data.config || {});
+        flushSync(() => setForm(merged));
+      }
+      const saveRes = await saveDistillConfig(buildConfigPayload(merged));
+      if (saveRes && typeof saveRes.file_mtime_ns === "number") {
+        distillFileMtimeNsRef.current = saveRes.file_mtime_ns;
+      } else if (serverMtime > 0) {
+        distillFileMtimeNsRef.current = serverMtime;
+      }
       const body = { config: "distill_config.yaml", mode };
       if (mode === "resume" && resumeCandidates[selectedResumeIndex]?.checkpoint) {
         body.checkpoint = resumeCandidates[selectedResumeIndex].checkpoint;

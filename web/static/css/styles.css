@@ -40,7 +40,6 @@
     --log-bg: #eef5f4;
     --log-text: #000000;
     --log-empty-text: #000000;
-    --agent-output-empty-text: #2a3232;
     --toast-bg: #0f1c1b;
     --md-surface-container-low: #eff5f4;
     --md-surface-container: #e8efee;
@@ -97,7 +96,6 @@ html.theme-transition * {
     --log-bg: #0a0f0f;
     --log-text: #9db5b4;
     --log-empty-text: #c8d7d6;
-    --agent-output-empty-text: #d3e2e1;
     --toast-bg: #1d2a29;
     --md-surface-container-low: #171d1d;
     --md-surface-container: #1b2121;
@@ -229,10 +227,47 @@ body {
 
 .console-main {
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: var(--panel-gap);
     padding: 16px var(--content-padding) var(--content-padding);
+}
+
+/* 宽屏：仅主栏滚动，避免依赖 document + sticky（运行时表现为侧栏随 scrollTop 整体上移） */
+@media (min-width: 901px) {
+    html,
+    body {
+        height: 100%;
+        overflow: hidden;
+    }
+
+    #root {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .console-shell {
+        flex: 1 1 0;
+        min-height: 0;
+        height: auto;
+    }
+
+    .console-sidebar {
+        position: static;
+        top: auto;
+        height: auto;
+        max-height: none;
+        align-self: stretch;
+        overflow-y: auto;
+    }
+
+    .console-main {
+        min-height: 0;
+        overflow-y: auto;
+    }
 }
 
 .console-page-header {
@@ -267,6 +302,23 @@ body {
 .console-panels {
     padding: 0 !important;
     width: min(100%, var(--main-max-width));
+}
+
+/* 主内容区占满页眉以下高度，便于 Agent 页对话卡片与视口对齐 */
+.tab-panels.console-panels {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#panel-agent.tab-panel.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
 }
 
 .md-app-bar {
@@ -855,28 +907,16 @@ body {
 .chart-card,
 .overview-card,
 .agent-chat-panel,
-.agent-status-panel,
 .stat-card {
     background: var(--md-surface-container-low);
     border: 1px solid var(--md-outline-variant);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-1);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-}
-
-.config-card:hover,
-.log-card:hover,
-.agent-chat-panel:hover,
-.agent-status-panel:hover {
-    border-color: color-mix(in srgb, var(--md-primary) 30%, var(--md-outline-variant));
-    box-shadow: var(--shadow-2);
-    transform: translateY(-1px);
 }
 
 .config-card,
 .chart-card,
 .agent-chat-panel,
-.agent-status-panel,
 .log-card {
     padding: 16px;
 }
@@ -1851,8 +1891,12 @@ body {
 .agent-layout {
     display: grid;
     grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-rows: 1fr;
     gap: 14px;
-    align-items: start;
+    align-items: stretch;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .agent-sidebar {
@@ -1860,6 +1904,7 @@ body {
     border-radius: var(--radius-lg);
     padding: 14px;
     background: var(--md-surface);
+    align-self: start;
 }
 
 .sidebar-title {
@@ -1939,25 +1984,17 @@ body {
     word-break: break-all;
 }
 
-.agent-sidebar-aux-tools {
-    margin-top: 12px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.agent-sidebar-aux-tools .md-btn {
-    flex: 1 1 auto;
-    min-width: 0;
-}
-
-.agent-approval-sidebar {
-    margin-top: 12px;
+/* 对话卡片内：本地审批（预览 YAML / merged_preview） */
+.agent-approval-in-chat {
+    flex: 0 0 auto;
+    margin: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--md-outline-variant);
     max-width: 100%;
     box-sizing: border-box;
 }
 
-/* 独立边框容器：避免与 .md-dialog-surface 叠用导致层叠/对比度问题；无待审批时也保留可见框线 */
+/* 独立边框容器：避免与 .md-dialog-surface 叠用导致层叠/对比度问题 */
 /* 勿在 border 上使用 color-mix：不支持时整条 border 声明会被丢弃，表现为「没有边框」 */
 .agent-approval-sidebar-frame {
     padding: 14px 14px 12px;
@@ -1967,35 +2004,13 @@ body {
     box-shadow: var(--md-sys-elevation-level1, var(--shadow-1));
 }
 
-.agent-approval-sidebar-idle-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 15px;
-    font-weight: 600;
-    margin: 0 0 8px;
-}
-
-.agent-approval-sidebar-idle-title .material-icons {
-    font-size: 20px;
-    color: var(--md-primary);
-}
-
-.agent-approval-sidebar-idle-desc {
-    margin: 0;
-}
-
-.agent-approval-sidebar .md-dialog-title {
+.agent-approval-in-chat .md-dialog-title {
     font-size: 18px;
     line-height: 24px;
     margin: 0 0 8px;
 }
 
-.agent-approval-sidebar .md-dialog-pre {
-    max-height: min(42vh, 320px);
-}
-
-.agent-approval-sidebar-actions {
+.agent-approval-actions {
     justify-content: flex-start;
 }
 
@@ -2204,12 +2219,17 @@ body {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
 }
 
 .agent-chat-panel {
     display: flex;
     flex-direction: column;
-    min-height: 420px;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .chat-header {
@@ -2230,8 +2250,9 @@ body {
 .chat-messages {
     flex: 1 1 0;
     min-height: 0;
-    max-height: min(58vh, 640px);
     overflow-y: auto;
+    overflow-x: hidden;
+    overflow-anchor: none;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -2250,6 +2271,7 @@ body {
 }
 
 .message-avatar {
+    flex: 0 0 32px;
     width: 32px;
     height: 32px;
     border-radius: 50%;
@@ -2274,10 +2296,8 @@ body {
     padding: 10px 12px;
     font-size: 13px;
     min-width: 0;
-}
-
-.chat-message.agent .message-content {
-    max-width: 100%;
+    flex: 1 1 auto;
+    max-width: min(560px, calc(100% - 40px));
 }
 
 .chat-plain.chat-pre-wrap,
@@ -2364,9 +2384,133 @@ body {
     margin-left: 0;
 }
 
-.agent-output.log-container pre {
+.agent-bubble-config-summary {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--md-outline-variant);
+    background: var(--md-surface-container-high);
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.agent-reasoning-missing {
+    font-size: 12px;
+    color: var(--md-on-surface-variant);
+    margin: 0 0 8px 0;
+    font-style: italic;
+}
+
+.agent-trace-details {
+    margin: 0 0 10px 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--md-outline-variant);
+    background: var(--md-surface-container-low);
+    overflow: hidden;
+}
+
+.agent-trace-summary {
+    cursor: pointer;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--md-on-surface-variant);
+    list-style: none;
+    user-select: none;
+}
+
+.agent-trace-summary::-webkit-details-marker {
+    display: none;
+}
+
+.agent-trace-list {
+    margin: 0;
+    padding: 8px 10px 10px 24px;
+    font-size: 12px;
+    border-top: 1px solid var(--md-outline-variant);
+    background: var(--md-surface);
+}
+
+.agent-trace-item {
+    margin-bottom: 10px;
+}
+
+.agent-trace-round-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.agent-trace-reply-snippet {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 160px;
+    overflow-y: auto;
+    margin: 4px 0;
+    opacity: 0.95;
+}
+
+.agent-trace-tool-label {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.agent-trace-tool-none {
+    font-size: 11px;
+    color: var(--md-on-surface-variant);
+}
+
+.agent-trace-pre {
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--md-surface-container-highest);
+    border-radius: var(--radius-sm);
+    max-height: 140px;
+    overflow-y: auto;
+}
+
+.agent-approval-diff-wrap {
+    margin-bottom: 10px;
+}
+
+.agent-approval-diff-title {
+    font-size: 13px;
+    margin: 0 0 8px 0;
+    font-weight: 600;
+}
+
+.agent-approval-diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+
+.agent-approval-diff-table th,
+.agent-approval-diff-table td {
+    border: 1px solid var(--md-outline-variant);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.agent-approval-diff-table th {
+    background: var(--md-surface-container-high);
+}
+
+.agent-diff-path {
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    word-break: break-all;
+}
+
+.agent-approval-diff-empty {
+    font-size: 12px;
+    color: var(--md-on-surface-variant);
+    margin: 0 0 10px 0;
 }
 
 .chat-message.user .message-content {
@@ -2503,36 +2647,6 @@ body {
     justify-content: center;
 }
 
-.agent-status-panel {
-    min-height: 180px;
-}
-
-.status-header h4 {
-    margin: 0 0 8px;
-    font-size: 13px;
-}
-
-.agent-output {
-    border-radius: var(--radius-md);
-    background: var(--log-bg);
-    color: var(--log-text);
-    padding: 10px;
-    max-height: 240px;
-    overflow: auto;
-}
-
-.agent-output pre {
-    margin: 0;
-    font-size: 12px;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.agent-output pre.agent-output-placeholder {
-    color: var(--agent-output-empty-text);
-    font-weight: 500;
-}
-
 .thinking-dots {
     display: inline-flex;
     align-items: center;
@@ -2600,6 +2714,7 @@ body {
 
     .agent-layout {
         grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
     }
 
     .launch-modes {
@@ -2681,16 +2796,6 @@ body {
 
 .chart-body:hover canvas {
     transition: filter 0.3s ease;
-}
-
-.chart-card {
-    transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
-}
-
-.chart-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
-    border-color: color-mix(in srgb, var(--md-primary) 28%, var(--md-outline-variant));
 }
 
 .chart-card .btn-icon-sm {
@@ -3050,16 +3155,6 @@ body {
     height: 200px;
 }
 
-/* Mode card hover glow effect */
-.mode-card {
-    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.mode-option:hover .mode-card {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 106, 107, 0.12);
-}
-
 .mode-option.selected .mode-card {
     animation: modeCardSelect 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -3076,7 +3171,20 @@ body {
         --panel-gap: 14px;
     }
 
+    html,
+    body {
+        height: auto;
+        overflow: visible;
+    }
+
+    #root {
+        height: auto;
+        display: block;
+        min-height: 0;
+    }
+
     .console-shell {
+        flex: none;
         grid-template-columns: 1fr;
         grid-template-rows: auto 1fr;
     }

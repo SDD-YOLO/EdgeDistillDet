@@ -13,10 +13,6 @@ from web.schemas import (
 from web.services import backend_logic
 
 
-def agent_config_schema():
-    return backend_logic.agent_config_schema()
-
-
 def agent_patch_validate(payload: AgentPatchValidateRequest):
     return backend_logic.agent_patch_validate(payload)
 

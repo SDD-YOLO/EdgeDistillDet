@@ -6,7 +6,6 @@ import { useToast } from "./hooks/useToast";
 
 function App() {
   const [activeTab, setActiveTab] = useState("training");
-  const [metricsCsvPath, setMetricsCsvPath] = useState("");
   const [theme, setTheme] = useState(() => window.localStorage.getItem("edgedistilldet-theme") || "light");
   const { toasts, push } = useToast();
   const navItems = [
@@ -77,8 +76,8 @@ function App() {
 
           <div className="tab-panels console-panels">
             <TrainingPanel toast={push} active={activeTab === "training"} />
-            <MetricsPanel toast={push} active={activeTab === "metrics"} onMetricsSourceChange={setMetricsCsvPath} />
-            <AgentPanel toast={push} active={activeTab === "agent"} metricsCsvPath={metricsCsvPath} />
+            <MetricsPanel toast={push} active={activeTab === "metrics"} />
+            <AgentPanel toast={push} active={activeTab === "agent"} />
           </div>
         </main>
       </div>

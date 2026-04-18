@@ -32,7 +32,7 @@ def load_config(config_path: Path) -> dict | None:
     return expand_env_vars(data)
 
 
-def save_config(config_dir: Path, name: str, config: dict) -> str:
+def save_config(config_dir: Path, name: str, config: dict) -> tuple[str, int]:
     global _last_saved_config
     actual_name = name if name.endswith((".yaml", ".yml")) else f"{name}.yaml"
     target = config_dir / actual_name
@@ -40,7 +40,11 @@ def save_config(config_dir: Path, name: str, config: dict) -> str:
     with open(target, "w", encoding="utf-8") as file_obj:
         yaml.safe_dump(config, file_obj, allow_unicode=True, sort_keys=False)
     _last_saved_config = {"name": actual_name, "config": config}
-    return actual_name
+    try:
+        mtime_ns = int(target.stat().st_mtime_ns)
+    except OSError:
+        mtime_ns = 0
+    return actual_name, mtime_ns
 
 
 def get_recent_or_default(config_dir: Path, default_name: str = "distill_config.yaml") -> dict:

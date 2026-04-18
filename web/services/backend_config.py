@@ -17,7 +17,11 @@ def get_config(config_name):
     config = config_service.load_config(config_path)
     if config is None:
         return _error(f'配置文件不存在: {config_name}', 404)
-    return {'status': 'ok', 'config': config}
+    try:
+        file_mtime_ns = int(config_path.stat().st_mtime_ns)
+    except OSError:
+        file_mtime_ns = 0
+    return {'status': 'ok', 'config': config, 'file_mtime_ns': file_mtime_ns}
 
 def get_recent_config():
     
@@ -32,9 +36,9 @@ def save_config(payload: SaveConfigRequest):
     config = payload.config
     if not isinstance(name, str) or not isinstance(config, dict):
         return _error('请求格式错误', 400)
-    name = config_service.save_config(CONFIG_DIR, name, config)
+    name, file_mtime_ns = config_service.save_config(CONFIG_DIR, name, config)
     backend_state.last_saved_config = {'name': name, 'config': config}
-    return {'status': 'ok', 'message': f'配置已保存: {name}'}
+    return {'status': 'ok', 'message': f'配置已保存: {name}', 'file_mtime_ns': file_mtime_ns}
 
 def upload_config(payload: UploadConfigRequest):
     content = payload.content

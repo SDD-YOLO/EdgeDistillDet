@@ -79,7 +79,7 @@ function EpochRangeHint({ total, range, unit = "epoch" }) {
   );
 }
 
-function MetricsPanel({ toast, active, onMetricsSourceChange }) {
+function MetricsPanel({ toast, active }) {
   const [sources, setSources] = useState([]);
   const [source, setSource] = useState("");
   const [overview, setOverview] = useState({});
@@ -90,7 +90,6 @@ function MetricsPanel({ toast, active, onMetricsSourceChange }) {
   const [rangeMap, setRangeMap] = useState("all");
   const [rangeLr, setRangeLr] = useState("all");
   const [rangeDistill, setRangeDistill] = useState("all");
-  const [rangePr, setRangePr] = useState("all");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshLeft, setRefreshLeft] = useState(30);
   const [chartSeriesState, setChartSeriesState] = useState(null);
@@ -100,7 +99,6 @@ function MetricsPanel({ toast, active, onMetricsSourceChange }) {
   const mapRef = useRef(null);
   const lrRef = useRef(null);
   const distillRef = useRef(null);
-  const prRef = useRef(null);
   const classRef = useRef(null);
   const chartInstances = useRef({});
   const rawSeriesRef = useRef(null);
@@ -163,28 +161,20 @@ function MetricsPanel({ toast, active, onMetricsSourceChange }) {
   }, [source]);
 
   useEffect(() => {
-    if (typeof onMetricsSourceChange === "function") {
-      onMetricsSourceChange(source || "");
-    }
-  }, [source, onMetricsSourceChange]);
-
-  useEffect(() => {
     if (!active || !rawSeriesRef.current) return;
     renderAllCharts(chartInstances, {
       lossRef,
       mapRef,
       lrRef,
       distillRef,
-      prRef,
       classRef
     }, rawSeriesRef.current, {
       loss: rangeLoss,
       map: rangeMap,
       lr: rangeLr,
-      distill: rangeDistill,
-      pr: rangePr
+      distill: rangeDistill
     });
-  }, [rangeLoss, rangeMap, rangeLr, rangeDistill, rangePr, active]);
+  }, [rangeLoss, rangeMap, rangeLr, rangeDistill, active]);
 
   useEffect(() => {
     if (!active || !hasData || !chartSeriesState) return;
@@ -193,16 +183,14 @@ function MetricsPanel({ toast, active, onMetricsSourceChange }) {
       mapRef,
       lrRef,
       distillRef,
-      prRef,
       classRef
     }, chartSeriesState, {
       loss: rangeLoss,
       map: rangeMap,
       lr: rangeLr,
-      distill: rangeDistill,
-      pr: rangePr
+      distill: rangeDistill
     });
-  }, [hasData, chartSeriesState, rangeLoss, rangeMap, rangeLr, rangeDistill, rangePr, themeMode, active]);
+  }, [hasData, chartSeriesState, rangeLoss, rangeMap, rangeLr, rangeDistill, themeMode, active]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -294,7 +282,6 @@ function MetricsPanel({ toast, active, onMetricsSourceChange }) {
   const showLr = chartType === "all" || chartType === "lr";
 
   const epochTotal = Array.isArray(chartSeriesState?.epochs) ? chartSeriesState.epochs.length : 0;
-  const prPointTotal = Array.isArray(chartSeriesState?.pr_curve?.recall) ? chartSeriesState.pr_curve.recall.length : 0;
 
   return (
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-metrics" aria-hidden={!active}>
@@ -428,26 +415,7 @@ function MetricsPanel({ toast, active, onMetricsSourceChange }) {
               <div className="chart-body"><canvas ref={distillRef} /></div>
             </div>
 
-            <div className="chart-card" style={{ display: showAcc ? "" : "none" }}>
-              <div className="chart-header">
-                <div className="chart-title-block">
-                  <h3>Precision-Recall 曲线</h3>
-                  <EpochRangeHint total={prPointTotal} range={rangePr} unit="点" />
-                </div>
-                <div className="chart-actions">
-                  <M3Select
-                    className="mini-select"
-                    value={rangePr}
-                    onChange={(next) => setRangePr(next)}
-                    options={EPOCH_RANGE_OPTIONS}
-                    ariaLabel="选择 PR 曲线显示范围"
-                  />
-                </div>
-              </div>
-              <div className="chart-body"><canvas ref={prRef} /></div>
-            </div>
-
-            <div className="chart-card" style={{ display: showAcc ? "" : "none" }}>
+            <div className="chart-card wide" style={{ display: showAcc ? "" : "none" }}>
               <div className="chart-header">
                 <div className="chart-title-block">
                   <h3>各类别性能分布</h3>
@@ -797,16 +765,6 @@ function renderAllCharts(instancesRef, refs, chartSeries, ranges) {
   const dTemp = (distill.temperature || []).slice(0, capDistill).slice(startDistill);
   const dKd = (distill.kd_loss || []).slice(0, capDistill).slice(startDistill);
 
-  const pr = chartSeries?.pr_curve || {};
-  const prRecall = Array.isArray(pr.recall) ? pr.recall : [];
-  const prPrecFull = Array.isArray(pr.precision) ? pr.precision : [];
-  const capPr = minPositiveLen(prRecall.length, prPrecFull.length) || prRecall.length;
-  const prR = prRecall.slice(0, capPr);
-  const prP = prPrecFull.slice(0, capPr);
-  const startPr = epochStartIndex(r.pr, prR.length);
-  const prRecallSliced = prR.slice(startPr);
-  const prPrecisionSliced = prP.slice(startPr);
-
   const cls = compactClassSeries(chartSeries?.class_performance || {});
   const clsLabelsFull = cls.labels?.length ? cls.labels : ["Overall"];
 
@@ -834,10 +792,6 @@ function renderAllCharts(instancesRef, refs, chartSeries, ranges) {
     { label: "Temperature T", data: fillGaps(dTemp), color: "#B3261E" },
     { label: "KD Loss", data: fillGaps(dKd), color: "#F57C00" }
   ]);
-
-  renderLineChart(instancesRef, refs.prRef.current, "pr", prRecallSliced.map((x) => Number(x).toFixed(2)), [
-    { label: "Precision-Recall", data: prPrecisionSliced, color: "#2E7D32" }
-  ], { scales: { y: { min: 0, max: 1.05 } } });
 
   renderBarChart(instancesRef, refs.classRef.current, "class", clsLabelsFull, [
     { label: "mAP", data: cls.map || [0], backgroundColor: "#6750A4AA", borderColor: "#6750A4" },

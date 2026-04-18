@@ -85,7 +85,7 @@ export function formatAgentTerminalOutput(reply, toolLogs) {
   }
 
   if (!sections.length) {
-    return "【提示】本轮未识别到可单独摘出的终端代码块，且未经过本地工具。\n完整说明见左侧对话；需要命令时请让模型用 ```powershell``` 或 ```bash``` 代码块输出。";
+    return "【提示】本轮未识别到可单独摘出的终端代码块，且未经过本地工具。\n完整说明见上方对话；需要命令时请让模型用 ```powershell``` 或 ```bash``` 代码块输出。";
   }
 
   if (!fences.length && !heuristicLines && toolLogs?.length) {
@@ -285,6 +285,62 @@ export function extractToolCallFromText(text) {
   return null;
 }
 
+/**
+ * 对话气泡展示用：折叠工具 JSON、去掉中继/模型回显的 [tool:…] 行，流式末尾未闭合的工具 JSON 用短提示代替。
+ */
+function findFirstToolJsonRange(raw) {
+  const text = typeof raw === "string" ? raw : "";
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    for (let j = i; j < text.length; j += 1) {
+      const ch = text[j];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const slice = text.slice(i, j + 1);
+          const tc = extractToolCallFromText(slice);
+          if (tc) return { start: i, end: j + 1, tool: tc.tool };
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function softenAgentBubbleText(raw, streaming) {
+  let t = typeof raw === "string" ? raw : "";
+  t = t.replace(/\r\n/g, "\n");
+  t = t.replace(/(^|\n)\s*\[tool:[^\]\n]+\]\s*/g, "$1");
+  t = t.replace(/(^|\n)\s*\[assistant\][^\n]*/gi, "$1");
+  let guard = 0;
+  while (guard < 24) {
+    guard += 1;
+    const r = findFirstToolJsonRange(t);
+    if (!r) break;
+    t = `${t.slice(0, r.start)}\n【工具】${r.tool}\n${t.slice(r.end)}`;
+  }
+  if (streaming) {
+    const idx = t.lastIndexOf("{");
+    if (idx >= 0) {
+      const tail = t.slice(idx);
+      if (/"tool"\s*:/.test(tail)) {
+        let depth = 0;
+        for (let k = 0; k < tail.length; k += 1) {
+          if (tail[k] === "{") depth += 1;
+          else if (tail[k] === "}") depth -= 1;
+        }
+        if (depth !== 0) {
+          t = `${t.slice(0, idx)}\n【工具】生成中…\n`;
+        }
+      }
+    }
+  }
+  return t.replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
 /** 仅含外部 Agent 连接字段（侧栏 API 配置）的 JSON，不应触发 distill_config 审批 */
 function isLikelyAgentConnectionPayloadOnly(parsed) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
@@ -391,4 +447,62 @@ export function hasConfigMutationAfter(toolLogs, index) {
     if (c === "agent.apply_patch_with_approval" || c === "agent.rollback_run_config") return true;
   }
   return false;
+}
+
+/** 服务端 change_summary → 聊天区可读文本（仅含本次 patch 声明的叶子字段，与审批区表格一致） */
+export function formatChangeSummaryForChat(summary) {
+  if (!summary || typeof summary !== "object") {
+    return "【配置预览】未收到服务端变更摘要，请在下方审批区确认后执行写入。";
+  }
+  const paths = Array.isArray(summary.paths) ? summary.paths : [];
+  if (!paths.length) {
+    return "【配置预览】未检测到字段级差异（与当前配置一致或等价）。请在下方审批区确认后执行写入。";
+  }
+  const n = summary.stats?.changed ?? paths.length;
+  const lines = paths.map((p) => {
+    const { path, kind, before, after } = p;
+    const b = before === undefined ? "—" : JSON.stringify(before);
+    const a = after === undefined ? "—" : JSON.stringify(after);
+    if (kind === "added") return `- ${path}: （新增）→ ${a}`;
+    if (kind === "removed") return `- ${path}: ${b} → （删除）`;
+    return `- ${path}: ${b} → ${a}`;
+  });
+  return [
+    `【配置变更摘要】服务端核对（共 ${n} 项，以下方审批区为准）：`,
+    ...lines,
+    "",
+    "请在对话区「批准修改训练配置」中核对后点击「让 agent 执行」写入。"
+  ].join("\n");
+}
+
+/** 回合轨迹中压缩工具返回，避免气泡过大 */
+export function summarizeToolResultForTrace(toolName, execResult) {
+  if (execResult && typeof execResult === "object" && execResult.blocked) {
+    return execResult;
+  }
+  if (execResult == null) return null;
+  if (typeof execResult !== "object") return { raw: String(execResult) };
+  const status = execResult.status;
+  const name = toolName || execResult.tool;
+  if (name === "agent.preview_patch" && execResult.change_summary?.stats) {
+    return {
+      status,
+      tool: name,
+      change_items: execResult.change_summary.stats.changed
+    };
+  }
+  if (name === "agent.apply_patch_with_approval" && execResult.config) {
+    return { status, tool: name, wrote_config: true };
+  }
+  if (name === "agent.rollback_run_config") {
+    return {
+      status,
+      tool: name,
+      rolled_back_to_version: execResult.rolled_back_to_version
+    };
+  }
+  const raw = JSON.stringify(execResult);
+  const max = 1200;
+  if (raw.length <= max) return { status, tool: name || "?", body: execResult };
+  return { status, tool: name || "?", truncated: `${raw.slice(0, max)}…` };
 }

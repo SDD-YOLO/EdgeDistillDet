@@ -17,7 +17,3 @@ export function previewAgentPatch(body) {
     body: JSON.stringify(body)
   });
 }
-
-export function fetchAgentConfigSchema() {
-  return apiRequest("/api/agent/config-schema");
-}

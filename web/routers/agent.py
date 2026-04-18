@@ -15,11 +15,6 @@ from web.services import agent_service
 router = APIRouter()
 
 
-@router.get("/api/agent/config-schema")
-def agent_config_schema():
-    return agent_service.agent_config_schema()
-
-
 @router.post("/api/agent/patch/validate")
 def agent_patch_validate(payload: AgentPatchValidateRequest):
     return agent_service.agent_patch_validate(payload)

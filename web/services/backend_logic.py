@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from web.services.backend_agent import (
-    agent_config_schema,
     agent_model_invoke,
     agent_model_invoke_stream,
     agent_patch_apply,
@@ -36,7 +35,7 @@ from web.services.backend_train import (
 from web.services.backend_ui import favicon, index
 
 __all__ = [
-    'agent_config_schema', 'agent_model_invoke', 'agent_model_invoke_stream', 'agent_patch_apply',
+    'agent_model_invoke', 'agent_model_invoke_stream', 'agent_patch_apply',
     'agent_patch_preview', 'agent_patch_validate', 'agent_run_history', 'agent_run_rollback',
     'agent_tools_contract', 'agent_tools_execute', 'download_training_logs', 'favicon', 'get_config',
     'get_configs', 'get_metrics', 'get_recent_config', 'get_resume_candidates', 'get_training_logs',
