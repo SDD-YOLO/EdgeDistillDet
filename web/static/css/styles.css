@@ -33,9 +33,14 @@
 
     --app-bar-height: 66px;
     --content-padding: 22px;
+    --sidebar-width: 252px;
+    --main-max-width: 1440px;
+    --panel-gap: 18px;
 
-    --log-bg: #111615;
-    --log-text: #b2c5c3;
+    --log-bg: #eef5f4;
+    --log-text: #000000;
+    --log-empty-text: #000000;
+    --agent-output-empty-text: #2a3232;
     --toast-bg: #0f1c1b;
     --md-surface-container-low: #eff5f4;
     --md-surface-container: #e8efee;
@@ -91,6 +96,8 @@ html.theme-transition * {
 
     --log-bg: #0a0f0f;
     --log-text: #9db5b4;
+    --log-empty-text: #c8d7d6;
+    --agent-output-empty-text: #d3e2e1;
     --toast-bg: #1d2a29;
     --md-surface-container-low: #171d1d;
     --md-surface-container: #1b2121;
@@ -122,6 +129,144 @@ body {
         radial-gradient(circle at 92% 0%, rgba(42, 111, 181, 0.07), transparent 32%),
         var(--md-surface);
     line-height: 1.45;
+    min-height: 100vh;
+}
+
+.console-shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    background:
+        radial-gradient(circle at 8% 10%, rgba(0, 106, 107, 0.08), transparent 44%),
+        radial-gradient(circle at 92% 0%, rgba(42, 111, 181, 0.07), transparent 32%),
+        var(--md-surface);
+}
+
+.console-sidebar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    border-right: 1px solid var(--md-outline-variant);
+    background: color-mix(in srgb, var(--md-surface) 92%, var(--md-primary-container) 8%);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 18px 14px;
+}
+
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brand-text {
+    min-width: 0;
+}
+
+.sidebar-brand .app-title {
+    font-size: 18px;
+}
+
+.sidebar-brand .app-subtitle {
+    margin: 2px 0 0;
+    padding: 0;
+    border: none;
+    display: block;
+    font-size: 11px;
+}
+
+.sidebar-nav {
+    display: grid;
+    gap: 8px;
+}
+
+.sidebar-nav-btn {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--md-on-surface-variant);
+    border-radius: 12px;
+    padding: 12px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.sidebar-nav-btn:hover {
+    background: color-mix(in srgb, var(--md-primary-container) 50%, transparent);
+    color: var(--md-primary);
+}
+
+.sidebar-nav-btn.active {
+    border-color: color-mix(in srgb, var(--md-primary) 34%, var(--md-outline-variant));
+    background: color-mix(in srgb, var(--md-primary-container) 66%, transparent);
+    color: var(--md-primary);
+}
+
+.sidebar-bottom {
+    margin-top: auto;
+}
+
+.console-sidebar .theme-toggle {
+    width: 100%;
+    height: 42px;
+    border-radius: 12px;
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 0 10px;
+}
+
+.theme-toggle-label {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.console-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--panel-gap);
+    padding: 16px var(--content-padding) var(--content-padding);
+}
+
+.console-page-header {
+    border: 1px solid var(--md-outline-variant);
+    border-radius: var(--radius-lg);
+    background: var(--md-surface-container-low);
+    box-shadow: var(--shadow-1);
+    padding: 14px 16px;
+}
+
+.console-page-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.console-page-meta .material-icons {
+    color: var(--md-primary);
+}
+
+.console-page-meta h2 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.console-page-meta p {
+    margin: 3px 0 0;
+    font-size: 12px;
+    color: var(--md-on-surface-variant);
+}
+
+.console-panels {
+    padding: 0 !important;
+    width: min(100%, var(--main-max-width));
 }
 
 .md-app-bar {
@@ -131,7 +276,7 @@ body {
     height: var(--app-bar-height);
     background: color-mix(in srgb, var(--md-surface) 92%, var(--md-primary-container) 8%);
     border-bottom: 1px solid var(--md-outline-variant);
-    backdrop-filter: blur(8px);
+    backdrop-filter: none;
 }
 
 .app-bar-content {
@@ -188,7 +333,7 @@ body {
 
 .material-icons {
     vertical-align: middle;
-    font-family: "Material Symbols Rounded", "Material Icons";
+    font-family: "Material Icons";
     font-weight: normal;
     font-style: normal;
     font-size: 24px;
@@ -295,6 +440,14 @@ body {
 
 .tab-panel.active {
     display: block;
+}
+
+.console-module-panel {
+    width: 100%;
+}
+
+.console-module-panel .metrics-toolbar {
+    margin-top: 2px;
 }
 
 .train-launcher {
@@ -738,12 +891,25 @@ body {
 
 .form-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
 }
 
 .form-grid.cols-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid.cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.training-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.config-card-compact {
+    padding: 14px;
 }
 
 .form-row {
@@ -1351,6 +1517,11 @@ body {
     letter-spacing: normal;
     margin: 0;
 }
+
+.log-line.info.log-empty-placeholder {
+    color: var(--log-empty-text);
+    font-weight: 500;
+}
 /* 日志图标 */
 .log-icon {
     display: inline-block;
@@ -1511,6 +1682,23 @@ body {
     letter-spacing: 0.2px;
 }
 
+.chart-title-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+}
+
+.chart-epoch-hint {
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--md-on-surface) 62%, transparent);
+    max-width: 100%;
+}
+
 .chart-actions {
     display: inline-flex;
     align-items: center;
@@ -1662,7 +1850,7 @@ body {
 
 .agent-layout {
     display: grid;
-    grid-template-columns: 320px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr);
     gap: 14px;
     align-items: start;
 }
@@ -1855,7 +2043,7 @@ body {
 
 .md3-modal-dialog::backdrop {
     background: color-mix(in srgb, var(--md-inverse-surface) 52%, transparent);
-    backdrop-filter: blur(2px);
+    backdrop-filter: none;
 }
 
 .md3-dialog-surface {
@@ -1962,7 +2150,7 @@ body {
 
 .md-dialog::backdrop {
     background: rgba(15, 21, 20, 0.45);
-    backdrop-filter: blur(2px);
+    backdrop-filter: none;
 }
 
 [data-theme="dark"] .md-dialog::backdrop {
@@ -2340,6 +2528,11 @@ body {
     word-break: break-word;
 }
 
+.agent-output pre.agent-output-placeholder {
+    color: var(--agent-output-empty-text);
+    font-weight: 500;
+}
+
 .thinking-dots {
     display: inline-flex;
     align-items: center;
@@ -2393,6 +2586,10 @@ body {
 }
 
 @media (max-width: 1200px) {
+    :root {
+        --sidebar-width: 220px;
+    }
+
     .panel-grid {
         grid-template-columns: 1fr;
     }
@@ -2767,7 +2964,10 @@ body {
     .progress-bar-wrapper.stripes-active .progress-bar,
     .progress-bar-wrapper.progress-near-complete .progress-bar,
     .progress-bar-wrapper.progress-complete .progress-bar,
-    .ws-status-dot.connected {
+    .ws-status-dot.connected,
+    .ws-status-dot.connecting,
+    .log-line,
+    .toast {
         animation: none !important;
         transition: none !important;
     }
@@ -2872,6 +3072,58 @@ body {
 @media (max-width: 900px) {
     :root {
         --content-padding: 14px;
+        --sidebar-width: 1fr;
+        --panel-gap: 14px;
+    }
+
+    .console-shell {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    .console-sidebar {
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--md-outline-variant);
+        gap: 10px;
+    }
+
+    .sidebar-brand {
+        justify-content: space-between;
+    }
+
+    .sidebar-nav {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .sidebar-nav-btn {
+        justify-content: center;
+        padding: 10px 8px;
+    }
+
+    .sidebar-nav-btn span:last-child {
+        display: none;
+    }
+
+    .sidebar-bottom {
+        margin-top: 0;
+    }
+
+    .console-sidebar .theme-toggle {
+        justify-content: center;
+        width: 42px;
+        margin-left: auto;
+        padding: 0;
+        border-radius: 50%;
+    }
+
+    .console-sidebar .theme-toggle-label {
+        display: none;
+    }
+
+    .console-main {
+        padding-top: 10px;
     }
 
     .app-subtitle {

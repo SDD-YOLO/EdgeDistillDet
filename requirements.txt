@@ -1,19 +1,20 @@
-# EdgeDistillDet 依赖清单
-# pip install -r requirements.txt
+# 与 pyproject.toml [project.dependencies] 保持一致；修改时请同步两处。
+# 安装：pip install -r requirements.txt
+# 开发依赖（pytest 等）：pip install -e ".[dev]"
+# CUDA 版 PyTorch：可先按官方说明安装 torch/torchvision，再执行本文件。
 
-torch>=2.0.0
+torch>=2.0.0,<3
 torchvision>=0.15.0
-ultralytics>=8.2.0
-opencv-python>=4.8.0
-numpy>=1.24.0
-pandas>=2.0.0
-matplotlib>=3.7.0
-pyyaml>=6.0
-tqdm>=4.65.0
-wandb>=0.17.0
+ultralytics>=8.2.0,<9
+opencv-python>=4.8.0,<5
+numpy>=1.24.0,<3
+pandas>=2.0.0,<3
+matplotlib>=3.7.0,<4
+pyyaml>=6.0,<7
+tqdm>=4.65.0,<5
+wandb>=0.17.0,<1
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+psutil>=5.9.8,<7
 
-# Web UI 依赖
-flask>=3.0.0
-flask-cors>=4.0.0
-fastapi>=0.111.0
-uvicorn>=0.30.0
+-e .

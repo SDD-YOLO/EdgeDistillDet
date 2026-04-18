@@ -34,6 +34,40 @@ from core.distillation.loss_functions import (
 )
 
 logger = logging.getLogger("DistillTrain")
+
+
+def _scatter_pr_from_ultralytics_box(box, nc: int):
+    """
+    将 ultralytics Metric.box 中按紧凑下标排列的 P/R 映射到全局类别 id 0..nc-1。
+    class_result(i) 与 box.p[i] 中的 i 均为「第 i 个有 AP 条目的类别」，与验证打印循环一致，
+    不能与 range(nc) 的全局类别下标混用。
+    """
+    import numpy as _np
+
+    out_p = [None] * nc
+    out_r = [None] * nc
+    ap_idx = getattr(box, 'ap_class_index', None)
+    p_arr = getattr(box, 'p', None)
+    r_arr = getattr(box, 'r', None)
+    if ap_idx is None or p_arr is None or r_arr is None:
+        return out_p, out_r
+    p_arr = _np.asarray(p_arr).ravel()
+    r_arr = _np.asarray(r_arr).ravel()
+    for j, cid in enumerate(ap_idx):
+        cid = int(cid)
+        if not (0 <= cid < nc):
+            continue
+        if j < len(p_arr):
+            pv = p_arr[j]
+            if pv is not None and not (isinstance(pv, (float, _np.floating)) and _np.isnan(pv)):
+                out_p[cid] = float(pv)
+        if j < len(r_arr):
+            rv = r_arr[j]
+            if rv is not None and not (isinstance(rv, (float, _np.floating)) and _np.isnan(rv)):
+                out_r[cid] = float(rv)
+    return out_p, out_r
+
+
 # 【断点续训修复】使用普通 dict 而非 WeakKeyDictionary！
 # 原因：ultralytics 在 resume_training() 时可能用 checkpoint 替换 self.model，
 #       WeakKeyDictionary 会自动清除旧模型引用，导致新模型无法找到 trainer。
@@ -145,6 +179,26 @@ def _distill_model_loss(model, batch, preds=None):
     return original_loss_fn(model, batch, preds=preds)
 
 
+def _resolve_original_model_loss(model):
+    """
+    解析 DetectionModel 的真实原始 loss 函数（防止异常重试后把包装器误当原始函数）。
+    """
+    current_loss = getattr(model, "loss", None)
+    if current_loss is None:
+        return None
+
+    current_fn = current_loss.__func__ if hasattr(current_loss, "__func__") else current_loss
+    if current_fn is not _distill_model_loss:
+        return current_loss
+
+    original_fn = getattr(type(model), "_distill_original_loss", None)
+    if original_fn is None:
+        return current_loss
+
+    # 将函数重新绑定到当前 model 实例，保持调用签名一致
+    return original_fn.__get__(model, type(model))
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 主训练器 — v3: 纯 get_loss 重写，零模型污染
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -185,6 +239,8 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._temp_scheduler = None
         self._distill_loss = None
         self._distill_log = []
+        self._resume_prev_kd_loss = None
+        self._resume_prev_epoch = None
         self._epoch_task_loss = 0.0; self._epoch_kd_loss = 0.0
         self._batch_count = 0; self._distill_entered = False
         self._batch = None  # 当前批次数据，由 _distill_model_loss 注入
@@ -202,7 +258,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
 
         # 【关键】保存原始 loss 函数引用，然后立即恢复 model.loss
         # （后续蒸馏逻辑通过 get_loss() 注入，不需要替换 model.loss）
-        self._orig_loss = getattr(self.model, 'loss', None)
+        self._orig_loss = _resolve_original_model_loss(self.model)
         if self._orig_loss is None:
             logger.error("[FATAL] 找不到 model.loss!")
             return
@@ -280,6 +336,191 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self.add_callback("on_val_end", self._on_val_end)
         self.add_callback("on_train_end", self._on_train_end)  # 安全网：确保最终CSV完整
         logger.info("AdaptiveKDTrainer callbacks registered: on_train_epoch_start, on_train_epoch_end, on_train_batch_end, on_fit_epoch_end, on_val_end, on_train_end")
+
+    def _distill_state_path(self) -> Path | None:
+        sd = getattr(self, "save_dir", None)
+        if sd:
+            return Path(sd) / "distill_state.json"
+        return None
+
+    def _save_distill_state(self, epoch: int) -> None:
+        state_path = self._distill_state_path()
+        if state_path is None or self._alpha_scheduler is None:
+            return
+        last_kd = None
+        current_temp = None
+        if self._distill_log:
+            try:
+                last_kd = float(self._distill_log[-1].get("kd_loss"))
+            except Exception:
+                last_kd = None
+        if self._temp_scheduler is not None:
+            try:
+                current_temp = float(self._temp_scheduler.current_temperature)
+            except Exception:
+                current_temp = None
+        payload = {
+            "epoch": int(epoch),
+            "alpha_scheduler": {
+                "alpha": float(self._alpha_scheduler.alpha),
+                "alpha_min": float(self._alpha_scheduler.alpha_min),
+                "alpha_max": float(self._alpha_scheduler.alpha_max),
+                "lr_alpha": float(self._alpha_scheduler.lr_alpha),
+                "ema_decay": float(self._alpha_scheduler.ema_decay),
+                "delta_target": float(self._alpha_scheduler.delta_target),
+                "ema_loss": None if self._alpha_scheduler._ema_loss is None else float(self._alpha_scheduler._ema_loss),
+                "prev_ema": None if self._alpha_scheduler._prev_ema is None else float(self._alpha_scheduler._prev_ema),
+            },
+            "last_kd_loss": last_kd,
+            "temperature": current_temp,
+        }
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"[DISTILL_STATE] 保存失败: {e}")
+
+    def _restore_alpha_from_results_csv(self) -> float | None:
+        sd = getattr(self, "save_dir", None)
+        if not sd:
+            return None
+        csv_path = Path(sd) / "results.csv"
+        if not csv_path.exists():
+            return None
+        last_alpha = None
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = _c.DictReader(f)
+                for row in reader:
+                    raw = row.get("distill/alpha")
+                    if raw is None:
+                        continue
+                    text = str(raw).strip()
+                    if not text:
+                        continue
+                    try:
+                        last_alpha = float(text)
+                    except Exception:
+                        continue
+        except Exception:
+            return None
+        return last_alpha
+
+    def _restore_distill_baseline_from_results_csv(self) -> dict | None:
+        sd = getattr(self, "save_dir", None)
+        if not sd:
+            return None
+        csv_path = Path(sd) / "results.csv"
+        if not csv_path.exists():
+            return None
+        last = None
+        try:
+            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                reader = _c.DictReader(f)
+                for row in reader:
+                    last = row
+        except Exception:
+            return None
+        if not last:
+            return None
+
+        def _safe_float(v):
+            try:
+                text = str(v).strip()
+                return float(text) if text else None
+            except Exception:
+                return None
+
+        def _safe_int(v):
+            try:
+                text = str(v).strip()
+                return int(float(text)) if text else None
+            except Exception:
+                return None
+
+        return {
+            "epoch": _safe_int(last.get("epoch")),
+            "alpha": _safe_float(last.get("distill/alpha")),
+            "kd_loss": _safe_float(last.get("distill/kd_loss")),
+            "temperature": _safe_float(last.get("distill/temperature")),
+        }
+
+    def _restore_distill_state_if_needed(self) -> None:
+        if not bool(getattr(self.args, "resume", False)):
+            return
+        if self._alpha_scheduler is None:
+            return
+        restored_from = None
+        restored_alpha = None
+        restored_temp_from = None
+        state_path = self._distill_state_path()
+        if state_path is not None and state_path.exists():
+            try:
+                disk = json.loads(state_path.read_text(encoding="utf-8"))
+                alpha_state = (disk or {}).get("alpha_scheduler", {}) or {}
+                alpha = alpha_state.get("alpha")
+                if alpha is not None:
+                    self._alpha_scheduler.alpha = float(alpha)
+                    self._alpha_scheduler._ema_loss = alpha_state.get("ema_loss")
+                    self._alpha_scheduler._prev_ema = alpha_state.get("prev_ema")
+                    restored_alpha = float(self._alpha_scheduler.alpha)
+                    restored_from = "distill_state.json"
+                saved_temp = (disk or {}).get("temperature")
+                if self._temp_scheduler is not None and saved_temp is not None:
+                    try:
+                        self._temp_scheduler._current_T = float(saved_temp)
+                        restored_temp_from = "distill_state.json"
+                    except Exception:
+                        pass
+                try:
+                    self._resume_prev_kd_loss = float((disk or {}).get("last_kd_loss"))
+                except Exception:
+                    self._resume_prev_kd_loss = None
+                try:
+                    self._resume_prev_epoch = int((disk or {}).get("epoch"))
+                except Exception:
+                    self._resume_prev_epoch = None
+            except Exception as e:
+                logger.debug(f"[DISTILL_STATE] 读取状态失败: {e}")
+        if restored_alpha is None:
+            csv_baseline = self._restore_distill_baseline_from_results_csv()
+            csv_alpha = csv_baseline.get("alpha") if isinstance(csv_baseline, dict) else None
+            if csv_alpha is not None:
+                self._alpha_scheduler.alpha = float(csv_alpha)
+                restored_alpha = float(self._alpha_scheduler.alpha)
+                restored_from = "results.csv"
+            if isinstance(csv_baseline, dict):
+                if self._resume_prev_kd_loss is None and csv_baseline.get("kd_loss") is not None:
+                    self._resume_prev_kd_loss = float(csv_baseline["kd_loss"])
+                if self._resume_prev_epoch is None and csv_baseline.get("epoch") is not None:
+                    self._resume_prev_epoch = int(csv_baseline["epoch"])
+                if self._temp_scheduler is not None and csv_baseline.get("temperature") is not None:
+                    try:
+                        self._temp_scheduler._current_T = float(csv_baseline["temperature"])
+                        restored_temp_from = "results.csv"
+                    except Exception:
+                        pass
+        else:
+            # 兼容旧版 state：若缺少 last_kd_loss，回退从 results.csv 获取续训边界基线
+            if self._resume_prev_kd_loss is None or self._resume_prev_epoch is None:
+                csv_baseline = self._restore_distill_baseline_from_results_csv()
+                if isinstance(csv_baseline, dict):
+                    if self._resume_prev_kd_loss is None and csv_baseline.get("kd_loss") is not None:
+                        self._resume_prev_kd_loss = float(csv_baseline["kd_loss"])
+                    if self._resume_prev_epoch is None and csv_baseline.get("epoch") is not None:
+                        self._resume_prev_epoch = int(csv_baseline["epoch"])
+            # 即使 alpha/kd 基线完整，旧版 state 也可能没有 temperature，需独立回退。
+            if self._temp_scheduler is not None and restored_temp_from is None:
+                csv_baseline = self._restore_distill_baseline_from_results_csv()
+                if isinstance(csv_baseline, dict) and csv_baseline.get("temperature") is not None:
+                    try:
+                        self._temp_scheduler._current_T = float(csv_baseline["temperature"])
+                        restored_temp_from = "results.csv"
+                    except Exception:
+                        pass
+        if restored_alpha is not None:
+            logger.info(f"[RESUME_ALPHA] 恢复 alpha={restored_alpha:.6f} 来源={restored_from}")
     
     # ══════════════════════════════════════════════════════════════════════════
     # 可选：兼容旧版 ultralytics 的 get_loss 扩展点
@@ -408,6 +649,9 @@ class AdaptiveKDTrainer(DetectionTrainer):
         # 再次强制 workers=0：checkpoint 内的 args 可能在 super() 里把 workers 改回非 0
         self.args.workers = 0
 
+        # resume 时恢复 alpha 调度状态（优先 distill_state.json，回退 results.csv）
+        self._restore_distill_state_if_needed()
+
         # 强制将 epochs 恢复为配置文件中的值（而非 checkpoint 里的旧值）
         if cfg_epochs is not None and hasattr(self.args, 'epochs'):
             restored = int(cfg_epochs)
@@ -492,6 +736,19 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 f"dataset_samples={dataset_samples if dataset_samples is not None else 'unknown'} "
                 f"phase={phase}"
             )
+            # logger 在部分运行环境不会输出到子进程 stdout，前端将收不到 alpha 进度；
+            # 同步 print 到 stdout，保证 /api/train/logs 能稳定拿到结构化进度行。
+            print(
+                f"[EPOCH_PROGRESS] epoch={display_epoch} total={total_epochs} "
+                f"loss={avg_t:.4f} kd={avg_k:.4f} "
+                f"alpha={alpha_val} temp={temp_val} "
+                f"batches={batch_count}/{total_batches or 'unknown'} "
+                f"batch_size={batch_size} "
+                f"samples={batch_count * batch_size if batch_size else 'unknown'} "
+                f"dataset_samples={dataset_samples if dataset_samples is not None else 'unknown'} "
+                f"phase={phase}",
+                flush=True,
+            )
             self._distill_log.append({
                 "epoch": display_epoch,
                 "phase": phase,
@@ -502,6 +759,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
             })
             if epoch >= self._warm_epochs:
                 self._alpha_scheduler.update(avg_t)
+            self._save_distill_state(display_epoch)
             self._epoch_task_loss = 0.0
             self._epoch_kd_loss = 0.0
             self._batch_count = 0
@@ -608,43 +866,11 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 _m = _np.asarray(box.maps)
                 _maps = list(_m.flatten()) if _m.ndim > 1 else list(_m)
 
-            labels, map_list, prec_list, rec_list = [], [], [], []
+            labels, map_list = [], []
             for i in range(nc):
                 labels.append(class_names.get(i, f'class{i}'))
                 map_list.append(float(_maps[i]) if _maps and i < len(_maps) else None)
-                # P/R 通过 class_result(i) 获取（处理稀疏映射）
-                try:
-                    cr = box.class_result(i) if hasattr(box, 'class_result') else None
-                    if cr is not None:
-                        prec_list.append(float(cr[0]) if cr[0] is not None else None)
-                        rec_list.append(float(cr[1]) if cr[1] is not None else None)
-                    else:
-                        idx_map = getattr(box, 'ap_class_index', None)
-                        if idx_map is not None:
-                            matches = [j for j, v in enumerate(idx_map) if int(v) == i]
-                            if matches:
-                                j = matches[0]
-                                prec_list.append(float(box.p[j]) if getattr(box, 'p', None) is not None and box.p[j] is not None else None)
-                                rec_list.append(float(box.r[j]) if getattr(box, 'r', None) is not None and box.r[j] is not None else None)
-                            else:
-                                prec_list.append(None)
-                                rec_list.append(None)
-                        else:
-                            p_arr = getattr(box, 'p', None)
-                            r_arr = getattr(box, 'r', None)
-                            if p_arr is not None and r_arr is not None:
-                                try:
-                                    prec_list.append(float(p_arr[i]) if i < len(p_arr) and p_arr[i] is not None else None)
-                                    rec_list.append(float(r_arr[i]) if i < len(r_arr) and r_arr[i] is not None else None)
-                                except Exception:
-                                    prec_list.append(None)
-                                    rec_list.append(None)
-                            else:
-                                prec_list.append(None)
-                                rec_list.append(None)
-                except Exception:
-                    prec_list.append(None)
-                    rec_list.append(None)
+            prec_list, rec_list = _scatter_pr_from_ultralytics_box(box, nc)
 
             output_data = {
                 'labels': labels,
@@ -890,38 +1116,11 @@ class AdaptiveKDTrainer(DetectionTrainer):
             _m = _np.asarray(box.maps)
             _maps = list(_m.flatten()) if _m.ndim > 1 else list(_m)
 
-        labels, map_l, prec_l, rec_l = [], [], [], []
+        labels, map_l = [], []
         for i in range(nc):
             labels.append(class_names.get(i, f'class{i}'))
             map_l.append(float(_maps[i]) if _maps and i < len(_maps) else None)
-            try:
-                cr = box.class_result(i) if hasattr(box, 'class_result') else None
-                if cr is not None:
-                    prec_l.append(float(cr[0]))
-                    rec_l.append(float(cr[1]))
-                else:
-                    idx_map = getattr(box, 'ap_class_index', None)
-                    if idx_map is not None:
-                        matches = [j for j, v in enumerate(idx_map) if int(v) == i]
-                        if matches:
-                            j = matches[0]
-                            prec_l.append(float(box.p[j]) if box.p is not None else None)
-                            rec_l.append(float(box.r[j]) if box.r is not None else None)
-                        else:
-                            prec_l.append(None); rec_l.append(None)
-                    else:
-                        p_arr = getattr(box, 'p', None)
-                        r_arr = getattr(box, 'r', None)
-                        if p_arr is not None and r_arr is not None and i < len(p_arr) and i < len(r_arr):
-                            try:
-                                prec_l.append(float(p_arr[i]) if p_arr[i] is not None else None)
-                                rec_l.append(float(r_arr[i]) if r_arr[i] is not None else None)
-                            except Exception:
-                                prec_l.append(None); rec_l.append(None)
-                        else:
-                            prec_l.append(None); rec_l.append(None)
-            except Exception:
-                prec_l.append(None); rec_l.append(None)
+        prec_l, rec_l = _scatter_pr_from_ultralytics_box(box, nc)
 
         output = {
             'labels': labels, 'map': map_l, 'precision': prec_l, 'recall': rec_l,

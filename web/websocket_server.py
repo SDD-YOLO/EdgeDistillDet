@@ -330,54 +330,7 @@ class TrainingManager:
         return list(self.active_trainings.keys())
 
 
-# ==================== Flask-SocketIO 集成路由 ====================
-def register_socketio_routes(socketio_app, training_callback: TrainingCallback = None):
-    """
-    注册 Socket.IO 事件处理器（当使用 python-socketio 时）
-
-    Usage in app.py:
-        from flask_socketio import SocketIO
-        socketio = SocketIO(app, cors_allowed_origins="*")
-        from websocket_server import register_socketio_routes, manager, TrainingCallback
-        callback = TrainingCallback(manager)
-        register_socketio_routes(socketio, callback)
-    """
-    cb = training_callback or TrainingCallback(manager)
-
-    @socketio_app.event
-    def connect():
-        print(f'[SocketIO] Client connected. Active: {len(manager.active_connections)}')
-
-    @socketio_app.event
-    def disconnect():
-        print(f'[SocketIO] Client disconnected. Active: {len(manager.active_connections)}')
-
-    @socketio_app.event
-    async def command(data):
-        """接收来自前端的命令: start/pause/resume/stop"""
-        cmd = data.get('command')
-        training_id = data.get('training_id', 'default')
-
-        if cmd == 'start':
-            config = data.get('config', {})
-            cb.start_time = time.time()
-            response = {"type": "command_response", "data": {"command": cmd, "accepted": True, "training_id": training_id}}
-
-        elif cmd == 'stop':
-            response = {"type": "command_response", "data": {"command": cmd, "accepted": True}}
-
-        elif cmd == 'ping':
-            response = {"type": "pong", "data": {"server_time": time.time(), "active_trainings": len([v for v in {}.values()])}}  # noqa: F821
-
-        else:
-            response = {"type": "command_response", "data": {"command": cmd, "accepted": False, "error": f"Unknown command: {cmd}"}}
-
-        await manager.broadcast(response, cache=False)
-
-    return cb
-
-
-# ==================== FastAPI WebSocket 路由示例 ====================
+# ==================== FastAPI WebSocket（迁移指引）====================
 # 如需迁移到 FastAPI，可直接使用以下路由定义:
 #
 # from fastapi import APIRouter, WebSocket, WebSocketDisconnect

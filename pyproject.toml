@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgedistilldet"
+dynamic = ["version"]
+description = "面向边缘场景的微小目标蒸馏训练与检测评估（Ultralytics + AdaptiveKD）"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "EdgeDistillDet Research Team" }]
+keywords = ["object-detection", "distillation", "yolo", "edge", "pytorch"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 与根目录 requirements.txt 中列出的包一致；CUDA 版 PyTorch 可先单独安装再装本项目
+dependencies = [
+  "torch>=2.0.0,<3",
+  "torchvision>=0.15.0",
+  "ultralytics>=8.2.0,<9",
+  "opencv-python>=4.8.0,<5",
+  "numpy>=1.24.0,<3",
+  "pandas>=2.0.0,<3",
+  "matplotlib>=3.7.0,<4",
+  "pyyaml>=6.0,<7",
+  "tqdm>=4.65.0,<5",
+  "wandb>=0.17.0,<1",
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.32.1",
+  "psutil>=5.9.8,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+]
+
+[project.scripts]
+# 等价于: python main.py ...
+edgedistilldet = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.dynamic]
+version = { attr = "main.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "utils*", "scripts*", "web*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

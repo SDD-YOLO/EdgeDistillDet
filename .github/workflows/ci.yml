@@ -1,0 +1,38 @@
+# 校验提交的 web/static/dist 与 lockfile 下的 npm ci + vite build 产物一致
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  web-dist:
+    name: Web dist matches build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install and build
+        run: npm ci && npm run build
+
+      - name: Verify committed dist matches build
+        working-directory: ${{ github.workspace }}
+        run: |
+          if ! git diff --quiet -- web/static/dist/; then
+            echo "::error::web/static/dist 与当前 npm ci && npm run build 结果不一致。"
+            echo "请在仓库根目录执行: cd web && npm ci && npm run build，然后提交 web/static/dist/ 的变更。"
+            git diff --stat -- web/static/dist/
+            git diff -- web/static/dist/
+            exit 1
+          fi
+          echo "OK: web/static/dist 与构建产物一致。"

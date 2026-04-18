@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional
 import yaml
 from ultralytics import YOLO
 
-from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer
+from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer, _scatter_pr_from_ultralytics_box
 from utils import expand_env_vars
 
 # 训练期 DataLoader 始终 0 workers，避免多进程复制数据集与「像两个训练同时跑」的内存形态
@@ -384,7 +384,11 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     except Exception as e:
         msg = str(e).lower()
         if resume_path and ("nothing to resume" in msg or "finished, nothing to resume" in msg):
+            print("[RESUME] 检测到 checkpoint 已训练完成，自动切换为新训练模式并重建学生模型。", flush=True)
             train_args.pop("resume", None)
+            # 首次 resume 失败后，AdaptiveKDTrainer 可能已对模型类做过 loss 注入；
+            # 这里重建模型实例，避免沿用潜在污染状态。
+            student_model = YOLO(student_weight)
             results = student_model.train(trainer=AdaptiveKDTrainer, **train_args)
         else:
             raise
@@ -433,21 +437,22 @@ def _maybe_auto_eval(
                 verbose=False,
             )
         if hasattr(eval_results, "box") and eval_results.box is not None:
-            ap_per_cls = getattr(eval_results.box, "ap_per_class", None)
             class_names = getattr(eval_results, "names", {}) or {}
-            nc = len(class_names) if class_names else (len(ap_per_cls) if ap_per_cls is not None else 0)
+            box = eval_results.box
+            nc = len(class_names) if class_names else getattr(box, "nc", 0)
             per_class_data = None
-            if ap_per_cls is not None and nc > 0:
-                p_arr = getattr(eval_results.box, "p", None)
-                r_arr = getattr(eval_results.box, "r", None)
-                labels_list, map_list, prec_list, rec_list = [], [], [], []
+            if nc > 0:
+                import numpy as _np
+
+                _maps = None
+                if hasattr(box, "maps") and box.maps is not None:
+                    _m = _np.asarray(box.maps)
+                    _maps = list(_m.flatten()) if _m.ndim > 1 else list(_m)
+                labels_list, map_list = [], []
                 for i in range(nc):
                     labels_list.append(class_names.get(i, f"class{i}"))
-                    map_list.append(float(ap_per_cls[i]))
-                    # Keep missing class metrics as null instead of 0.0,
-                    # so UI can distinguish "no data" from a true zero score.
-                    prec_list.append(float(p_arr[i]) if p_arr is not None and i < len(p_arr) else None)
-                    rec_list.append(float(r_arr[i]) if r_arr is not None and i < len(r_arr) else None)
+                    map_list.append(float(_maps[i]) if _maps and i < len(_maps) else None)
+                prec_list, rec_list = _scatter_pr_from_ultralytics_box(box, nc)
                 per_class_data = {
                     "labels": labels_list,
                     "map": map_list,

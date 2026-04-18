@@ -1,14 +1,20 @@
 {
   "name": "edgedistilldet-webui",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "EdgeDistillDet Web UI with Material Design",
-  "main": "app.py",
   "scripts": {
-    "start": "python app.py",
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "preview": "vite preview --port 5173"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   },
   "dependencies": {
+    "@fontsource/material-icons": "^5.2.7",
+    "@fontsource/noto-sans-sc": "^5.2.9",
+    "@fontsource/plus-jakarta-sans": "^5.2.8",
     "chart.js": "^4.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

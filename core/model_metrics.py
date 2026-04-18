@@ -69,6 +69,13 @@ def estimate_params_m_from_checkpoint(weight_path: str | Path) -> float | None:
                 state_dict = model_obj.state_dict()
             elif isinstance(model_obj, dict):
                 state_dict = model_obj
+        # Ultralytics checkpoints may store trainable weights in `ema` while `model` is None.
+        if state_dict is None and "ema" in raw:
+            ema_obj = raw["ema"]
+            if hasattr(ema_obj, "state_dict"):
+                state_dict = ema_obj.state_dict()
+            elif isinstance(ema_obj, dict):
+                state_dict = ema_obj
         elif "state_dict" in raw:
             inner = raw["state_dict"]
             if hasattr(inner, "state_dict"):

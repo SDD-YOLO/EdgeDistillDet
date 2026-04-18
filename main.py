@@ -18,7 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
-BANNER = r"""
+__version__ = "1.0.1"
+
+BANNER = rf"""
  _____    _           ______ _     _   _ _ _______     _   
 |  ___|  | |          |  _  (_)   | | (_) | |  _  \   | |  
 | |__  __| | __ _  ___| | | |_ ___| |_ _| | | | | |___| |_ 
@@ -28,7 +30,7 @@ BANNER = r"""
              __/ |                                          
             |___/                                           
 
-  面向边缘计算的微小目标自适应蒸馏与检测评估系统  v1.0
+  面向边缘计算的微小目标自适应蒸馏与检测评估系统  v{__version__}
   Edge-Oriented Micro Small-Target Adaptive Distillation & Detection Evaluation System
 """
 

@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EdgeDistillDet - 训练控制台</title>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
     <link rel="stylesheet" href="/static/dist/app.css">
     <style>
@@ -35,6 +32,56 @@
     </style>
 </head>
 <body>
+    <script>
+      (function removeQuickStatsAlways() {
+        const labels = new Set(["当前 Loss", "KD Loss", "Alpha 权重", "温度 T", "mAP50", "mAP50-95", "学习率"]);
+
+        function isTargetStatCard(node) {
+          if (!node || !node.classList || !node.classList.contains("stat-card")) return false;
+          const label = (node.querySelector(".stat-label")?.textContent || "").trim();
+          return labels.has(label);
+        }
+
+        function collectTargets(rootNode) {
+          const root = rootNode && rootNode.nodeType === 1 ? rootNode : document;
+          const targets = [];
+          root.querySelectorAll?.(".quick-stats").forEach((el) => targets.push(el));
+          root.querySelectorAll?.(".stat-card").forEach((el) => {
+            if (isTargetStatCard(el)) targets.push(el);
+          });
+          if (root.classList && root.classList.contains("quick-stats")) targets.push(root);
+          if (isTargetStatCard(root)) targets.push(root);
+          return Array.from(new Set(targets));
+        }
+
+        function removeTargets(reason, rootNode) {
+          const targets = collectTargets(rootNode);
+          if (!targets.length) return 0;
+          targets.forEach((el) => el.remove());
+          return targets.length;
+        }
+
+        function init() {
+          removeTargets("initial-scan", document);
+
+          const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+              for (const added of mutation.addedNodes) {
+                if (added.nodeType !== 1) continue;
+                removeTargets("mutation-added", added);
+              }
+            }
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init, { once: true });
+        } else {
+          init();
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/static/dist/app.js"></script>
 </body>

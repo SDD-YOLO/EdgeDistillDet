@@ -1,2 +1,2 @@
 
-        def torch_load_checkpoint(path):
+        print(f"[FATAL] Template file not found: {TEMPLATE_FILE}")
