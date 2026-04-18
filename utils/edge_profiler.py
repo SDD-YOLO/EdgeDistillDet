@@ -11,14 +11,17 @@ utils/edge_profiler.py
   5. 部署可行性报告  —— 综合算力/内存/功耗给出 PASS / WARN / FAIL 评级
 """
 
-import io
 import math
 import os
 import logging
-from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from core.model_metrics import (
+    estimate_gflops_from_weight,
+    estimate_params_m_from_checkpoint,
+)
 
 logger = logging.getLogger("EdgeDistillDet.EdgeProfiler")
 
@@ -120,110 +123,17 @@ class EdgeProfiler:
     # ── 提取模型基础指标 ──────────────────────────────────────────────────────
     @staticmethod
     def _count_params_from_checkpoint(path: str) -> float:
-        import importlib
-        import torch
-
-        try:
-            raw = torch.load(path, map_location='cpu')
-        except Exception:
-            safe_globals = []
-            try:
-                ul_spec = importlib.util.find_spec("ultralytics")
-                if ul_spec:
-                    ul = importlib.import_module("ultralytics")
-                    if hasattr(ul, "nn") and hasattr(ul.nn, "tasks") and hasattr(ul.nn.tasks, "DetectionModel"):
-                        safe_globals.append(ul.nn.tasks.DetectionModel)
-            except Exception:
-                pass
-
-            try:
-                if safe_globals and hasattr(torch.serialization, "safe_globals"):
-                    with torch.serialization.safe_globals(safe_globals):
-                        raw = torch.load(path, map_location="cpu", weights_only=False)
-                else:
-                    raw = torch.load(path, map_location="cpu", weights_only=False)
-            except Exception:
-                raise
-        state_dict = None
-        if hasattr(raw, 'state_dict'):
-            state_dict = raw.state_dict()
-        elif isinstance(raw, dict):
-            if 'model' in raw:
-                model_obj = raw['model']
-                if hasattr(model_obj, 'state_dict'):
-                    state_dict = model_obj.state_dict()
-                elif isinstance(model_obj, dict):
-                    state_dict = model_obj
-            elif 'state_dict' in raw:
-                state_dict = raw['state_dict']
-            elif all(hasattr(v, 'numel') for v in raw.values()):
-                state_dict = raw
-
-        if not isinstance(state_dict, dict):
-            raise RuntimeError('无法从 checkpoint 提取 state_dict')
-
-        total_params = 0
-        for value in state_dict.values():
-            if hasattr(value, 'numel'):
-                total_params += int(value.numel())
-        if total_params <= 0:
-            raise RuntimeError('模型参数计数结果为 0')
-        return total_params / 1e6
+        params_m = estimate_params_m_from_checkpoint(path)
+        if params_m is None or params_m <= 0:
+            raise RuntimeError("模型参数计数结果为 0")
+        return params_m
 
     def _get_model_metrics(self) -> Dict[str, float]:
         try:
-            from ultralytics import YOLO
-            model = YOLO(self.weight_path)
-
-            # 优先尝试现代 ultralytics (>=8.x) 直接返回 (nparams, gflops) 元组
-            try:
-                info_result = model.info(verbose=False)
-                if isinstance(info_result, (list, tuple)) and len(info_result) >= 2:
-                    n_params = float(info_result[0])
-                    g = float(info_result[1])
-                    if n_params > 1000 and g > 0:
-                        params_m = n_params / 1e6
-                        gflops = g
-                        del model
-                        return {"params_m": params_m, "gflops": gflops}
-            except Exception:
-                pass
-
-            # 回退：捕获 stdout 解析（旧版 ultralytics 行为）
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                try:
-                    model.info(verbose=False)
-                except Exception:
-                    pass
-            text = buf.getvalue()
-            params_m = None
-            gflops = None
-            for line in text.split("\n"):
-                if "parameters" in line.lower() and params_m is None:
-                    for tok in line.replace(",", "").split():
-                        try:
-                            v = float(tok)
-                            if v > 1000:
-                                params_m = v / 1e6
-                                break
-                        except ValueError:
-                            continue
-                if "gflops" in line.lower() and gflops is None:
-                    for tok in line.split():
-                        try:
-                            g = float(tok.replace(",", ""))
-                            if g > 0:
-                                gflops = g
-                                break
-                        except ValueError:
-                            continue
-            del model
-            if params_m is not None and gflops is not None:
-                return {"params_m": params_m, "gflops": gflops}
-
             params_m = self._count_params_from_checkpoint(self.weight_path)
-            gflops = max(params_m * 4.5, 1.0)
+            gflops = estimate_gflops_from_weight(self.weight_path)
+            if gflops is None:
+                gflops = max(params_m * 4.5, 1.0)
             return {"params_m": params_m, "gflops": gflops}
         except Exception as e:
             logger.warning(f"模型指标提取失败: {e}")

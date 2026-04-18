@@ -25,79 +25,21 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+from utils.dataset_common import (
+    SIZE_BINS,
+    classify_scene,
+    find_label,
+    parse_label,
+    size_category,
+)
+
 logger = logging.getLogger("EdgeDistillDet.DatasetAnalyzer")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 尺寸分级阈值（像素面积）
-# ─────────────────────────────────────────────────────────────────────────────
-SIZE_BINS = {
-    "tiny":   (0,     16 * 16),
-    "small":  (16*16, 32 * 32),
-    "medium": (32*32, 96 * 96),
-    "large":  (96*96, float("inf")),
-}
-
-# 场景判断阈值（HSV Value 通道均值）
-V_NIGHT   = 70
-V_DUSK    = 130
-V_SUNNY   = 150
-S_SUNNY   = 40
-
-
-def _classify_scene(mean_v: float, mean_s: float) -> str:
-    if mean_v < V_NIGHT:
-        return "night"
-    if mean_v < V_DUSK:
-        return "dusk"
-    if mean_v >= V_SUNNY and mean_s >= S_SUNNY:
-        return "sunny"
-    return "overcast"
-
-
-def _size_category(area_px: float) -> str:
-    for cat, (lo, hi) in SIZE_BINS.items():
-        if lo <= area_px < hi:
-            return cat
-    return "large"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 标注解析
-# ─────────────────────────────────────────────────────────────────────────────
-def _parse_label(lbl_path: str, W: int, H: int) -> List[Dict]:
-    items = []
-    if not os.path.exists(lbl_path):
-        return items
-    with open(lbl_path, "r") as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) < 5:
-                continue
-            cls_id = int(parts[0])
-            cx, cy, bw, bh = map(float, parts[1:5])
-            # 越界检查
-            is_oob = not (0 <= cx <= 1 and 0 <= cy <= 1 and
-                          0 < bw <= 1 and 0 < bh <= 1)
-            area_px = bw * W * bh * H
-            items.append({
-                "cls":     cls_id,
-                "cx": cx, "cy": cy, "bw": bw, "bh": bh,
-                "area_px": area_px,
-                "size_cat": _size_category(area_px),
-                "is_oob":  is_oob,
-                "is_zero": area_px < 1.0,
-            })
-    return items
-
-
-def _find_label(img_path: str, img_dir: str, lbl_dir: str) -> str:
-    stem = Path(img_path).stem
-    direct = Path(lbl_dir) / f"{stem}.txt"
-    if direct.exists():
-        return str(direct)
-    alt = Path(img_path).parent.parent / "labels" / f"{stem}.txt"
-    return str(alt) if alt.exists() else str(direct)
+# 兼容旧导入路径，避免外部调用中断。
+_classify_scene = classify_scene
+_size_category = size_category
+_parse_label = parse_label
+_find_label = find_label
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -221,10 +163,10 @@ class DatasetAnalyzer:
             mean_v = hsv[:, :, 2].mean()
             mean_s = hsv[:, :, 1].mean()
             hue_stds.append(hsv[:, :, 0].std())
-            scene_cnt[_classify_scene(mean_v, mean_s)] += 1
+            scene_cnt[classify_scene(mean_v, mean_s)] += 1
 
-            lp = _find_label(ip, img_dir, lbl_dir)
-            annos = _parse_label(lp, W, H)
+            lp = find_label(ip, img_dir, lbl_dir)
+            annos = parse_label(lp, W, H)
             total_anno += len(annos)
             for a in annos:
                 size_cnt[a["size_cat"]] += 1

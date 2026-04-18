@@ -1,15 +1,18 @@
 distillation:
   student_weight: models/yolov8n.pt
   teacher_weight: models/yolov8m.pt
-  alpha_init: 0.45
-  T_max: 6.00022671881199
-  T_min: 2.00042512186827
+  alpha_init: 0.6
+  T_max: 3
+  T_min: 1.5
   warm_epochs: 5
-  w_kd: 0.503655840843394
-  w_focal: 0.472225371273098
-  w_feat: 0
+  w_kd: 0.45
+  w_focal: 0.55
+  w_feat: 0.4
   scale_boost: 2
   focal_gamma: 2
+  temperature: 1.8
+  alpha: 0.3
+  distill_type: soft
 training:
   compute_provider: local
   cloud_api:
@@ -28,20 +31,25 @@ training:
     dataset_name: ''
   data_yaml: coco128.yaml
   device: '0'
-  epochs: 10
+  epochs: 120
   imgsz: 640
-  batch: 16
-  workers: 0
+  batch: 32
+  workers: 6
   lr0: 0.01
-  lrf: 0.08
+  lrf: 0.2
   warmup_epochs: 3
   mosaic: 0.8
-  mixup: 0.1
-  close_mosaic: 1
+  mixup: 0.3
+  close_mosaic: 6
   amp: true
+  batch_size: 64
+  learning_rate: 0.0003
+  grad_clip: 5
 output:
   project: runs
-  name: exp5
+  name: exp2
+  model_dir: ./output/models
+  log_dir: ./logs
 wandb:
   enabled: false
   mode: online

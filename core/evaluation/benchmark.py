@@ -14,13 +14,12 @@ core/evaluation/benchmark.py
 """
 
 import os
-import io
 import time
 import logging
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from core.model_metrics import extract_model_stats
 from utils import expand_env_vars
 
 import torch
@@ -31,102 +30,8 @@ from ultralytics import YOLO
 logger = logging.getLogger("EdgeDistillDet.Benchmark")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 辅助：提取模型参数量 / GFLOPs
-# ─────────────────────────────────────────────────────────────────────────────
 def _extract_model_stats(model: YOLO) -> Dict[str, str]:
-    def _parse_number(value: str) -> Optional[float]:
-        if value is None:
-            return None
-        text = str(value).replace(",", "").strip()
-        if not text:
-            return None
-        suffix = text[-1].upper()
-        multiplier = 1.0
-        if suffix == 'M':
-            multiplier = 1e6
-            text = text[:-1]
-        elif suffix == 'K':
-            multiplier = 1e3
-            text = text[:-1]
-        try:
-            return float(text) * multiplier
-        except ValueError:
-            return None
-
-    params, gflops = "N/A", "N/A"
-
-    # 优先使用 ultralytics 返回的结构化信息
-    try:
-        buf = io.StringIO()
-        with redirect_stdout(buf), redirect_stderr(buf):
-            info_result = model.info(verbose=True)
-        if isinstance(info_result, (list, tuple)) and len(info_result) >= 2:
-            n_params = _parse_number(info_result[1])
-            g = _parse_number(info_result[3] if len(info_result) >= 4 else info_result[1])
-            if n_params is not None and n_params > 0:
-                params = f"{int(n_params):,}"
-            if g is not None and g > 0:
-                gflops = f"{g:.1f}".rstrip('0').rstrip('.')
-            if params != "N/A" or gflops != "N/A":
-                return {"params": params, "gflops": gflops}
-            text = buf.getvalue()
-        elif isinstance(info_result, dict):
-            if params == "N/A":
-                for key in ("params", "n_p", "n_params", "num_params"):
-                    if key in info_result:
-                        n_params = _parse_number(info_result[key])
-                        if n_params is not None and n_params > 0:
-                            params = f"{int(n_params):,}"
-                            break
-            if gflops == "N/A":
-                for key in ("gflops", "flops", "gfloats"):
-                    if key in info_result:
-                        g = _parse_number(info_result[key])
-                        if g is not None and g > 0:
-                            gflops = f"{g:.1f}".rstrip('0').rstrip('.')
-                            break
-            if params != "N/A" or gflops != "N/A":
-                return {"params": params, "gflops": gflops}
-            text = buf.getvalue()
-        elif isinstance(info_result, str):
-            text = info_result
-        else:
-            text = buf.getvalue()
-    except Exception:
-        text = ""
-
-    # 回退到 stdout 捕获解析旧版 ultralytics 输出
-    buf = io.StringIO()
-    try:
-        with redirect_stdout(buf), redirect_stderr(buf):
-            model.info(verbose=False)
-        text = buf.getvalue()
-        for line in text.splitlines():
-            lower = line.lower()
-            if "parameters" in lower and params == "N/A":
-                for tok in line.replace(",", "").split():
-                    n = _parse_number(tok)
-                    if n is not None and n >= 1000:
-                        params = f"{int(n):,}"
-                        break
-            if "gflops" in lower and gflops == "N/A":
-                for tok in line.split():
-                    g = _parse_number(tok)
-                    if g is not None and g > 0:
-                        gflops = f"{g:.1f}".rstrip('0').rstrip('.')
-                        break
-    except Exception:
-        pass
-
-    if params == "N/A":
-        try:
-            total_params = sum(p.numel() for p in model.model.parameters())
-            params = f"{int(total_params):,}"
-        except Exception:
-            pass
-
-    return {"params": params, "gflops": gflops}
+    return extract_model_stats(model)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

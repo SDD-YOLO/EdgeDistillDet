@@ -1,0 +1,130 @@
+{
+  "version": "v1",
+  "philosophy": "single-purpose tools, JSON input/output, composable pipeline, explicit approval gate",
+  "pipeline": [
+    "agent.get_context",
+    "agent.analyze_params",
+    "agent.propose_patch",
+    "agent.validate_patch",
+    "agent.preview_patch",
+    "user_approval",
+    "agent.apply_patch_with_approval"
+  ],
+  "tools": [
+    {
+      "name": "agent.get_context",
+      "description": "读取 run 上下文、当前配置和指标摘要",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run_id": { "type": "string" },
+          "config_name": { "type": "string", "default": "distill_config.yaml" }
+        },
+        "required": ["run_id"]
+      }
+    },
+    {
+      "name": "agent.analyze_params",
+      "description": "分析微调/蒸馏参数并给出可执行建议",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run_id": { "type": "string" },
+          "objective": { "type": "string" },
+          "config_name": { "type": "string", "default": "distill_config.yaml" }
+        },
+        "required": ["run_id", "objective"]
+      }
+    },
+    {
+      "name": "agent.propose_patch",
+      "description": "输出候选 patch，不写入配置",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "goal": { "type": "string" },
+          "constraints": { "type": "object" }
+        }
+      }
+    },
+    {
+      "name": "agent.validate_patch",
+      "description": "校验 patch 的字段、类型与风险",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "patch": { "type": "object" },
+          "strict": { "type": "boolean", "default": true }
+        },
+        "required": ["patch"]
+      }
+    },
+    {
+      "name": "agent.preview_patch",
+      "description": "生成审批票据和预览 diff",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run_id": { "type": "string" },
+          "patch": { "type": "object" },
+          "operator": { "type": "string", "default": "agent" },
+          "reason": { "type": "string" }
+        },
+        "required": ["run_id", "patch"]
+      }
+    },
+    {
+      "name": "agent.apply_patch_with_approval",
+      "description": "仅在用户批准后写入配置",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run_id": { "type": "string" },
+          "approval_token": { "type": "string" },
+          "request_hash": { "type": "string" },
+          "operator": { "type": "string", "default": "agent" },
+          "reason": { "type": "string" }
+        },
+        "required": ["run_id", "approval_token"]
+      }
+    },
+    {
+      "name": "agent.list_run_history",
+      "description": "查询 run 最近 5 次变更",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run_id": { "type": "string" }
+        },
+        "required": ["run_id"]
+      }
+    },
+    {
+      "name": "agent.rollback_run_config",
+      "description": "把配置回退到历史版本（窗口最多 5 条）",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run_id": { "type": "string" },
+          "target_version": { "type": "integer" },
+          "steps": { "type": "integer", "minimum": 1 },
+          "operator": { "type": "string", "default": "agent" },
+          "reason": { "type": "string" }
+        },
+        "required": ["run_id"]
+      }
+    }
+  ],
+  "constraints": {
+    "allowed_patch_top_level": ["distillation", "training", "output"],
+    "approval_required_for_apply": true,
+    "rollback_window_per_run": 5
+  },
+  "error_codes": {
+    "E_PATCH_INVALID": 400,
+    "E_APPROVAL_EXPIRED": 400,
+    "E_APPROVAL_REPLAY": 400,
+    "E_RUN_HISTORY_EMPTY": 404,
+    "E_INTERNAL": 500
+  }
+}

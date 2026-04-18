@@ -27,6 +27,7 @@ import torch
 from ultralytics import YOLO
 from ultralytics.models.yolo.detect.train import DetectionTrainer, DEFAULT_CFG
 
+from core.distillation.common import safe_scalar
 from core.distillation.loss_functions import (
     CompositiveDistillLoss,
     CosineTemperatureScheduler,
@@ -61,7 +62,7 @@ class AdaptiveAlphaScheduler:
     def current_alpha(self): return self.alpha
     
     def update(self, task_loss):
-        v = _safe_scalar(task_loss)
+        v = safe_scalar(task_loss)
         self._ema_loss = v if self._ema_loss is None else self.ema_decay * self._ema_loss + (1-self.ema_decay)*v
         if self._prev_ema is not None:
             d = (self._prev_ema - self._ema_loss)/(self._prev_ema + 1e-8)
@@ -71,17 +72,8 @@ class AdaptiveAlphaScheduler:
 
 
 def _safe_scalar(value):
-    """安全标量转换 — 处理任意维度张量"""
-    if value is None:
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    if torch.is_tensor(value):
-        if value.numel() == 0: return 0.0
-        elif value.numel() == 1: return value.detach().item()
-        else: return value.detach().mean().item()
-    try: return float(value)
-    except (TypeError, ValueError): return 0.0
+    """兼容旧调用点，内部委托到共享实现。"""
+    return safe_scalar(value)
 
 
 def _format_progress_bar(completed, total, width=24):

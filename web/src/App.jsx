@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   BarController,
   BarElement,
@@ -12,6 +12,11 @@ import {
   PointElement,
   Tooltip
 } from "chart.js";
+import { apiRequest } from "./api/client";
+import { DEFAULT_FORM, COMPUTE_PRESETS, inferComputeProviderFromConfig } from "./constants/trainingDefaults";
+import { useToast } from "./hooks/useToast";
+import { detectLogLevel } from "./utils/logging";
+import { formatTime } from "./utils/time";
 
 Chart.register(
   BarController,
@@ -26,151 +31,9 @@ Chart.register(
   Tooltip
 );
 
-const DEFAULT_FORM = {
-  distillation: {
-    student_weight: "",
-    teacher_weight: "",
-    alpha_init: 0.5,
-    T_max: 6,
-    T_min: 1.5,
-    warm_epochs: 5,
-    w_kd: 0.5,
-    w_focal: 0.3,
-    w_feat: 0,
-    scale_boost: 2,
-    focal_gamma: 2
-  },
-  training: {
-    compute_provider: "local",
-    cloud_api: {
-      base_url: "",
-      submit_path: "/train/start",
-      status_path: "/train/status",
-      logs_path: "/train/logs",
-      stop_path: "/train/stop",
-      token: "",
-      poll_interval_sec: 3
-    },
-    dataset_api: {
-      enabled: false,
-      source: "path",
-      resolve_url: "",
-      token: "",
-      dataset_name: ""
-    },
-    data_yaml: "",
-    device: "0",
-    epochs: 150,
-    imgsz: 640,
-    batch: -1,
-    workers: 0,
-    lr0: 0.01,
-    lrf: 0.1,
-    warmup_epochs: 3,
-    mosaic: 0.8,
-    mixup: 0.1,
-    close_mosaic: 20,
-    amp: true
-  },
-  output: {
-    project: "runs/distill",
-    name: "adaptive_kd_v1"
-  },
-  wandb: {
-    enabled: false,
-    mode: "online",
-    project: "edge-distilldet",
-    entity: "",
-    name: "",
-    group: "",
-    job_type: "distill-train",
-    tags: "",
-    notes: ""
-  }
-};
-
-const COMPUTE_PRESETS = {
-  local: {
-    device: "0",
-    outputProject: "runs/distill"
-  },
-  autodl: {
-    device: "0",
-    outputProject: "/root/autodl-tmp/runs/distill"
-  },
-  colab: {
-    device: "0",
-    outputProject: "/content/runs/distill"
-  }
-};
-
-function inferComputeProviderFromConfig(config, fallback = "local") {
-  const explicitProvider = String(config?.training?.compute_provider || "").trim().toLowerCase();
-  if (explicitProvider === "autodl" || explicitProvider === "colab" || explicitProvider === "local" || explicitProvider === "remote_api") {
-    return explicitProvider;
-  }
-
-  const outputProject = String(config?.output?.project || "").toLowerCase();
-  const dataYaml = String(config?.training?.data_yaml || "").toLowerCase();
-  const featureText = `${outputProject} ${dataYaml}`;
-
-  if (featureText.includes("/root/autodl-tmp") || featureText.includes("autodl")) {
-    return "autodl";
-  }
-  if (featureText.includes("/content/") || featureText.includes("colab")) {
-    return "colab";
-  }
-  if (featureText.includes("http://") || featureText.includes("https://")) {
-    return "remote_api";
-  }
-  return fallback;
-}
-
-function useToast() {
-  const [toasts, setToasts] = useState([]);
-  const push = (message, type = "info") => {
-    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setToasts((prev) => [...prev, { id, message, type }]);
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3000);
-  };
-  return { toasts, push };
-}
-
-async function apiRequest(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...options.headers },
-    ...options
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const err = new Error(data.error || "请求失败");
-    err.status = response.status;
-    err.payload = data;
-    throw err;
-  }
-  return data;
-}
-
-function formatTime(seconds) {
-  const safe = Math.max(0, Number(seconds) || 0);
-  const h = Math.floor(safe / 3600);
-  const m = Math.floor((safe % 3600) / 60);
-  const s = safe % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
-function detectLogLevel(line) {
-  const text = String(line || "");
-  if (/\b(error|exception|traceback|failed?)\b/i.test(text)) return "error";
-  if (/(\bwarn(ing)?\b|caution|警告|告警|⚠|\[W\]|^\s*W\d*:|\bignoring\b|忽略|已忽略|\bdeprecated\b)/i.test(text)) return "warning";
-  if (/\b(success|done|completed?)\b/i.test(text)) return "success";
-  return "info";
-}
-
 function App() {
   const [activeTab, setActiveTab] = useState("training");
+  const [metricsCsvPath, setMetricsCsvPath] = useState("");
   const [theme, setTheme] = useState(() => window.localStorage.getItem("edgedistilldet-theme") || "light");
   const { toasts, push } = useToast();
 
@@ -219,9 +82,9 @@ function App() {
         </nav>
 
         <div className="tab-panels">
-          {activeTab === "training" ? <TrainingPanel toast={push} /> : null}
-          {activeTab === "metrics" ? <MetricsPanel toast={push} /> : null}
-          {activeTab === "agent" ? <AgentPanel toast={push} /> : null}
+          <TrainingPanel toast={push} active={activeTab === "training"} />
+          <MetricsPanel toast={push} active={activeTab === "metrics"} onMetricsSourceChange={setMetricsCsvPath} />
+          <AgentPanel toast={push} active={activeTab === "agent"} metricsCsvPath={metricsCsvPath} />
         </div>
       </main>
 
@@ -239,7 +102,7 @@ function App() {
   );
 }
 
-function TrainingPanel({ toast }) {
+function TrainingPanel({ toast, active }) {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [mode, setMode] = useState("distill");
   const [running, setRunning] = useState(false);
@@ -636,7 +499,7 @@ function TrainingPanel({ toast }) {
   const isResumeStartDisabled = mode === "resume" && resumeCandidates.length === 0;
 
   return (
-    <div className="tab-panel active" id="panel-training">
+    <div className={`tab-panel ${active ? "active" : ""}`} id="panel-training" aria-hidden={!active}>
       <section className="train-launcher">
         <div className="launcher-left">
           <div className="launch-info">
@@ -959,7 +822,22 @@ function TrainingPanel({ toast }) {
                 />
               ) : null}
               <NumberField label="训练轮数 Epochs" value={form.training.epochs} step="1" onChange={(v) => setNested("training", "epochs", v)} disabled={running} />
-              <NumberField label="图像尺寸 imgsz" value={form.training.imgsz} step="1" onChange={(v) => setNested("training", "imgsz", v)} disabled={running} />
+              <SelectField
+                label="图像尺寸 imgsz"
+                value={form.training.imgsz}
+                onChange={(v) => setNested("training", "imgsz", Number(v))}
+                options={[
+                  { value: "320", label: "320" },
+                  { value: "416", label: "416" },
+                  { value: "512", label: "512" },
+                  { value: "640", label: "640" },
+                  { value: "768", label: "768" },
+                  { value: "960", label: "960" },
+                  { value: "1024", label: "1024" },
+                  { value: "1280", label: "1280" }
+                ]}
+                disabled={running}
+              />
               <NumberField label="Batch Size" value={form.training.batch} step="1" onChange={(v) => setNested("training", "batch", v)} disabled={running} />
               <NumberField label="数据加载线程数" value={form.training.workers} step="1" onChange={(v) => setNested("training", "workers", v)} disabled={running} />
               <NumberField label="初始学习率 lr0" value={form.training.lr0} step="0.001" onChange={(v) => setNested("training", "lr0", v)} disabled={running} />
@@ -1258,7 +1136,7 @@ function SelectField({ label, value, onChange, options, disabled }) {
   );
 }
 
-function MetricsPanel({ toast }) {
+function MetricsPanel({ toast, active, onMetricsSourceChange }) {
   const [sources, setSources] = useState([]);
   const [source, setSource] = useState("");
   const [overview, setOverview] = useState({});
@@ -1325,6 +1203,12 @@ function MetricsPanel({ toast }) {
     if (!source) return;
     loadMetricsData(source, true);
   }, [source]);
+
+  useEffect(() => {
+    if (typeof onMetricsSourceChange === "function") {
+      onMetricsSourceChange(source || "");
+    }
+  }, [source, onMetricsSourceChange]);
 
   useEffect(() => {
     if (!rawSeriesRef.current) return;
@@ -1415,7 +1299,7 @@ function MetricsPanel({ toast }) {
   const showLr = chartType === "all" || chartType === "lr";
 
   return (
-    <div className="tab-panel active" id="panel-metrics">
+    <div className={`tab-panel ${active ? "active" : ""}`} id="panel-metrics" aria-hidden={!active}>
       <div className="metrics-toolbar">
         <div className="toolbar-left">
           <button className="md-btn md-btn-outlined metrics-refresh-btn" onClick={() => refreshSources(true)}>
@@ -1829,9 +1713,244 @@ function renderAllCharts(instancesRef, refs, chartSeries, lossRange) {
   ]);
 }
 
-function AgentPanel({ toast }) {
+/** 侧边栏「常用工具」：点击即作为用户消息发送（高频问句） */
+const AGENT_QUICK_PROMPTS = [
+  {
+    id: "eval_latest",
+    label: "评价训练结果",
+    text: "请结合当前训练指标与输出目录，评价最近一次训练结果，并指出主要问题与改进方向；如需改配置，请用 Markdown 代码块给出可在 PowerShell 中执行的命令。"
+  },
+  {
+    id: "analyze_params",
+    label: "分析蒸馏参数",
+    text: "请先按约定输出 tool JSON 调用 agent.get_context，再调用 agent.analyze_params 获取事实，最后给出优化建议；涉及修改 configs/distill_config.yaml 时，请用 Markdown 代码块输出 PowerShell 命令（如 notepad、code、或 Python 一行读写），不要只给泛泛而谈。"
+  },
+  {
+    id: "list_runs",
+    label: "实验目录",
+    text: "请使用工具说明当前训练输出目录、exp 命名规则，以及如何定位某次实验的权重与曲线。"
+  },
+  {
+    id: "metrics_report",
+    label: "指标摘要",
+    text: "请根据当前训练指标生成简短摘要，并给出下一步建议；若需要本地命令，请用代码块给出。"
+  }
+];
+
+/** 从模型回复中提取「可执行」代码块（排除单行 tool JSON） */
+function extractExecutableFences(reply) {
+  const raw = typeof reply === "string" ? reply : "";
+  const out = [];
+  const fenceRe = /```([^\n`]*)\n?([\s\S]*?)```/g;
+  let m;
+  while ((m = fenceRe.exec(raw)) !== null) {
+    const inner = (m[2] || "").trim();
+    if (!inner) continue;
+    if (/^\s*\{\s*"tool"\s*:/.test(inner) && inner.length < 1200) continue;
+    const lang = (m[1] || "").trim().toLowerCase();
+    if (lang === "json" && /"tool"\s*:/.test(inner)) continue;
+    out.push(inner);
+  }
+  return out;
+}
+
+const _TERMINAL_TOOL_JSON_MAX = 14000;
+
+/** 右侧「Agent 输出」：分节展示，避免与对话重复堆叠 */
+function formatAgentTerminalOutput(reply, toolLogs) {
+  const fences = extractExecutableFences(reply);
+  const heuristicLines = (typeof reply === "string" ? reply : "")
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      if (!t || t.startsWith("```")) return false;
+      return /^(python|pip|cd|git|curl|notepad|code|\$|\.\/|Invoke-)/i.test(t);
+    })
+    .join("\n")
+    .trim();
+
+  const sections = [];
+
+  if (fences.length) {
+    sections.push("【可执行命令 / 脚本】", fences.join("\n\n────────\n\n"));
+  } else if (heuristicLines) {
+    sections.push("【疑似命令行（从正文提取）】", heuristicLines);
+  }
+
+  if (toolLogs && toolLogs.length) {
+    sections.push("");
+    sections.push("【本地工具调用】");
+    toolLogs.forEach((t, i) => {
+      const name = t.call?.tool || "?";
+      const args = t.call?.args && typeof t.call.args === "object" ? t.call.args : {};
+      sections.push(`── ${i + 1}. ${name} ──`);
+      sections.push(`请求参数:\n${JSON.stringify({ tool: name, args }, null, 2)}`);
+      let resStr = "";
+      try {
+        resStr = JSON.stringify(t.result, null, 2);
+      } catch {
+        resStr = String(t.result);
+      }
+      const fullLen = resStr.length;
+      if (fullLen > _TERMINAL_TOOL_JSON_MAX) {
+        resStr = `${resStr.slice(0, _TERMINAL_TOOL_JSON_MAX)}\n… (以下省略 ${fullLen - _TERMINAL_TOOL_JSON_MAX} 字符)`;
+      }
+      sections.push(`返回:\n${resStr}`);
+      sections.push("");
+    });
+  }
+
+  if (!sections.length) {
+    return "【提示】本轮未识别到可单独摘出的终端代码块，且未经过本地工具。\n完整说明见左侧对话；需要命令时请让模型用 ```powershell``` 或 ```bash``` 代码块输出。";
+  }
+
+  if (!fences.length && !heuristicLines && toolLogs?.length) {
+    sections.unshift("【提示】模型未使用 Markdown 代码块给出 shell；下方为工具原始返回。");
+  }
+
+  return sections.join("\n").trim();
+}
+
+/** 从 OpenAI 风格 message.content 提取文本（多模态为数组时拼接） */
+function pieceTextFromContent(val) {
+  if (val == null) return "";
+  if (typeof val === "string") return val;
+  if (Array.isArray(val)) {
+    const parts = [];
+    for (const item of val) {
+      if (typeof item === "string") parts.push(item);
+      else if (item && typeof item === "object") {
+        if (typeof item.text === "string") parts.push(item.text);
+        else if (typeof item.content === "string") parts.push(item.content);
+      }
+    }
+    return parts.join("");
+  }
+  return String(val);
+}
+
+/** 从 API 响应中同时取出正文与 reasoning（与后端 _extract_openai_reasoning_from_message 对齐） */
+function extractReplyAndReasoningFromPayload(payload) {
+  if (typeof payload === "string") return { reply: payload, reasoning: "" };
+  if (!payload || typeof payload !== "object") return { reply: String(payload ?? ""), reasoning: "" };
+  let reasoning = "";
+  if (typeof payload.reasoning === "string" && payload.reasoning.trim()) {
+    reasoning = payload.reasoning.trim();
+  }
+  const msg = payload?.choices?.[0]?.message;
+  if (msg && typeof msg === "object") {
+    if (!reasoning) {
+      const r = msg.reasoning_content ?? msg.reasoning;
+      if (typeof r === "string" && r.trim()) reasoning = r.trim();
+    }
+    const reply = pieceTextFromContent(msg.content);
+    if (reply.trim()) return { reply, reasoning };
+  }
+  const fallback = payload.reply ?? payload.message ?? payload.output;
+  if (typeof fallback === "string") return { reply: fallback, reasoning };
+  if (fallback !== undefined && fallback !== null) {
+    return { reply: typeof fallback === "object" ? JSON.stringify(fallback, null, 2) : String(fallback), reasoning };
+  }
+  return { reply: JSON.stringify(payload, null, 2), reasoning };
+}
+
+/** 从正文中剥离常见「思考」包裹块（不进入 UI「思考过程」区，仅清洁正文） */
+function splitEmbeddedReasoningFromReply(text) {
+  const raw = typeof text === "string" ? text : "";
+  let main = raw;
+  const patterns = [
+    /<think\b[^>]*>([\s\S]*?)<\/think>/gi,
+    /<think\b[^>]*>([\s\S]*?)<\/redacted_thinking>/gi,
+    /<redacted_thinking>([\s\S]*?)<\/redacted_thinking>/gi
+  ];
+  for (const re of patterns) {
+    main = main.replace(re, () => "");
+  }
+  main = main.replace(/\n{3,}/g, "\n\n").trim();
+  return { main };
+}
+
+/** displayReply 始终剥离内嵌块；displayReasoning 仅来自 API */
+function buildDisplayReplyAndReasoning(rawReply, reasoningFromApi) {
+  const { main } = splitEmbeddedReasoningFromReply(rawReply);
+  const apiReason =
+    typeof reasoningFromApi === "string" && reasoningFromApi.trim() ? reasoningFromApi.trim() : "";
+  return { displayReply: main, displayReasoning: apiReason };
+}
+
+/** Agent 气泡：工具 chips、仅 API 思考可折叠、``` 代码块排版 */
+function ChatBubbleBody({ role, content, reasoningApi, toolsUsed, streaming }) {
+  const text = content ?? "";
+  const reasoningText = typeof reasoningApi === "string" && reasoningApi.trim() ? reasoningApi.trim() : "";
+  const tools = Array.isArray(toolsUsed) ? toolsUsed.filter(Boolean) : [];
+  if (role !== "agent") {
+    return <div className="chat-plain chat-pre-wrap">{text}</div>;
+  }
+  const parts = [];
+  const fenceRe = /```([^\n`]*)\n?([\s\S]*?)```/g;
+  let idx = 0;
+  let m;
+  while ((m = fenceRe.exec(text)) !== null) {
+    if (m.index > idx) {
+      parts.push({ kind: "text", value: text.slice(idx, m.index) });
+    }
+    parts.push({ kind: "code", value: (m[2] || "").replace(/\n$/, "") });
+    idx = m.index + m[0].length;
+  }
+  if (idx < text.length) {
+    parts.push({ kind: "text", value: text.slice(idx) });
+  }
+  if (parts.length === 0) {
+    parts.push({ kind: "text", value: text });
+  }
+  const answerBlock = (
+    <>
+      {parts.map((p, i) =>
+        p.kind === "code" ? (
+          <pre key={i} className="agent-inline-codefence">
+            {p.value}
+          </pre>
+        ) : (
+          <div key={i} className="agent-inline-text">
+            {p.value}
+          </div>
+        )
+      )}
+    </>
+  );
+
+  return (
+    <div className="agent-bubble-formatted">
+      {tools.length > 0 ? (
+        <div className="agent-bubble-tools" role="list" aria-label="已使用工具">
+          {tools.map((name) => (
+            <span key={name} className="md-chip md-chip-assist" role="listitem">
+              <span className="material-icons md-chip-icon" aria-hidden>
+                build
+              </span>
+              {name}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {reasoningText ? (
+        <details className="agent-reasoning-details" open={!!streaming}>
+          <summary className="agent-reasoning-summary">
+            思考过程
+            {streaming ? <span className="agent-reasoning-live">生成中…</span> : null}
+          </summary>
+          <pre className="agent-reasoning-pre">{reasoningText}</pre>
+        </details>
+      ) : null}
+      {reasoningText ? <div className="agent-answer-body">{answerBlock}</div> : answerBlock}
+    </div>
+  );
+}
+
+function AgentPanel({ toast, active, metricsCsvPath }) {
   const [apiUrl, setApiUrl] = useState(() => window.localStorage.getItem("edge_distill_agent_api_url") || "");
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem("edge_distill_agent_api_key") || "");
+  const [apiModel, setApiModel] = useState(() => window.localStorage.getItem("edge_distill_agent_api_model") || "");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1839,7 +1958,33 @@ function AgentPanel({ toast }) {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [approvalBody, setApprovalBody] = useState("");
   const [approvalToken, setApprovalToken] = useState("");
+  const [approvalRunId, setApprovalRunId] = useState("default");
+  const [approvalRequestHash, setApprovalRequestHash] = useState("");
   const chatTextareaRef = useRef(null);
+  const chatMessagesRef = useRef(null);
+  const agentSlotIndexRef = useRef(-1);
+
+  useLayoutEffect(() => {
+    const el = chatMessagesRef.current;
+    if (!el || !active) return;
+    const applyScroll = () => {
+      el.scrollTop = el.scrollHeight;
+    };
+    applyScroll();
+    window.requestAnimationFrame(applyScroll);
+  }, [messages, loading, active]);
+
+  useEffect(() => {
+    const el = chatMessagesRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (!active) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [active]);
+
   const resizeChatInput = () => {
     const el = chatTextareaRef.current;
     if (!el) return;
@@ -1859,37 +2004,559 @@ function AgentPanel({ toast }) {
     const el = chatTextareaRef.current;
     if (!el) return;
     resizeChatInput();
-    const computed = window.getComputedStyle(el);
-    // #region agent log
-    fetch("http://127.0.0.1:7683/ingest/597ab011-8d14-4d9b-8374-f910e434ea52", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ba85b8" },
-      body: JSON.stringify({
-        sessionId: "ba85b8",
-        runId: "post-fix",
-        hypothesisId: "H1",
-        location: "web/src/App.jsx:AgentPanel",
-        message: "textarea computed layout snapshot",
-        data: {
-          rowsAttr: el.getAttribute("rows"),
-          clientHeight: el.clientHeight,
-          scrollHeight: el.scrollHeight,
-          computedHeight: computed.height,
-          computedMinHeight: computed.minHeight,
-          computedPaddingTop: computed.paddingTop,
-          computedPaddingBottom: computed.paddingBottom,
-          lineHeight: computed.lineHeight
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
   }, [input]);
 
   const saveConfig = () => {
     window.localStorage.setItem("edge_distill_agent_api_url", apiUrl.trim());
     window.localStorage.setItem("edge_distill_agent_api_key", apiKey.trim());
+    window.localStorage.setItem("edge_distill_agent_api_model", apiModel.trim());
     toast("Agent API 配置已保存", "success");
+  };
+
+  const resolveModelName = () => {
+    const value = apiModel.trim();
+    return value || "gpt-4o-mini";
+  };
+
+  const isArkApiUrl = () => {
+    const text = apiUrl.trim().toLowerCase();
+    return text.includes("ark.") && text.includes("/api/v");
+  };
+
+  const parseResponsePayload = async (res) => {
+    const text = await res.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+
+  const buildAuthHeaderCandidates = () => {
+    const token = apiKey.trim();
+    if (!token) return [{}];
+    const withBearer = /^bearer\s+/i.test(token) ? token : `Bearer ${token}`;
+    const variants = [
+      { Authorization: token },
+      { Authorization: withBearer },
+      { "x-api-key": token },
+      { Authorization: withBearer, "x-api-key": token }
+    ];
+    const seen = new Set();
+    return variants.filter((item) => {
+      const key = JSON.stringify(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const buildAgentTargets = () => {
+    const raw = apiUrl.trim().replace(/\/+$/, "");
+    const openaiPath = "/v1/chat/completions";
+    const targets = [];
+    const hasOpenAiEndpoint = /\/v1\/chat\/completions$/i.test(raw);
+    if (hasOpenAiEndpoint) {
+      targets.push({ kind: "openai", url: raw });
+      return targets;
+    }
+    targets.push({ kind: "custom", url: raw });
+    if (/\/v1$/i.test(raw)) {
+      targets.push({ kind: "openai", url: `${raw}/chat/completions` });
+    } else {
+      targets.push({ kind: "openai", url: `${raw}${openaiPath}` });
+    }
+    return targets;
+  };
+
+  const extractToolCallFromText = (text) => {
+    const raw = typeof text === "string" ? text.trim() : "";
+    const toToolCall = (parsed) => {
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+      if (typeof parsed.tool === "string") {
+        return { tool: parsed.tool, args: parsed.args && typeof parsed.args === "object" ? parsed.args : {} };
+      }
+      if (parsed.action === "tool_call" && typeof parsed.name === "string") {
+        return { tool: parsed.name, args: parsed.arguments && typeof parsed.arguments === "object" ? parsed.arguments : {} };
+      }
+      return null;
+    };
+
+    const candidates = [];
+    if (raw) candidates.push({ source: "raw", text: raw });
+    const blocks = [...raw.matchAll(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/g)];
+    for (const m of blocks) {
+      const body = (m[1] || "").trim();
+      if (body) candidates.push({ source: "fence", text: body });
+    }
+
+
+    for (const c of candidates) {
+      try {
+        const parsed = JSON.parse(c.text);
+        const tc = toToolCall(parsed);
+        if (tc) {
+          return tc;
+        }
+      } catch {
+        /* continue */
+      }
+    }
+
+    // 再做一次松散扫描：从混合文本中提取第一个可解析且符合 tool schema 的 JSON 对象
+    for (let i = 0; i < raw.length; i += 1) {
+      if (raw[i] !== "{") continue;
+      let depth = 0;
+      for (let j = i; j < raw.length; j += 1) {
+        const ch = raw[j];
+        if (ch === "{") depth += 1;
+        else if (ch === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            const slice = raw.slice(i, j + 1);
+            try {
+              const parsed = JSON.parse(slice);
+              const tc = toToolCall(parsed);
+              if (tc) {
+                return tc;
+              }
+            } catch {
+              /* try next slice */
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const buildAgentSystemPrompt = async () => {
+    let contract = null;
+    try {
+      contract = await apiRequest("/api/agent/tools");
+    } catch {
+      contract = null;
+    }
+    const toolList = Array.isArray(contract?.tools)
+      ? contract.tools.map((t) => `- ${t.name}: input=${JSON.stringify(t.input || {})}, output=${t.output || ""}`).join("\n")
+      : "- agent.get_context\n- agent.analyze_params\n- agent.propose_patch\n- agent.validate_patch\n- agent.preview_patch\n- agent.apply_patch_with_approval\n- agent.list_run_history\n- agent.rollback_run_config";
+    return [
+      "你是训练参数优化 Agent。你可以且应该使用工具先获取事实，再给结论。",
+      "可用工具如下：",
+      toolList,
+      "",
+      "当需要调用工具时，你必须只输出一个 JSON 对象（不要输出其他文本）：",
+      '{"tool":"agent.get_context","args":{"run_id":"default"}}',
+      "工具结果会在下一轮以 tool 消息回传给你。",
+      "**修改 distill 配置（configs/distill_config.yaml）时**：优先输出 `{\"tool\":\"agent.preview_patch\",\"args\":{\"patch\":{...}}}`（可先 `agent.validate_patch`）；若只调用了 `agent.propose_patch`，界面也会自动用返回的 patch 请求预览并在左侧栏显示「批准修改训练配置」面板。**禁止**在最终答复里用「是否需要我执行/是否生成补丁」等话术向用户索要确认。",
+      "终端里的训练命令（```powershell``` / ```bash```）只能作为补充说明；真正写入配置必须经过上述工具链或界面审批。",
+      "当不再需要工具、输出最终答复时：用自然语言说明变更理由与风险；若已调用 `agent.preview_patch`，只需提示用户在左侧栏「批准修改训练配置」面板中批准，不要重复询问。仅在确定无法走工具链时，才用 JSON 代码块给出结构化 patch 作为兜底。",
+      "**审批/写入流程结束后**：若用户未主动要求继续改配置，你**不得**主动提出新的修改建议、不得追问「要不要继续调整」「是否还要改某参数」「需不需要再预览一版」等；**不得**自动再发起 `agent.propose_patch` / `agent.preview_patch` 或引导用户进入下一轮审批。此时只做简短收尾（例如已写入/已按侧栏操作即可训练），然后停止。",
+      "**仅当用户明确说出**要改配置、改某字段、再优化、再出一版 patch 等意图时，你才可以再次使用配置相关工具或给出修改建议。"
+    ].join("\n");
+  };
+
+  const inferRelayEndpointCandidates = (baseUrl) => {
+    const base = String(baseUrl || "").trim().replace(/\/+$/, "");
+    if (!base) return [null];
+    if (/\/chat\/completions$/i.test(base) || /\/responses$/i.test(base) || /\/messages$/i.test(base)) {
+      return [base, null];
+    }
+    const list = [];
+    if (/\/api\/v\d+$/i.test(base)) {
+      list.push(`${base}/chat/completions`);
+    }
+    list.push(`${base}/v1/chat/completions`);
+    list.push(`${base}/chat/completions`);
+    list.push(null);
+    return Array.from(new Set(list));
+  };
+
+  /** 通过本地 HTTPS 中继读取 SSE：正文与思考分流式增量 */
+  const readAgentInvokeSseStream = async (response, onDelta) => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let reply = "";
+    let reasoning = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let lineEnd;
+      while ((lineEnd = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, lineEnd);
+        buffer = buffer.slice(lineEnd + 1);
+        const trimmed = line.replace(/\r$/, "").trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const dataStr = trimmed.slice(5).trim();
+        if (!dataStr) continue;
+        let ev;
+        try {
+          ev = JSON.parse(dataStr);
+        } catch {
+          continue;
+        }
+        if (ev.t === "content" && ev.d) {
+          reply += ev.d;
+          onDelta?.({ reply, reasoning });
+        } else if (ev.t === "reasoning" && ev.d) {
+          reasoning += ev.d;
+          onDelta?.({ reply, reasoning });
+        } else if (ev.t === "done") {
+          if (typeof ev.reply === "string") reply = ev.reply;
+          if (typeof ev.reasoning === "string") reasoning = ev.reasoning;
+          onDelta?.({ reply, reasoning });
+        } else if (ev.t === "error") {
+          throw new Error(ev.message || "流式调用失败");
+        }
+      }
+    }
+    if (buffer.trim()) {
+      const trimmed = buffer.replace(/\r$/, "").trim();
+      if (trimmed.startsWith("data:")) {
+        const dataStr = trimmed.slice(5).trim();
+        try {
+          const ev = JSON.parse(dataStr);
+          if (ev.t === "done") {
+            if (typeof ev.reply === "string") reply = ev.reply;
+            if (typeof ev.reasoning === "string") reasoning = ev.reasoning;
+            onDelta?.({ reply, reasoning });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return { reply, reasoning };
+  };
+
+  const streamInvokeViaRelay = async ({ text, mode, systemPrompt, onDelta }) => {
+    const base = apiUrl.trim();
+    const modelName = resolveModelName();
+    if (isArkApiUrl() && !apiModel.trim()) {
+      throw new Error("检测到方舟地址，请先填写“模型名 / Endpoint ID”（如 ep-xxxxxx）");
+    }
+    const endpointCandidates = inferRelayEndpointCandidates(base);
+    const errors = [];
+    for (const endpoint of endpointCandidates) {
+      try {
+        const res = await fetch("/api/agent/model/invoke-stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "openai_compatible",
+            api_url: base,
+            api_key: apiKey.trim() || null,
+            endpoint,
+            model: modelName,
+            temperature: 0.2,
+            max_tokens: mode === "test" ? 8 : null,
+            system_prompt: systemPrompt || null,
+            messages: [{ role: "user", content: mode === "test" ? "ping" : text }]
+          })
+        });
+        if (!res.ok) {
+          let msg = `HTTP ${res.status}`;
+          try {
+            const errBody = await res.json();
+            msg = errBody.error || errBody.message || msg;
+          } catch {
+            try {
+              msg = (await res.text()) || msg;
+            } catch {
+              /* ignore */
+            }
+          }
+          throw new Error(msg);
+        }
+        const { reply, reasoning } = await readAgentInvokeSseStream(res, onDelta);
+        const payload = {
+          status: "ok",
+          reply,
+          reasoning: reasoning || undefined
+        };
+        return { payload, target: { kind: "backend-relay", url: endpoint || base } };
+      } catch (error) {
+        let msg = error.message;
+        if (!apiModel.trim() && /NotFound|does not exist|InvalidEndpointOrModel/i.test(String(msg || ""))) {
+          msg = `${msg}（请在“模型名 / Endpoint ID”填写可用模型，如方舟控制台中的 endpoint-id）`;
+        }
+        errors.push(`relay@${endpoint || base}: ${msg}`);
+      }
+    }
+    throw new Error(errors.slice(0, 3).join(" | ") || "本地中转流式调用失败");
+  };
+
+  const requestAgentWithFallback = async ({ text, mode, systemPrompt, onDelta, onRelayFallback }) => {
+    const targets = buildAgentTargets();
+    const authHeaders = buildAuthHeaderCandidates();
+    const modelName = resolveModelName();
+    if (isArkApiUrl() && !apiModel.trim()) {
+      throw new Error("检测到方舟地址，请先填写“模型名 / Endpoint ID”（如 ep-xxxxxx）");
+    }
+    const errors = [];
+    const prefersRelay = /^https?:\/\//i.test(apiUrl.trim());
+    if (prefersRelay) {
+      try {
+        return await streamInvokeViaRelay({ text, mode, systemPrompt, onDelta });
+      } catch (error) {
+        errors.push(error.message);
+        onRelayFallback?.();
+      }
+    }
+    for (const target of targets) {
+      for (const auth of authHeaders) {
+        let body;
+        if (target.kind === "openai") {
+          const baseMessages = mode === "test" ? [{ role: "user", content: "ping" }] : [{ role: "user", content: text }];
+          const withSystem = systemPrompt ? [{ role: "system", content: systemPrompt }, ...baseMessages] : baseMessages;
+          body = mode === "test"
+            ? { model: modelName, messages: withSystem, max_tokens: 1 }
+            : { model: modelName, messages: withSystem, temperature: 0.2 };
+        } else {
+          body = mode === "test" ? { action: "ping", params: {} } : { query: text };
+        }
+        try {
+          const res = await fetch(target.url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...auth },
+            body: JSON.stringify(body)
+          });
+          const payload = await parseResponsePayload(res);
+          if (!res.ok) {
+            const message = typeof payload === "object" && payload ? payload.error || payload.message : String(payload || "");
+            throw new Error(message || `HTTP ${res.status}`);
+          }
+          return { payload, target };
+        } catch (error) {
+          let msg = error.message;
+          if (!apiModel.trim() && /NotFound|does not exist|InvalidEndpointOrModel/i.test(String(msg || ""))) {
+            msg = `${msg}（请在“模型名 / Endpoint ID”填写可用模型）`;
+          }
+          errors.push(`${target.kind}@${target.url}: ${msg}`);
+        }
+      }
+    }
+    throw new Error(errors.slice(0, 3).join(" | ") || "所有连接方式均失败");
+  };
+
+  const runAgentWithTools = async ({ userText, maxRounds = 6 }) => {
+    agentSlotIndexRef.current = -1;
+    const systemPrompt = await buildAgentSystemPrompt();
+    const convo = [...messages, { role: "user", content: userText }];
+    const toolLogs = [];
+    const allowMutationTools = /修改|调参|调整|优化|patch|preview|采纳|批准|写入|apply|执行|变更|改配置|再来一版|继续改/i.test(
+      String(userText || "")
+    );
+    const mutationTools = new Set([
+      "agent.propose_patch",
+      "agent.preview_patch",
+      "agent.apply_patch_with_approval",
+      "agent.rollback_run_config"
+    ]);
+    const prefersRelayGlobal = /^https?:\/\//i.test(apiUrl.trim());
+    const defaultContinue = "请继续。若需工具则按约定输出 tool JSON。";
+    /** 写入/回滚完成后若仍用「请继续+tool JSON」，模型会再出一轮 patch，形成审批死循环 */
+    const finalizeAfterMutation =
+      "配置变更已通过工具落盘。请仅用一两句自然语言确认完成（不要输出 JSON 代码块、不要调用任何工具）。在用户未明确要求继续改配置前，禁止主动提出修改建议、禁止追问是否继续调整、禁止再次调用 propose_patch / preview_patch / apply_patch / rollback 相关工具。";
+    let continuationSuffix = defaultContinue;
+
+    for (let round = 0; round < maxRounds; round += 1) {
+      const transcriptText = convo
+        .map((m) => {
+          if (m.role === "tool") {
+            return `[tool:${m.name}]\n${m.content}`;
+          }
+          return `[${m.role}] ${m.content}`;
+        })
+        .join("\n\n");
+      const prompt = `${transcriptText}\n\n${continuationSuffix}`;
+      const prefersRelay = prefersRelayGlobal;
+
+      if (prefersRelay && round === 0) {
+        setMessages((prev) => {
+          const idx = prev.length;
+          agentSlotIndexRef.current = idx;
+          return [...prev, { role: "agent", content: "", reasoningApi: "", toolsUsed: [], streaming: true }];
+        });
+      } else if (prefersRelay && round > 0) {
+        setMessages((prev) => {
+          const next = [...prev];
+          const idx = agentSlotIndexRef.current;
+          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
+            next[idx] = { ...next[idx], streaming: true };
+          }
+          return next;
+        });
+      }
+
+      const onDelta = prefersRelay
+        ? ({ reply, reasoning }) => {
+            setMessages((prev) => {
+              const next = [...prev];
+              const idx = agentSlotIndexRef.current;
+              if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
+                next[idx] = {
+                  ...next[idx],
+                  content: reply || "",
+                  reasoningApi: reasoning || "",
+                  streaming: true
+                };
+              }
+              return next;
+            });
+          }
+        : undefined;
+
+      const onRelayFallback = prefersRelay
+        ? () => {
+            setMessages((prev) => {
+              const idx = agentSlotIndexRef.current;
+              const next = [...prev];
+              if (idx >= 0 && idx < next.length && next[idx].streaming) {
+                next.splice(idx, 1);
+              }
+              agentSlotIndexRef.current = -1;
+              return next;
+            });
+          }
+        : undefined;
+
+      let payload;
+      let target;
+      let reply;
+      let displayReply;
+      let displayReasoning;
+      try {
+        const result = await requestAgentWithFallback({
+          text: prompt,
+          mode: "chat",
+          systemPrompt,
+          onDelta,
+          onRelayFallback
+        });
+        payload = result.payload;
+        target = result.target;
+        const parsed = extractReplyAndReasoningFromPayload(payload?.reply || payload);
+        reply = parsed.reply;
+        const built = buildDisplayReplyAndReasoning(reply, parsed.reasoning);
+        displayReply = built.displayReply;
+        displayReasoning = built.displayReasoning;
+        if (typeof payload?.reasoning === "string" && payload.reasoning.trim() && prefersRelay) {
+          setMessages((prev) => {
+            const next = [...prev];
+            const idx = agentSlotIndexRef.current;
+            if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
+              next[idx] = { ...next[idx], reasoningApi: payload.reasoning };
+            }
+            return next;
+          });
+        }
+      } finally {
+        if (prefersRelay) {
+          setMessages((prev) => {
+            const next = [...prev];
+            const idx = agentSlotIndexRef.current;
+            if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
+              next[idx] = { ...next[idx], streaming: false };
+            }
+            return next;
+          });
+        }
+      }
+
+      const toolNames = toolLogs.map((t) => t.call.tool);
+      if (prefersRelay && target?.kind === "backend-relay") {
+        setMessages((prev) => {
+          const next = [...prev];
+          const idx = agentSlotIndexRef.current;
+          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
+            const mergedReasoning =
+              displayReasoning && String(displayReasoning).trim()
+                ? displayReasoning
+                : next[idx].reasoningApi || "";
+            next[idx] = {
+              ...next[idx],
+              content: displayReply,
+              toolsUsed: toolNames,
+              ...(mergedReasoning && String(mergedReasoning).trim() ? { reasoningApi: mergedReasoning } : {})
+            };
+          }
+          return next;
+        });
+      }
+
+      const toolCall = extractToolCallFromText(reply);
+      if (!toolCall) {
+        return {
+          payload,
+          reply,
+          displayReply,
+          displayReasoning,
+          target,
+          toolLogs,
+          streamedRelay: target?.kind === "backend-relay"
+        };
+      }
+      if (mutationTools.has(toolCall.tool) && !allowMutationTools) {
+        return {
+          payload,
+          reply,
+          displayReply:
+            "当前消息未明确要求修改配置，已阻止自动变更建议与审批流程。若需要修改，请明确说明“请修改哪些参数/请生成并预览 patch”。",
+          displayReasoning,
+          target,
+          toolLogs,
+          streamedRelay: target?.kind === "backend-relay"
+        };
+      }
+      if (toolCall.tool === "agent.apply_patch_with_approval") {
+        return {
+          payload,
+          reply,
+          displayReply:
+            "已拦截自动写入请求。请先在左侧审批面板核对 patch，再使用“让 agent 执行”按钮完成写入。",
+          displayReasoning,
+          target,
+          toolLogs,
+          streamedRelay: target?.kind === "backend-relay"
+        };
+      }
+      const execResult = await apiRequest("/api/agent/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({ tool: toolCall.tool, args: toolCall.args || {} })
+      });
+      toolLogs.push({ call: toolCall, result: execResult });
+      if (toolCall.tool === "agent.apply_patch_with_approval" && execResult && execResult.status === "ok") {
+        continuationSuffix = finalizeAfterMutation;
+      } else if (toolCall.tool === "agent.rollback_run_config" && execResult && execResult.status === "ok") {
+        continuationSuffix = finalizeAfterMutation;
+      } else {
+        continuationSuffix = defaultContinue;
+      }
+      const namesAfter = toolLogs.map((t) => t.call.tool);
+      if (prefersRelay && agentSlotIndexRef.current >= 0) {
+        setMessages((prev) => {
+          const next = [...prev];
+          const idx = agentSlotIndexRef.current;
+          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
+            next[idx] = { ...next[idx], toolsUsed: namesAfter };
+          }
+          return next;
+        });
+      }
+      convo.push({ role: "assistant", content: reply });
+      convo.push({
+        role: "tool",
+        name: toolCall.tool,
+        content: JSON.stringify(execResult, null, 2)
+      });
+    }
+    throw new Error("工具调用达到上限，请缩小问题范围后重试。");
   };
 
   const send = async () => {
@@ -1903,22 +2570,42 @@ function AgentPanel({ toast }) {
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     try {
-      const res = await fetch(apiUrl.trim(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(apiKey.trim() ? { Authorization: apiKey.trim() } : {})
-        },
-        body: JSON.stringify({ query: text })
+      const { payload, reply, displayReply, displayReasoning, target, toolLogs, streamedRelay } = await runAgentWithTools({
+        userText: text
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Agent 请求失败");
+      const data = payload;
+      if (!streamedRelay) {
+        const names = toolLogs.map((t) => t.call.tool);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "agent",
+            content: displayReply,
+            toolsUsed: names,
+            ...(displayReasoning ? { reasoningApi: displayReasoning } : {})
+          }
+        ]);
       }
-      const reply = typeof data === "string" ? data : data.reply || data.message || JSON.stringify(data, null, 2);
-      setMessages((prev) => [...prev, { role: "agent", content: reply }]);
-      setOutputText(JSON.stringify(data, null, 2));
-      await maybeHandlePatch(data, reply);
+      const terminalOut = formatAgentTerminalOutput(displayReply, toolLogs);
+      setOutputText(terminalOut);
+      if (target.kind === "openai") {
+        toast("已通过 OpenAI 兼容接口完成请求", "success");
+      } else if (target.kind === "backend-relay") {
+        toast("已通过本地中转完成请求（已绕过浏览器跨域）", "success");
+      }
+      /* 已成功 apply/rollback 时：不得再跑 syncApprovalFromToolLogs，否则会命中同一条 toolLogs 里更早的 preview_patch，再次打开审批侧栏（死循环） */
+      const configMutationDone = toolLogs.some(
+        (t) =>
+          (t.call?.tool === "agent.apply_patch_with_approval" || t.call?.tool === "agent.rollback_run_config") &&
+          t.result?.status === "ok"
+      );
+      if (!configMutationDone) {
+        if (!syncApprovalFromToolLogs(toolLogs, terminalOut)) {
+          if (!(await syncProposePatchViaPreview(toolLogs, terminalOut))) {
+            await maybeHandlePatch(data, reply);
+          }
+        }
+      }
     } catch (error) {
       setMessages((prev) => [...prev, { role: "agent", content: `请求失败: ${error.message}` }]);
     } finally {
@@ -1926,7 +2613,159 @@ function AgentPanel({ toast }) {
     }
   };
 
+  const sendPresetMessage = async (presetText) => {
+    const text = (presetText || "").trim();
+    if (!text) return;
+    if (!apiUrl.trim()) {
+      toast("请先填写 Agent API 地址", "warning");
+      return;
+    }
+    setLoading(true);
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    try {
+      const { payload, reply, displayReply, displayReasoning, target, toolLogs, streamedRelay } = await runAgentWithTools({
+        userText: text
+      });
+      const data = payload;
+      if (!streamedRelay) {
+        const names = toolLogs.map((t) => t.call.tool);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "agent",
+            content: displayReply,
+            toolsUsed: names,
+            ...(displayReasoning ? { reasoningApi: displayReasoning } : {})
+          }
+        ]);
+      }
+      const terminalOut = formatAgentTerminalOutput(displayReply, toolLogs);
+      setOutputText(terminalOut);
+      if (target.kind === "openai") {
+        toast("已通过 OpenAI 兼容接口完成请求", "success");
+      } else if (target.kind === "backend-relay") {
+        toast("已通过本地中转完成请求（已绕过浏览器跨域）", "success");
+      }
+      const configMutationDone = toolLogs.some(
+        (t) =>
+          (t.call?.tool === "agent.apply_patch_with_approval" || t.call?.tool === "agent.rollback_run_config") &&
+          t.result?.status === "ok"
+      );
+      if (!configMutationDone) {
+        if (!syncApprovalFromToolLogs(toolLogs, terminalOut)) {
+          if (!(await syncProposePatchViaPreview(toolLogs, terminalOut))) {
+            await maybeHandlePatch(data, reply);
+          }
+        }
+      }
+    } catch (error) {
+      setMessages((prev) => [...prev, { role: "agent", content: `请求失败: ${error.message}` }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** 同一轮 toolLogs 中，若某条之后已出现 apply/rollback（失败会抛错不会入栈），则更早的预览/提议不应再驱动审批 UI */
+  const hasConfigMutationAfter = (toolLogs, index) => {
+    for (let j = index + 1; j < toolLogs.length; j += 1) {
+      const c = toolLogs[j].call?.tool;
+      if (c === "agent.apply_patch_with_approval" || c === "agent.rollback_run_config") return true;
+    }
+    return false;
+  };
+
+  /** 从工具链中的 agent.preview_patch 结果同步审批票据（与仅解析回复 Markdown 互补） */
+  const syncApprovalFromToolLogs = (toolLogs, terminalOut) => {
+    if (!Array.isArray(toolLogs) || !toolLogs.length) return false;
+    for (let i = toolLogs.length - 1; i >= 0; i -= 1) {
+      const { call, result } = toolLogs[i];
+      if (call?.tool !== "agent.preview_patch" || !result) continue;
+      if (hasConfigMutationAfter(toolLogs, i)) {
+        continue;
+      }
+      const tok = result.approval_token;
+      if (!tok) continue;
+      if (result.status && result.status !== "ok") continue;
+      applyPreviewResponseToUi(result, terminalOut || "", "tool");
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * agent.propose_patch 只返回建议 patch，不签发审批令牌；此处代为调用 /api/agent/patch/preview。
+   * 工具响应形态：{ status, tool, result: { goal, patch, need_approval } }
+   */
+  const syncProposePatchViaPreview = async (toolLogs, terminalOut) => {
+    if (!Array.isArray(toolLogs) || !toolLogs.length) return false;
+    for (let i = toolLogs.length - 1; i >= 0; i -= 1) {
+      const { call, result } = toolLogs[i];
+      if (call?.tool !== "agent.propose_patch" || !result) continue;
+      if (hasConfigMutationAfter(toolLogs, i)) continue;
+      // 与 preview_patch 不同，部分中继响应可能省略 status；仅在明确失败时跳过
+      if (result.status && result.status !== "ok") {
+        continue;
+      }
+      const inner = result.result && typeof result.result === "object" ? result.result : result;
+      const patch = inner && typeof inner === "object" && !Array.isArray(inner) ? inner.patch : null;
+      if (!patch || typeof patch !== "object" || Array.isArray(patch) || !Object.keys(patch).length) {
+        continue;
+      }
+      try {
+        const preview = await apiRequest("/api/agent/patch/preview", {
+          method: "POST",
+          body: JSON.stringify({
+            patch,
+            run_id: (call.args && call.args.run_id) || "default",
+            operator: "agent",
+            reason: "agent.propose_patch"
+          })
+        });
+        applyPreviewResponseToUi(preview, terminalOut || "", "propose");
+        return true;
+      } catch (error) {
+        toast(`无法从 propose_patch 生成审批预览: ${error.message}`, "error");
+        return false;
+      }
+    }
+    return false;
+  };
+
+  const applyPreviewResponseToUi = (preview, terminalOut, source) => {
+    setApprovalBody(
+      `${preview.patch_yaml || ""}\n\n--- merged_preview ---\n${JSON.stringify(preview.merged_preview || {}, null, 2)}`
+    );
+    setApprovalToken(preview.approval_token || "");
+    setApprovalRunId(String(preview.run_id || "default"));
+    setApprovalRequestHash(String(preview.request_hash || ""));
+    setApprovalOpen(true);
+    const suffix =
+      source === "tool"
+        ? "已通过工具 agent.preview_patch 签发审批票据；请在左侧栏核对 merged_preview，批准后将写入 configs/distill_config.yaml。"
+        : source === "propose"
+          ? "已根据 agent.propose_patch 的建议调用预览并签发审批票据；请在左侧栏核对 merged_preview，批准后将写入 configs/distill_config.yaml。"
+          : "请在左侧栏查看 YAML 与 merged_preview；批准后将写入 configs/distill_config.yaml。";
+    setOutputText(`${terminalOut}\n\n# --- Patch 预览 ---\n${suffix}`);
+    toast(
+      source === "tool"
+        ? "已通过工具触发审批预览，可在左侧栏「批准修改训练配置」面板中采纳。"
+        : source === "propose"
+          ? "已从 propose_patch 生成审批预览，可在左侧栏「批准修改训练配置」面板中采纳。"
+          : "已生成配置 patch 预览，可在左侧栏「批准修改训练配置」面板中采纳或让 Agent 执行。",
+      "success"
+    );
+  };
+
   const maybeHandlePatch = async (result, replyText) => {
+    const replyRaw = typeof replyText === "string" ? replyText : "";
+    const transcriptEchoLike =
+      /^\s*\[assistant\]/.test(replyRaw) ||
+      /^\s*\[user\]/.test(replyRaw) ||
+      /^\s*\[tool:[^\]]+\]/m.test(replyRaw) ||
+      /\n\[tool:[^\]]+\]/.test(replyRaw);
+    if (transcriptEchoLike) {
+      return;
+    }
     const patch = extractPatchFromResult(result, replyText);
     if (!patch) return;
     try {
@@ -1934,29 +2773,18 @@ function AgentPanel({ toast }) {
         method: "POST",
         body: JSON.stringify({ patch })
       });
-      setApprovalBody(`${preview.patch_yaml || ""}\n\n--- merged_preview ---\n${JSON.stringify(preview.merged_preview || {}, null, 2)}`);
-      setApprovalToken(preview.approval_token || "");
-      setApprovalOpen(true);
-      setOutputText(JSON.stringify(preview, null, 2));
-      setMessages((prev) => [...prev, { role: "agent", content: "已生成配置 patch 预览，请确认后写入。" }]);
+      applyPreviewResponseToUi(preview, formatAgentTerminalOutput(replyText, []), "markdown");
     } catch (error) {
       setMessages((prev) => [...prev, { role: "agent", content: `Patch 校验失败: ${error.message}` }]);
+      toast(`Patch 校验失败: ${error.message}`, "error");
     }
   };
 
   const testAgentApi = async () => {
     if (!apiUrl.trim()) return toast("请先填写 Agent API 地址", "warning");
     try {
-      const res = await fetch(apiUrl.trim(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(apiKey.trim() ? { Authorization: apiKey.trim() } : {})
-        },
-        body: JSON.stringify({ action: "ping", params: {} })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      toast("Agent API 连接成功", "success");
+      const { target } = await requestAgentWithFallback({ text: "ping", mode: "test", systemPrompt: "" });
+      toast(`Agent API 连接成功（${target.kind}）`, "success");
     } catch (error) {
       toast(`Agent API 连接失败: ${error.message}`, "error");
     }
@@ -1983,32 +2811,95 @@ function AgentPanel({ toast }) {
     }
   };
 
-  const applyApproval = async () => {
-    if (!approvalToken) return;
+  const generateMetricsReport = async () => {
     try {
-      const data = await apiRequest("/api/agent/patch/apply", {
+      let sourcePath = (metricsCsvPath || "").trim();
+      if (!sourcePath) {
+        const list = await apiRequest("/api/metrics");
+        const available = Array.isArray(list.csv_metrics) ? list.csv_metrics.filter((x) => x.has_results) : [];
+        if (!available.length) {
+          toast("暂无训练结果（未找到 results.csv），无法生成指标快照", "warning");
+          return;
+        }
+        sourcePath = available[0].path;
+      }
+      const data = await apiRequest(`/api/metrics?source=${encodeURIComponent(sourcePath)}`);
+      if (data?.error) {
+        toast(`生成报告失败: ${data.error}`, "error");
+        return;
+      }
+      const stats = data?.overview_stats || {};
+      const summary = data?.summary_metrics || {};
+      const map50 = stats["ov-map50"] || "--";
+      const modelSize = stats["ov-model-size"] || "--";
+      const params = stats["ov-params"] || "--";
+      const flops = stats["ov-flops"] || "--";
+      const trainTime = stats["ov-time"] || "--";
+      const report = [
+        "训练指标分析报告",
+        `- mAP50: ${map50}`,
+        `- 模型大小: ${modelSize}`,
+        `- 参数量: ${params}`,
+        `- FLOPs: ${flops}`,
+        `- 训练时长: ${trainTime}`,
+        "",
+        "关键指标摘要:",
+        JSON.stringify(summary, null, 2)
+      ].join("\n");
+      setOutputText(report);
+      toast("分析报告已生成，请在右侧输出查看详情。", "success");
+    } catch (error) {
+      toast(`生成报告失败: ${error.message}`, "error");
+    }
+  };
+
+  const sendAgentExecuteApproval = async () => {
+    if (!approvalToken) {
+      toast("暂无待执行的审批票据", "warning");
+      return;
+    }
+    try {
+      const execResult = await apiRequest("/api/agent/tools/execute", {
         method: "POST",
-        body: JSON.stringify({ approval_token: approvalToken })
+        body: JSON.stringify({
+          tool: "agent.apply_patch_with_approval",
+          args: {
+            approval_token: approvalToken,
+            run_id: approvalRunId || "default",
+            request_hash: approvalRequestHash || undefined,
+            operator: "agent-ui"
+          }
+        })
       });
       setApprovalOpen(false);
       setApprovalToken("");
-      setOutputText(JSON.stringify(data, null, 2));
-      toast("已写入 distill_config.yaml", "success");
+      setApprovalRunId("default");
+      setApprovalRequestHash("");
+      setOutputText(
+        [
+          "# 已通过工具执行写入",
+          "agent.apply_patch_with_approval",
+          "",
+          JSON.stringify(execResult, null, 2)
+        ].join("\n")
+      );
+      toast("已执行 agent.apply_patch_with_approval", "success");
     } catch (error) {
-      toast(error.message, "error");
+      toast(`执行失败: ${error.message}`, "error");
     }
   };
 
   return (
-    <div className="tab-panel active" id="panel-agent">
+    <div className={`tab-panel ${active ? "active" : ""}`} id="panel-agent" aria-hidden={!active}>
       <div className="agent-layout">
         <div className="agent-sidebar">
           <h3 className="sidebar-title"><span className="material-icons">hub</span>连接与工具</h3>
-          <div className="agent-settings-card">
+          <div className="agent-settings-card md3-surface-container">
             <h4>外部 API 配置</h4>
             <div className="form-row stacked-row">
               <TextField label="Agent API 地址" value={apiUrl} onChange={setApiUrl} />
               <TextField label="API Token (可选)" value={apiKey} onChange={setApiKey} />
+              <TextField label="模型名 / Endpoint ID" value={apiModel} onChange={setApiModel} />
             </div>
             <div className="launch-actions" style={{ marginTop: 12 }}>
               <button className="md-btn md-btn-tonal" onClick={saveConfig}>
@@ -2018,17 +2909,76 @@ function AgentPanel({ toast }) {
                 <span className="material-icons">bolt</span>测试连接
               </button>
             </div>
-          </div>
-          <div className="agent-local-tools">
-            <h4 className="tools-title"><span className="material-icons">verified_user</span>本地审批</h4>
-            <p className="tools-desc">外部 Agent 返回的 patch 仅预览；需批准后才写入配置。</p>
-            <div className="tools-actions">
-              <button type="button" className="md-btn md-btn-tonal md-btn-compact" onClick={loadSchema}>
+            <div className="agent-sidebar-aux-tools">
+              <button type="button" className="md-btn md-btn-tonal md-btn-compact" onClick={loadSchema} disabled={loading}>
                 <span className="material-icons">schema</span>配置结构
               </button>
-              <button type="button" className="md-btn md-btn-outlined md-btn-compact" onClick={parseClipboardPatch}>
+              <button type="button" className="md-btn md-btn-outlined md-btn-compact" onClick={parseClipboardPatch} disabled={loading}>
                 <span className="material-icons">content_paste</span>剪贴板 Patch
               </button>
+              <button type="button" className="md-btn md-btn-tonal md-btn-compact" onClick={generateMetricsReport} disabled={loading}>
+                <span className="material-icons">summarize</span>指标快照
+              </button>
+            </div>
+          </div>
+          <div
+            className="agent-approval-sidebar agent-approval-sidebar-frame md3-surface-container"
+            role="region"
+            aria-labelledby="agent-approval-dialog-title"
+          >
+            {approvalOpen ? (
+              <>
+                <h2 id="agent-approval-dialog-title" className="md-dialog-title md3-dialog-headline">
+                  批准修改训练配置？
+                </h2>
+                <p className="md-dialog-support md3-dialog-supporting">
+                  确认后请使用下方按钮让 Agent 调用工具写入 configs/distill_config.yaml 并刷新训练配置表单。
+                </p>
+                <pre className="md-dialog-pre md3-dialog-body-scroll">{approvalBody}</pre>
+                <div className="md-dialog-actions md3-dialog-actions agent-approval-sidebar-actions">
+                  <button type="button" className="md-btn md-btn-text" onClick={() => setApprovalOpen(false)}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="md-btn md-btn-filled primary md-btn-compact"
+                    onClick={sendAgentExecuteApproval}
+                    disabled={loading || !approvalToken}
+                  >
+                    <span className="material-icons">smart_toy</span>让 agent 执行
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 id="agent-approval-dialog-title" className="md-dialog-title agent-approval-sidebar-idle-title">
+                  <span className="material-icons" aria-hidden>
+                    verified_user
+                  </span>
+                  审批区
+                </h2>
+                <p className="tools-desc agent-approval-sidebar-idle-desc">
+                  外部 Agent 返回的 patch 仅预览；通过预览签发票据后，将在此显示 YAML 与 merged_preview，并可使用「让 agent 执行」写入配置。
+                </p>
+              </>
+            )}
+          </div>
+          <div className="agent-common-tools md3-surface-container">
+            <h4 className="tools-title"><span className="material-icons">build</span>常用工具</h4>
+            <p className="tools-desc">点击后将对应问句发送到左侧对话，并自动请求 Agent；右侧输出优先展示可复制的终端命令。</p>
+            <div className="tools-actions" style={{ flexWrap: "wrap" }}>
+              {AGENT_QUICK_PROMPTS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="md-btn md-btn-outlined md-btn-compact"
+                  disabled={loading}
+                  onClick={() => sendPresetMessage(p.text)}
+                >
+                  <span className="material-icons">chat</span>
+                  {p.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -2040,16 +2990,24 @@ function AgentPanel({ toast }) {
                 <button className="btn-icon-sm" onClick={() => setMessages([])}><span className="material-icons">delete_sweep</span></button>
               </div>
             </div>
-            <div id="agent-chat-messages" className="chat-messages">
+            <div id="agent-chat-messages" ref={chatMessagesRef} className="chat-messages">
               {messages.map((msg, index) => (
                 <div key={`${msg.role}-${index}`} className={`chat-message ${msg.role}`}>
                   <div className={`message-avatar ${msg.role === "agent" ? "agent-avatar" : "user-avatar"}`}>
                     <span className="material-icons">{msg.role === "agent" ? "smart_toy" : "person"}</span>
                   </div>
-                  <div className="message-content"><div>{msg.content}</div></div>
+                  <div className="message-content">
+                    <ChatBubbleBody
+                      role={msg.role}
+                      content={msg.content}
+                      reasoningApi={msg.reasoningApi}
+                      toolsUsed={msg.toolsUsed}
+                      streaming={msg.streaming}
+                    />
+                  </div>
                 </div>
               ))}
-              {loading ? (
+              {loading && !messages.some((m) => m.streaming) ? (
                 <div className="chat-message agent">
                   <div className="message-avatar agent-avatar"><span className="material-icons">smart_toy</span></div>
                   <div className="message-content"><div>处理中...</div></div>
@@ -2085,48 +3043,117 @@ function AgentPanel({ toast }) {
               </div>
             </div>
           </div>
-          <div className="agent-status-panel">
-            <div className="status-header"><h4>Agent 输出</h4></div>
-            <div id="agent-output" className="agent-output">
+          <div className="agent-status-panel log-card">
+            <div className="status-header log-header">
+              <h3><span className="material-icons">terminal</span>Agent 输出</h3>
+            </div>
+            <div id="agent-output" className="agent-output log-container">
               <pre id="agent-output-content">{outputText}</pre>
             </div>
           </div>
         </div>
       </div>
-      {approvalOpen ? (
-        <div className="md-dialog" style={{ display: "block" }}>
-          <div className="md-dialog-surface">
-            <h2 className="md-dialog-title">批准修改训练配置？</h2>
-            <p className="md-dialog-support">将写入 configs/distill_config.yaml 并刷新训练配置表单。</p>
-            <pre className="md-dialog-pre">{approvalBody}</pre>
-            <div className="md-dialog-actions">
-              <button type="button" className="md-btn md-btn-text" onClick={() => setApprovalOpen(false)}>取消</button>
-              <button type="button" className="md-btn md-btn-filled primary" onClick={applyApproval}>
-                <span className="material-icons">check_circle</span>批准并写入
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
 
-function extractPatchFromResult(result, text) {
-  if (result && typeof result.patch === "object") return result.patch;
-  if (result && typeof result.suggested_patch === "object") return result.suggested_patch;
-  const raw = typeof text === "string" ? text.trim() : "";
-  if (!raw) return null;
-  const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = match ? match[1].trim() : raw;
-  try {
-    const parsed = JSON.parse(candidate);
-    if (parsed && typeof parsed.patch === "object") return parsed.patch;
-    if (parsed && (parsed.distillation || parsed.training || parsed.output)) return parsed;
-  } catch {
-    return null;
+/** 仅含外部 Agent 连接字段（侧栏 API 配置）的 JSON，不应触发 distill_config 审批 */
+function isLikelyAgentConnectionPayloadOnly(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const keys = Object.keys(parsed);
+  if (keys.length === 0) return false;
+  const connectionKeys = new Set([
+    "api_url",
+    "apiUrl",
+    "base_url",
+    "baseUrl",
+    "agent_api_url",
+    "endpoint",
+    "endpoint_id",
+    "endpointId",
+    "model",
+    "api_model",
+    "apiModel",
+    "api_key",
+    "apiKey",
+    "token",
+    "authorization",
+    "provider",
+    "region"
+  ]);
+  const hasDistillSection =
+    (typeof parsed.distillation === "object" && parsed.distillation !== null && !Array.isArray(parsed.distillation)) ||
+    (typeof parsed.training === "object" && parsed.training !== null && !Array.isArray(parsed.training)) ||
+    (typeof parsed.output === "object" && parsed.output !== null && !Array.isArray(parsed.output)) ||
+    (typeof parsed.wandb === "object" && parsed.wandb !== null && !Array.isArray(parsed.wandb)) ||
+    (typeof parsed.patch === "object" && parsed.patch !== null);
+  if (hasDistillSection) return false;
+  return keys.every((k) => connectionKeys.has(k));
+}
+
+function distillPatchFromParsedObject(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (isLikelyAgentConnectionPayloadOnly(parsed)) return null;
+  if (parsed.patch && typeof parsed.patch === "object") return parsed.patch;
+  if (typeof parsed.distillation === "object" && parsed.distillation !== null) return parsed;
+  if (typeof parsed.training === "object" && parsed.training !== null) return parsed;
+  if (typeof parsed.output === "object" && parsed.output !== null) return parsed;
+  if (typeof parsed.wandb === "object" && parsed.wandb !== null) return parsed;
+  return null;
+}
+
+/** 从混有 shell 注释的代码块中扫描平衡花括号 JSON（例如 powershell 与 JSON 同块时整段无法 JSON.parse） */
+function distillPatchFromLooseText(inner) {
+  const str = String(inner || "");
+  for (let start = 0; start < str.length; start += 1) {
+    if (str[start] !== "{") continue;
+    let depth = 0;
+    for (let j = start; j < str.length; j += 1) {
+      const c = str[j];
+      if (c === "{") depth += 1;
+      else if (c === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const slice = str.slice(start, j + 1);
+          try {
+            const parsed = JSON.parse(slice);
+            const patch = distillPatchFromParsedObject(parsed);
+            if (patch) return patch;
+          } catch {
+            /* 尝试下一个起始 { */
+          }
+          break;
+        }
+      }
+    }
   }
   return null;
+}
+
+function extractPatchFromResult(result, text) {
+  if (result && typeof result.patch === "object" && result.patch !== null) {
+    return distillPatchFromParsedObject(result.patch) ? result.patch : null;
+  }
+  if (result && typeof result.suggested_patch === "object" && result.suggested_patch !== null) {
+    return distillPatchFromParsedObject(result.suggested_patch) ? result.suggested_patch : null;
+  }
+  const raw = typeof text === "string" ? text.trim() : "";
+  if (!raw) return null;
+  const tryJsonBlock = (inner) => {
+    try {
+      const parsed = JSON.parse(String(inner || "").trim());
+      return distillPatchFromParsedObject(parsed);
+    } catch {
+      return null;
+    }
+  };
+  const blocks = [...raw.matchAll(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/g)];
+  for (const m of blocks) {
+    const body = m[1] || "";
+    const patch = tryJsonBlock(body) || distillPatchFromLooseText(body);
+    if (patch) return patch;
+  }
+  return tryJsonBlock(raw) || distillPatchFromLooseText(raw);
 }
 
 export default App;

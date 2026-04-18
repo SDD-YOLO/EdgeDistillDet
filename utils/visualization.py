@@ -26,9 +26,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from tqdm import tqdm
 
-from utils.dataset_analyzer import (
-    DatasetAnalyzer, _classify_scene, _parse_label, _find_label,
+from utils.dataset_common import (
     SIZE_BINS,
+    classify_scene,
+    find_label,
+    parse_label,
 )
 
 
@@ -122,10 +124,10 @@ class DatasetVisualizer:
                 mean_v = hsv[:,:,2].mean()
                 mean_s = hsv[:,:,1].mean()
                 hue_std = hsv[:,:,0].std()
-                scene  = _classify_scene(mean_v, mean_s)
+                scene = classify_scene(mean_v, mean_s)
 
-                lp     = _find_label(ip, str(img_dir), str(lbl_dir))
-                annos  = _parse_label(lp, W, H)
+                lp = find_label(ip, str(img_dir), str(lbl_dir))
+                annos = parse_label(lp, W, H)
                 areas  = [a["area_px"] for a in annos]
                 small_boxes = [
                     (a["cx"]*W - a["bw"]*W/2,

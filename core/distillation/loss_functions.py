@@ -15,24 +15,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Optional, Tuple
 
+from core.distillation.common import safe_scalar
+
 
 def _safe_scalar(value):
-    """安全标量转换"""
-    if value is None:
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    if torch.is_tensor(value):
-        if value.numel() == 0:
-            return 0.0
-        elif value.numel() == 1:
-            return value.detach().item()
-        else:
-            return value.detach().mean().item()
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+    """兼容旧调用点，内部委托到共享实现。"""
+    return safe_scalar(value)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
