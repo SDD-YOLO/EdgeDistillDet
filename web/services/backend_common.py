@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from core.model_metrics import estimate_gflops_from_weight, estimate_params_m_from_checkpoint
 from utils import expand_env_vars
-from web.core.paths import BASE_DIR
+from web.core.workspace import get_data_root
 
 try:
     from utils.edge_profiler import EdgeProfiler
@@ -48,15 +48,16 @@ def _as_float(value):
         return None
 
 def _resolve_project_path(project: str, allow_external: bool = False) -> Path:
+    root = get_data_root().resolve()
     project_path = Path(project)
     if not project_path.is_absolute():
-        project_path = (BASE_DIR / project_path).resolve()
+        project_path = (root / project_path).resolve()
     else:
         project_path = project_path.resolve()
     if allow_external:
         return project_path
-    if str(project_path).startswith(str(Path(BASE_DIR).resolve())) is False and str(Path(BASE_DIR).resolve()) not in str(project_path):
-        raise ValueError('项目目录必须在仓库根目录下')
+    if str(project_path).startswith(str(root)) is False and str(root) not in str(project_path):
+        raise ValueError('项目目录必须在当前工作区根目录下')
     return project_path
 
 def _normalize_compute_provider(value: str | None) -> str:
@@ -71,27 +72,28 @@ def _normalize_compute_provider(value: str | None) -> str:
     return 'local'
 
 def _candidate_output_roots(project_path: Path):
+    root = get_data_root().resolve()
     candidates = [project_path.resolve()]
     try:
-        rel = project_path.resolve().relative_to(BASE_DIR.resolve())
+        rel = project_path.resolve().relative_to(root)
     except Exception:
         rel = None
     if rel is None:
         return candidates
 
     for prefix in ('runs/detect', 'detect/runs'):
-        alt = (BASE_DIR / prefix / rel).resolve()
-        if str(alt).startswith(str(BASE_DIR.resolve())) and alt not in candidates:
+        alt = (root / prefix / rel).resolve()
+        if str(alt).startswith(str(root)) and alt not in candidates:
             candidates.append(alt)
 
     if str(rel).replace('\\', '/') == 'runs':
-        fallback = (BASE_DIR / 'runs' / 'detect' / 'runs').resolve()
-        if str(fallback).startswith(str(BASE_DIR.resolve())) and fallback not in candidates:
+        fallback = (root / 'runs' / 'detect' / 'runs').resolve()
+        if str(fallback).startswith(str(root)) and fallback not in candidates:
             candidates.append(fallback)
     # 兼容旧训练产物目录：当 project 是 runs/distill 时，历史结果常落在 runs/detect/runs
     if str(rel).replace('\\', '/') == 'runs/distill':
-        legacy = (BASE_DIR / 'runs' / 'detect' / 'runs').resolve()
-        if str(legacy).startswith(str(BASE_DIR.resolve())) and legacy not in candidates:
+        legacy = (root / 'runs' / 'detect' / 'runs').resolve()
+        if str(legacy).startswith(str(root)) and legacy not in candidates:
             candidates.append(legacy)
 
     return candidates
@@ -118,19 +120,20 @@ def _save_yaml_file(path: Path, data) -> None:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 def _list_resume_candidates(project_path: Path):
+    root = get_data_root().resolve()
     candidates = []
     if not project_path.exists() or not project_path.is_dir():
         for prefix in ['runs/detect', 'detect/runs', 'runs/detect/' + project_path.name, 'detect/' + project_path.name, 'detect']:
-            fallback = (BASE_DIR / prefix).resolve()
+            fallback = (root / prefix).resolve()
             if fallback.exists() and fallback.is_dir():
                 candidates.extend(_scan_run_dirs_for_checkpoints(fallback, project_path))
             if project_path.name:
-                alt_fallback = (BASE_DIR / prefix).resolve()
+                alt_fallback = (root / prefix).resolve()
                 if alt_fallback.exists() and alt_fallback.is_dir() and alt_fallback != fallback:
                     candidates.extend(_scan_run_dirs_for_checkpoints(alt_fallback, project_path))
         # 宽泛搜索：直接在 runs/ 下递归查找含 checkpoint 的目录
         if not candidates:
-            runs_dir = BASE_DIR / 'runs'
+            runs_dir = root / 'runs'
             if runs_dir.exists() and runs_dir.is_dir():
                 candidates.extend(_scan_run_dirs_for_checkpoints(runs_dir, project_path))
         return candidates
@@ -138,7 +141,13 @@ def _list_resume_candidates(project_path: Path):
     candidates.extend(_scan_run_dirs_for_checkpoints(project_path, project_path))
 
     for prefix in ['runs/detect', 'detect/runs', 'detect']:
-        detect_project = (BASE_DIR / prefix / project_path.relative_to(BASE_DIR)).resolve()
+        try:
+            rel_pp = project_path.relative_to(root)
+        except Exception:
+            rel_pp = None
+        if rel_pp is None:
+            continue
+        detect_project = (root / prefix / rel_pp).resolve()
         if detect_project != project_path and detect_project.exists() and detect_project.is_dir():
             existing_names = {c['name'] for c in candidates}
             new_candidates = _scan_run_dirs_for_checkpoints(detect_project, project_path)
@@ -179,10 +188,11 @@ def _scan_run_dirs_for_checkpoints(search_path: Path, logical_project: Path):
         except OSError:
             dir_mtime = 0.0
         eff_mtime = max(ck_mtime, dir_mtime)
+        dr = get_data_root().resolve()
         candidates.append({
             'name': run_root.name,
-            'project': str(logical_project.relative_to(BASE_DIR)),
-            'dir': str(run_root.relative_to(BASE_DIR)),
+            'project': str(logical_project.relative_to(dr)),
+            'dir': str(run_root.relative_to(dr)),
             'display_name': f"{run_root.name} — {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(eff_mtime))} ({checkpoint_label})",
             'checkpoint': str(checkpoint_path.resolve()).replace('\\', '/'),
             'checkpoint_name': checkpoint_label,

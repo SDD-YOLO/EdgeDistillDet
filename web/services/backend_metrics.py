@@ -6,12 +6,13 @@ from pathlib import Path
 
 from fastapi import Query
 
-from web.core.paths import BASE_DIR
+from web.core.workspace import get_data_root
 from web.services.backend_common import _as_float, _build_metric_series, _estimate_run_stats, _load_csv_summary, _summarize_series
 
 def get_metrics(source: str = Query('')):
-    runs_dir = BASE_DIR / 'runs'
-    base_resolved = Path(BASE_DIR).resolve()
+    root = get_data_root()
+    runs_dir = root / 'runs'
+    base_resolved = Path(root).resolve()
     metrics_data = []
     if runs_dir.exists():
         for root, dirs, files in os.walk(str(runs_dir)):
@@ -50,7 +51,7 @@ def get_metrics(source: str = Query('')):
     selected_data = None
     if selected_path:
         try:
-            target = (BASE_DIR / selected_path).resolve()
+            target = (root / selected_path).resolve()
             if target.exists() and target.is_file() and target.suffix == '.csv' and str(target).startswith(str(base_resolved)):
                 columns, rows = _load_csv_summary(target)
                 if rows:

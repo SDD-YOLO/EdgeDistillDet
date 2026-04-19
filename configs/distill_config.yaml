@@ -31,7 +31,7 @@ training:
     dataset_name: ''
   data_yaml: coco128.yaml
   device: '0'
-  epochs: 120
+  epochs: 5
   imgsz: 640
   batch: 16
   workers: 6
@@ -46,12 +46,12 @@ training:
   learning_rate: 0.0003
   grad_clip: 5
 output:
-  project: runs\distill
+  project: runs
   name: exp1
   model_dir: ./output/models
   log_dir: ./logs
 wandb:
-  enabled: false
+  enabled: true
   mode: online
   project: edge-distilldet
   entity: ''

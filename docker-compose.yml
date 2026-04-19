@@ -1,0 +1,70 @@
+# 单 GPU VPS 示例：API + Worker + Postgres + Redis + Nginx
+# 使用前请设置 EDGE_JWT_SECRET，并视情况将 torch/ultralytics 与 CUDA 版本对齐后替换 Dockerfile 基础镜像。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: edgedistill
+      POSTGRES_PASSWORD: edgedistill
+      POSTGRES_DB: edgedistill
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    environment:
+      EDGE_SAAS_ENABLED: "1"
+      EDGE_DATABASE_URL: postgresql+psycopg2://edgedistill:edgedistill@postgres:5432/edgedistill
+      EDGE_REDIS_URL: redis://redis:6379/0
+      EDGE_TEAM_DATA_ROOT: /data/teams
+      EDGE_JWT_SECRET: ${EDGE_JWT_SECRET:-change-me-in-production}
+      EDGE_BACKEND_HOST: 0.0.0.0
+      EDGE_BACKEND_PORT: "5000"
+      EDGE_USE_TRAINING_QUEUE: "1"
+      EDGE_PUBLIC_APP_URL: ${EDGE_PUBLIC_APP_URL:-http://localhost}
+    volumes:
+      - teamdata:/data/teams
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    build: .
+    command: ["python", "-m", "web.worker_entry"]
+    environment:
+      EDGE_SAAS_ENABLED: "1"
+      EDGE_DATABASE_URL: postgresql+psycopg2://edgedistill:edgedistill@postgres:5432/edgedistill
+      EDGE_REDIS_URL: redis://redis:6379/0
+      EDGE_TEAM_DATA_ROOT: /data/teams
+      EDGE_JWT_SECRET: ${EDGE_JWT_SECRET:-change-me-in-production}
+      EDGE_USE_TRAINING_QUEUE: "1"
+      NVIDIA_VISIBLE_DEVICES: "0"
+    volumes:
+      - teamdata:/data/teams
+    depends_on:
+      - postgres
+      - redis
+
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  teamdata:

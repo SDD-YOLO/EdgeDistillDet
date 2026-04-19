@@ -15,11 +15,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from web.core.paths import BASE_DIR, CONFIG_DIR
+from web.core.paths import BASE_DIR, train_lock_file
 from web.services import training_runtime
 from web.services.backend_common import _candidate_output_roots, _error, _list_resume_candidates, _load_yaml_file, _normalize_compute_provider, _resolve_project_path
-
-_TRAIN_LOCK_FILE = BASE_DIR / '.training.lock'
 
 def _acquire_os_file_lock(lock_path: Path, timeout: float = 0) -> bool:
     """
@@ -86,7 +84,7 @@ def _release_os_file_lock():
 
 def _acquire_training_lock(timeout: float = 0) -> bool:
     """获取训练互斥锁的统一入口"""
-    return _acquire_os_file_lock(_TRAIN_LOCK_FILE, timeout)
+    return _acquire_os_file_lock(train_lock_file(), timeout)
 
 def _release_training_lock():
     """释放训练互斥锁的统一入口"""
@@ -187,9 +185,10 @@ def _scan_and_kill_stale_training_processes(exclude_pid: int = None) -> dict:
     stale_pids = []
     
     # 1. 从锁文件读取 PID
-    if _TRAIN_LOCK_FILE.exists():
+    lock_fp = train_lock_file()
+    if lock_fp.exists():
         try:
-            content = _TRAIN_LOCK_FILE.read_text().strip().split('\n')
+            content = lock_fp.read_text().strip().split('\n')
             old_pid = int(content[0]) if content else -1
             if old_pid > 0 and old_pid != exclude_pid and _is_process_alive(old_pid):
                 stale_pids.append(old_pid)
@@ -234,7 +233,7 @@ def _scan_and_kill_stale_training_processes(exclude_pid: int = None) -> dict:
     # 4. 删除僵尸锁文件
     if stale_pids:
         try:
-            _TRAIN_LOCK_FILE.unlink(missing_ok=True)
+            train_lock_file().unlink(missing_ok=True)
         except Exception:
             pass
     

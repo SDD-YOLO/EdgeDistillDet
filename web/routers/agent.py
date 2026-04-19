@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from web.deps.saas_deps import workbench_context
 from web.schemas import (
     AgentModelInvokeRequest,
     AgentPatchApplyRequest,
@@ -12,7 +13,7 @@ from web.schemas import (
 )
 from web.services import agent_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(workbench_context)])
 
 
 @router.post("/api/agent/patch/validate")

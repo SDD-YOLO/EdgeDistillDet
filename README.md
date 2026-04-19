@@ -7,6 +7,8 @@
 - 本地 Web 工作台（FastAPI + React）
 - 配置驱动的实验流程（`configs/*.yaml`）
 
+更完整的能力说明与用户工作流见 [docs/FEATURES.md](docs/FEATURES.md)。
+
 **版本**：发布版本在 [`main.py`](main.py) 的 `__version__` 中维护（与 `pip install` 后的包版本一致）。查看：`python -c "from main import __version__; print(__version__)"` 或 `python -m pip show edgedistilldet`；Web 服务：`GET /api/version`。变更记录见 [CHANGELOG.md](CHANGELOG.md)。**许可证**：[MIT](LICENSE)。
 
 ## 1. 项目结构
@@ -33,7 +35,9 @@ EdgeDistillDet/
 ├─ LICENSE                         # MIT
 ├─ CHANGELOG.md                    # 版本变更记录
 ├─ requirements.txt                # 唯一 pip 入口（可编辑安装；依赖见 pyproject.toml）
-└─ docs/regression_baseline.md     # 重构前行为快照
+├─ docs/
+│  ├─ FEATURES.md                  # 功能介绍（能力与场景）
+│  └─ regression_baseline.md       # 重构前行为快照
 ```
 
 ## 2. 环境要求

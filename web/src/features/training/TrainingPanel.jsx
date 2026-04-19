@@ -16,6 +16,7 @@ import { SelectField } from "../../components/forms/SelectField";
 import { TextField } from "../../components/forms/TextField";
 import { DISTILL_CONFIG_UPDATED_EVENT } from "../../constants/distillConfigSync";
 import { DEFAULT_FORM, COMPUTE_PRESETS, inferComputeProviderFromConfig } from "../../constants/trainingDefaults";
+import { authHeaders } from "../../api/client.js";
 import { detectLogLevel } from "../../utils/logging";
 import { formatTime } from "../../utils/time";
 
@@ -570,7 +571,7 @@ function TrainingPanel({ toast, active }) {
 
   const downloadLogs = async () => {
     try {
-      const response = await fetch("/api/train/logs/download");
+      const response = await fetch("/api/train/logs/download", { headers: authHeaders() });
       if (!response.ok) throw new Error("下载日志失败");
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from web.deps.saas_deps import workbench_context
 from web.schemas import DialogPickRequest, SaveConfigRequest, UploadConfigRequest
 from web.services import config_api_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(workbench_context)])
 
 
 @router.get("/api/configs")

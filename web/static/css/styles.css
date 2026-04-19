@@ -271,11 +271,56 @@ body {
 }
 
 .console-page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
     border: 1px solid var(--md-outline-variant);
     border-radius: var(--radius-lg);
     background: var(--md-surface-container-low);
     box-shadow: var(--shadow-1);
     padding: 14px 16px;
+}
+
+.saas-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    max-width: min(100%, 560px);
+}
+
+.saas-bar .saas-input,
+.saas-bar .saas-select {
+    min-width: 120px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--md-outline-variant);
+    background: var(--md-surface);
+    color: inherit;
+    font-size: 13px;
+}
+
+.saas-bar .saas-btn {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--md-primary);
+    background: var(--md-primary);
+    color: var(--md-on-primary);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.saas-bar .saas-btn.secondary {
+    background: transparent;
+    color: var(--md-primary);
+}
+
+.saas-bar .saas-btn.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--md-on-surface-variant);
 }
 
 .console-page-meta {

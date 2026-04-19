@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -12,12 +14,12 @@ from pathlib import Path
 from fastapi import Query
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-from web.core.paths import BASE_DIR, CONFIG_DIR
+from web.core.paths import get_config_dir, train_lock_file
+from web.core.workspace import get_data_root
 from web.schemas import TrainStartRequest
 from web.services import training_runtime
 from web.services.backend_common import _candidate_output_roots, _error, _list_resume_candidates, _load_yaml_file, _normalize_compute_provider, _resolve_project_path
 from web.services.backend_train_runtime import (
-    _TRAIN_LOCK_FILE,
     _acquire_training_lock,
     _build_cloud_api_config,
     _cleanup_gpu_resources,
@@ -27,6 +29,7 @@ from web.services.backend_train_runtime import (
     _kill_process_tree,
     _release_os_file_lock,
     _release_training_lock,
+    _remote_polling_loop,
     _resolve_dataset_via_api,
     _run_training_process_safe,
     _scan_and_kill_stale_training_processes,
@@ -60,24 +63,23 @@ def output_check(project: str = Query('runs/distill')):
             except ValueError:
                 pass
     next_exp = f'exp{max(exp_numbers) + 1}' if exp_numbers else 'exp1'
+    root = get_data_root().resolve()
     return {
         'status': 'ok',
-        'project': str(project_path.relative_to(BASE_DIR)),
+        'project': str(project_path.relative_to(root)),
         'existing_names': existing_names,
         'next_exp_name': next_exp,
     }
 
 def start_training(payload: TrainStartRequest):
-    """
-    启动训练 — 五层防护，坚决杜绝双进程同时运行
-    
-    ═══════ 防护层次（由外到内）══════
-      Layer-0: 线程级互斥锁     → 防 ASGI/多线程并发穿透
-      Layer-1: 残留进程扫描     → 防重启后丢失引用的僵尸进程
-      Layer-2: 内存状态检查     → 防 running=True 的已知进程逃逸  
-      Layer-3: OS 级文件锁       → 防多实例/多 Web 进程并发（内核原子保证）
-      Layer-4: GPU 安全等待     → 确保显存真正释放后才启动
-    """
+    """启动训练 — 五层防护；SaaS+队列模式下先入队。"""
+    from web.core.saas_settings import saas_enabled
+    from web.services.training_queue_service import maybe_enqueue_training
+
+    if saas_enabled():
+        enq = maybe_enqueue_training(payload)
+        if enq is not None:
+            return enq
 
     config_name = payload.config
     mode = payload.mode
@@ -125,14 +127,15 @@ def start_training(payload: TrainStartRequest):
         if not lock_ok:
             err_msg = '训练互斥锁被占用'
             try:
-                if _TRAIN_LOCK_FILE.exists():
-                    content = _TRAIN_LOCK_FILE.read_text().strip().split('\n')
+                lock_path = train_lock_file()
+                if lock_path.exists():
+                    content = lock_path.read_text().strip().split('\n')
                     holder_pid = int(content[0]) if content else -1
                     if holder_pid > 0:
                         alive = _is_process_alive(holder_pid)
                         if not alive:
                             _release_os_file_lock()
-                            _TRAIN_LOCK_FILE.unlink(missing_ok=True)
+                            lock_path.unlink(missing_ok=True)
                             lock_ok = _acquire_training_lock()
                             if lock_ok:
                                 _update_status_line(f'[GUARD] 已清除僵尸锁 (原PID={holder_pid})，重新获取成功')
@@ -157,7 +160,7 @@ def start_training(payload: TrainStartRequest):
             time.sleep(2)
 
         # 验证配置文件
-        config_path = CONFIG_DIR / config_name
+        config_path = get_config_dir() / config_name
         if not config_path.exists():
             _release_training_lock()
             return _error(f'配置文件不存在: {config_name}', 404)
@@ -250,7 +253,7 @@ def start_training(payload: TrainStartRequest):
             _release_training_lock()
             conflict_project = target_project
             try:
-                conflict_project = str(existing_target_path.parent.relative_to(BASE_DIR))
+                conflict_project = str(existing_target_path.parent.relative_to(get_data_root().resolve()))
             except Exception:
                 pass
             return JSONResponse(status_code=409, content={
@@ -266,7 +269,7 @@ def start_training(payload: TrainStartRequest):
             if checkpoint:
                 checkpoint_path = Path(checkpoint)
                 if not checkpoint_path.is_absolute():
-                    checkpoint_path = (BASE_DIR / checkpoint_path).resolve()
+                    checkpoint_path = (get_data_root() / checkpoint_path).resolve()
                 cmd.extend(['--resume', str(checkpoint_path)])
             else:
                 cmd.append('--resume')
@@ -327,7 +330,7 @@ def stop_training():
 
     if training_runtime.remote_training_state.get('active'):
         try:
-            cfg = _load_yaml_file(CONFIG_DIR / 'distill_config.yaml') or {}
+            cfg = _load_yaml_file(get_config_dir() / 'distill_config.yaml') or {}
             train_cfg = dict(cfg.get('training', {}) or {})
             api_cfg = _build_cloud_api_config(train_cfg)
             job_id = str(training_runtime.remote_training_state.get('job_id') or '')
@@ -394,6 +397,13 @@ def stop_training():
     return {'status': 'ok', 'message': '训练已停止'}
 
 def get_training_status():
+    from web.core.saas_settings import saas_enabled
+    from web.services.training_queue_service import get_team_training_status_snapshot
+
+    if saas_enabled():
+        snap = get_team_training_status_snapshot()
+        if snap is not None:
+            return snap
     with training_runtime.train_state_lock:
         snap = {k: (list(v) if k == 'logs' and isinstance(v, list) else v) for k, v in training_runtime.training_status.items()}
     snap['log_count'] = len(snap.get('logs') or [])
@@ -408,7 +418,7 @@ def get_resume_candidates(project: str = Query('runs/distill')):
     candidates = _list_resume_candidates(project_path)
     return {
         'status': 'ok',
-        'project': str(project_path.relative_to(BASE_DIR)),
+        'project': str(project_path.relative_to(get_data_root().resolve())),
         'candidates': candidates
     }
 

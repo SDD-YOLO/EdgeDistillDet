@@ -3,6 +3,7 @@ import AgentPanel from "./features/agent/AgentPanel";
 import MetricsPanel from "./features/metrics/MetricsPanel";
 import TrainingPanel from "./features/training/TrainingPanel";
 import { useToast } from "./hooks/useToast";
+import SaasBar from "./components/SaasBar";
 
 function App() {
   const [activeTab, setActiveTab] = useState("training");
@@ -72,6 +73,7 @@ function App() {
                 <p>{activeNav.desc}</p>
               </div>
             </div>
+            <SaasBar toast={push} />
           </header>
 
           <div className="tab-panels console-panels">

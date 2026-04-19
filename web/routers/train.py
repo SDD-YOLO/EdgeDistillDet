@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from web.deps.saas_deps import workbench_context
 from web.schemas import TrainStartRequest
 from web.services import train_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(workbench_context)])
 
 
 @router.get("/api/output/check")

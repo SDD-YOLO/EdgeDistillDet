@@ -1,3 +1,5 @@
+import { authHeaders } from "../../api/client.js";
+
 export function parseResponsePayload(text) {
   if (!text) return null;
   try {
@@ -139,7 +141,7 @@ export async function streamInvokeViaRelay({ apiUrl, apiKey, modelName, apiModel
     try {
       const res = await fetch("/api/agent/model/invoke-stream", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           provider: "openai_compatible",
           api_url: base,

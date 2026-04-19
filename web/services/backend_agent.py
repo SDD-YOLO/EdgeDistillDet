@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from fastapi.responses import StreamingResponse
 
-from web.core.paths import AGENT_HISTORY_DIR, CONFIG_DIR
+from web.core.paths import get_agent_history_dir, get_config_dir
 from web.schemas import AgentModelInvokeRequest, AgentPatchApplyRequest, AgentPatchPreviewRequest, AgentPatchValidateRequest, AgentRunHistoryRollbackRequest, AgentToolExecuteRequest
 from web.services import backend_state
 from web.services.backend_common import _error, _load_yaml_file, _save_yaml_file
@@ -40,8 +40,9 @@ def _safe_run_id(run_id: str) -> str:
     return rid[:128] or 'default'
 
 def _agent_history_file(run_id: str) -> Path:
-    AGENT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    return AGENT_HISTORY_DIR / f"{_safe_run_id(run_id)}.json"
+    hdir = get_agent_history_dir()
+    hdir.mkdir(parents=True, exist_ok=True)
+    return hdir / f"{_safe_run_id(run_id)}.json"
 
 def _agent_load_history(run_id: str) -> list[dict]:
     path = _agent_history_file(run_id)
@@ -311,7 +312,7 @@ def _agent_metrics_summary_for_tools() -> dict:
 
 
 def _agent_get_context(run_id: str, config_name: str = 'distill_config.yaml') -> dict:
-    config_path = CONFIG_DIR / config_name
+    config_path = get_config_dir() / config_name
     cfg = _load_yaml_file(config_path) or {}
     return {
         'run_id': _safe_run_id(run_id),
@@ -421,7 +422,7 @@ def _agent_propose_patch(goal: str = '', constraints: dict | None = None) -> dic
     else:
         # 兜底仅触及蒸馏侧 kd 权重，避免无端带上 training 等未讨论字段
         patch = {'distillation': {'w_kd': 0.55}}
-    path = CONFIG_DIR / 'distill_config.yaml'
+    path = get_config_dir() / 'distill_config.yaml'
     base_dbg = _load_yaml_file(path) or {}
     declared_snapshot = copy.deepcopy(patch)
     try:
@@ -703,7 +704,7 @@ def agent_patch_preview(payload: AgentPatchPreviewRequest):
     valid_result = _agent_validate_patch(patch, strict=True)
     if not valid_result.get('valid'):
         return _error('; '.join(valid_result.get('errors') or ['patch 不合法']), 400)
-    path = CONFIG_DIR / 'distill_config.yaml'
+    path = get_config_dir() / 'distill_config.yaml'
     base = _load_yaml_file(path) or {}
     try:
         merged = _merge_distill_patch(base, patch)
@@ -762,7 +763,7 @@ def agent_patch_apply(payload: AgentPatchApplyRequest):
     if not isinstance(merged, dict):
         return _error('内部数据损坏', 500)
     base_cfg = rec.get('base') if isinstance(rec.get('base'), dict) else {}
-    out_path = CONFIG_DIR / 'distill_config.yaml'
+    out_path = get_config_dir() / 'distill_config.yaml'
     try:
         _save_yaml_file(out_path, merged)
         backend_state.last_saved_config = {'name': 'distill_config.yaml', 'config': merged}
@@ -829,7 +830,7 @@ def agent_run_rollback(run_id: str, payload: AgentRunHistoryRollbackRequest):
     restore_cfg = target.get('after_config')
     if not isinstance(restore_cfg, dict):
         return _error('目标历史数据损坏', 500)
-    out_path = CONFIG_DIR / 'distill_config.yaml'
+    out_path = get_config_dir() / 'distill_config.yaml'
     current_cfg = _load_yaml_file(out_path) or {}
     try:
         _save_yaml_file(out_path, restore_cfg)
