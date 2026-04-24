@@ -105,14 +105,41 @@ function MetricsPanel({ toast, active }) {
   const rawSeriesRef = useRef(null);
   const lastDataFingerprintRef = useRef("");
 
+  const sendDebugLog = (hypothesisId, location, message, data = {}, runId = "initial") => {
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ea807b" },
+      body: JSON.stringify({
+        sessionId: "ea807b",
+        runId,
+        hypothesisId,
+        location,
+        message,
+        data,
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  };
+
   const refreshSources = async (showToast = false) => {
     try {
       const data = await fetchMetricsList();
       const available = Array.isArray(data.csv_metrics) ? data.csv_metrics.filter((x) => x.has_results) : [];
       const nextSource = available.some((it) => it.path === source) ? source : (available[0]?.path || "");
+      sendDebugLog("H1", "MetricsPanel.jsx:refreshSources", "source candidates resolved", {
+        availableCount: available.length,
+        previousSource: source || "",
+        nextSource: nextSource || "",
+        labels: available.slice(0, 3).map((it) => String(it.display_name || it.name || ""))
+      });
       setSources(available);
       if (!available.length) {
         setHasData(false);
+        sendDebugLog("H2", "MetricsPanel.jsx:refreshSources", "no available source branch", {
+          hasDataNext: false
+        });
         if (showToast) toast("暂无训练结果可展示", "info");
         return;
       }
@@ -139,6 +166,12 @@ function MetricsPanel({ toast, active }) {
       const changed = prevFingerprint !== nextFingerprint;
       lastDataFingerprintRef.current = nextFingerprint;
       setHasData(epochs.length > 0);
+      sendDebugLog("H2", "MetricsPanel.jsx:loadMetricsData", "metrics payload loaded", {
+        sourcePath: sourcePath || "",
+        epochsLen: epochs.length,
+        hasDataNext: epochs.length > 0,
+        changed
+      });
       setOverview(data.overview_stats || {});
       setSummaryMetrics(data.summary_metrics || {});
       const nextSeries = data.chart_series || null;
@@ -155,6 +188,43 @@ function MetricsPanel({ toast, active }) {
   useEffect(() => {
     refreshSources();
   }, []);
+
+  useEffect(() => {
+    const panel = document.getElementById("panel-metrics");
+    const toolbarLeft = panel?.querySelector(".toolbar-left");
+    const refreshBtn = panel?.querySelector(".metrics-refresh-btn");
+    const selectRoot = panel?.querySelector(".metrics-source-select");
+    const selectValue = panel?.querySelector(".metrics-source-select .m3-select-value");
+    if (!toolbarLeft || !refreshBtn || !selectRoot) return;
+    const logLayout = (phase) => {
+      const leftRect = toolbarLeft.getBoundingClientRect();
+      const btnRect = refreshBtn.getBoundingClientRect();
+      const selectRect = selectRoot.getBoundingClientRect();
+      const selectStyle = window.getComputedStyle(selectRoot);
+      const btnStyle = window.getComputedStyle(refreshBtn);
+      sendDebugLog("H3", "MetricsPanel.jsx:layoutEffect", `toolbar layout ${phase}`, {
+        hasData,
+        sourceCount: sources.length,
+        sourceValue: source || "",
+        labelText: String(selectValue?.textContent || "").trim(),
+        labelLen: String(selectValue?.textContent || "").trim().length,
+        toolbarLeftX: Math.round(leftRect.x),
+        toolbarLeftW: Math.round(leftRect.width),
+        refreshX: Math.round(btnRect.x),
+        refreshW: Math.round(btnRect.width),
+        selectX: Math.round(selectRect.x),
+        selectW: Math.round(selectRect.width),
+        selectCssWidth: selectStyle.width,
+        selectCssFlex: selectStyle.flex,
+        refreshCssFlex: btnStyle.flex
+      });
+    };
+    logLayout("before-raf");
+    const rafId = window.requestAnimationFrame(() => {
+      logLayout("after-raf");
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [sources, source, hasData]);
 
   useEffect(() => {
     if (!source) return;

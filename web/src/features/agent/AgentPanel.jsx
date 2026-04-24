@@ -26,6 +26,8 @@ const isArkApiUrl = (apiUrl) => {
 };
 
 const AGENT_CHAT_STORAGE_KEY = "edge_distill_agent_chat_messages_v1";
+let messageIdSeq = 0;
+const nextMessageId = () => `msg-${Date.now()}-${messageIdSeq++}`;
 
 const extractAllFenceBodies = (text) => {
   const raw = typeof text === "string" ? text : "";
@@ -147,14 +149,27 @@ function loadStoredAgentMessages() {
     };
     const loaded = p.map((msg) => {
       if (!msg || typeof msg !== "object") return msg;
-      if (msg.role !== "agent") return msg;
+      if (msg.role !== "agent") return { ...msg, _messageId: msg._messageId || nextMessageId() };
       const content = typeof msg.content === "string" ? sanitizeBlockedCommandHints(msg.content) : msg.content;
       const reasoningApi =
         typeof msg.reasoningApi === "string" ? sanitizeBlockedCommandHints(msg.reasoningApi) : msg.reasoningApi;
       const traceRounds = sanitizeTraceRounds(msg.traceRounds);
       // 历史消息恢复时统一清掉 streaming，避免旧会话残留状态干扰本轮加载占位与流式判定
-      return { ...msg, content, reasoningApi, traceRounds, streaming: false };
+      return { ...msg, content, reasoningApi, traceRounds, streaming: false, _messageId: msg._messageId || nextMessageId() };
     });
+    const repaired = [];
+    for (const msg of loaded) {
+      const prev = repaired[repaired.length - 1];
+      if (msg?.role === "user" && prev?.role === "user") {
+        repaired.push({
+          role: "agent",
+          kind: "history_gap",
+          content: "（已修复）检测到历史会话中丢失了一条助手消息，这里为占位提示。",
+          _messageId: nextMessageId()
+        });
+      }
+      repaired.push(msg);
+    }
     const loadedToolRounds = loaded.reduce((acc, m) => {
       if (m?.role !== "agent" || !Array.isArray(m?.traceRounds)) return acc;
       return (
@@ -162,12 +177,9 @@ function loadStoredAgentMessages() {
         m.traceRounds.filter((r) => !!r?.tool?.name || (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0)).length
       );
     }, 0);
-    const loadedStreamingCount = loaded.reduce((acc, m) => acc + (m?.role === "agent" && m?.streaming ? 1 : 0), 0);
-    const loadedTailRoles = loaded.slice(-4).map((m) => String(m?.role || ""));
-    // #region agent log
-    fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`load-${Date.now()}`,hypothesisId:'H60',location:'AgentPanel.jsx:loadStoredAgentMessages',message:'loaded chat history from storage',data:{messagesLen:loaded.length,loadedToolRounds,loadedStreamingCount,loadedTailRoles},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-    return loaded;
+    const loadedStreamingCount = repaired.reduce((acc, m) => acc + (m?.role === "agent" && m?.streaming ? 1 : 0), 0);
+    const loadedTailRoles = repaired.slice(-4).map((m) => String(m?.role || ""));
+    return repaired;
   } catch {
     return [];
   }
@@ -202,9 +214,6 @@ function AgentPanel({ toast, active }) {
     const el = chatMessagesRef.current;
     if (!el || !active) return;
     if (!shouldStickToBottomRef.current) return;
-    // #region agent log
-    fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`scroll-${Date.now()}`,hypothesisId:'H31',location:'AgentPanel.jsx:scheduleScrollRef',message:'schedule auto scroll',data:{scrollTop:Math.round(el.scrollTop),scrollHeight:Math.round(el.scrollHeight),clientHeight:Math.round(el.clientHeight),stickBottom:shouldStickToBottomRef.current},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (chatScrollRafRef.current) return;
     chatScrollRafRef.current = window.requestAnimationFrame(() => {
       chatScrollRafRef.current = 0;
@@ -214,9 +223,6 @@ function AgentPanel({ toast, active }) {
         box.scrollTop = box.scrollHeight;
         shouldStickToBottomRef.current = true;
         const gap = Math.round(box.scrollHeight - box.scrollTop - box.clientHeight);
-        // #region agent log
-        fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`scroll-settle-${Date.now()}`,hypothesisId:'H37',location:'AgentPanel.jsx:settleToBottom',message:'settle attempt result',data:{attempt,gap,scrollTop:Math.round(box.scrollTop),scrollHeight:Math.round(box.scrollHeight),clientHeight:Math.round(box.clientHeight)},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         if (gap <= 1 || attempt >= 3) return;
         window.requestAnimationFrame(() => {
           const latestBox = chatMessagesRef.current;
@@ -227,25 +233,16 @@ function AgentPanel({ toast, active }) {
       settleToBottom();
       shouldStickToBottomRef.current = true;
       const gapAfterScroll = Math.round(box.scrollHeight - box.scrollTop - box.clientHeight);
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`scroll-post-${Date.now()}`,hypothesisId:'H35',location:'AgentPanel.jsx:scheduleScrollRef:raf',message:'after auto scroll executed',data:{scrollTop:Math.round(box.scrollTop),scrollHeight:Math.round(box.scrollHeight),clientHeight:Math.round(box.clientHeight),gapAfterScroll},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       window.requestAnimationFrame(() => {
         const finalBox = chatMessagesRef.current;
         if (!finalBox || !active) return;
         const finalGap = Math.round(finalBox.scrollHeight - finalBox.scrollTop - finalBox.clientHeight);
-        // #region agent log
-        fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`scroll-post-${Date.now()}`,hypothesisId:'H36',location:'AgentPanel.jsx:scheduleScrollRef:nextRaf',message:'one frame later scroll gap',data:{scrollTop:Math.round(finalBox.scrollTop),scrollHeight:Math.round(finalBox.scrollHeight),clientHeight:Math.round(finalBox.clientHeight),finalGap},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         if (finalGap > 1 && shouldStickToBottomRef.current) {
           const recoverSettle = (attempt = 0) => {
             const currentBox = chatMessagesRef.current;
             if (!currentBox || !active || !shouldStickToBottomRef.current) return;
             currentBox.scrollTop = currentBox.scrollHeight;
             const recoverGap = Math.round(currentBox.scrollHeight - currentBox.scrollTop - currentBox.clientHeight);
-            // #region agent log
-            fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`scroll-recover-${Date.now()}`,hypothesisId:'H38',location:'AgentPanel.jsx:recoverSettle',message:'recover settle after nextRaf gap',data:{attempt,recoverGap,scrollTop:Math.round(currentBox.scrollTop),scrollHeight:Math.round(currentBox.scrollHeight),clientHeight:Math.round(currentBox.clientHeight)},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
             if (recoverGap <= 1 || attempt >= 2) return;
             window.requestAnimationFrame(() => recoverSettle(attempt + 1));
           };
@@ -276,9 +273,6 @@ function AgentPanel({ toast, active }) {
     const mo = new MutationObserver(() => {
       if (!active) return;
       if (!shouldStickToBottomRef.current) return;
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`scroll-${Date.now()}`,hypothesisId:'H32',location:'AgentPanel.jsx:MutationObserver',message:'content mutation triggers scroll',data:{scrollTop:Math.round(el.scrollTop),scrollHeight:Math.round(el.scrollHeight),clientHeight:Math.round(el.clientHeight),stickBottom:shouldStickToBottomRef.current},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       scheduleScrollRef.current();
     });
     mo.observe(el, { childList: true, subtree: true, characterData: true });
@@ -377,7 +371,6 @@ function AgentPanel({ toast, active }) {
   const runAgentWithTools = async ({
     userText,
     maxRounds = 6,
-    debugRunId = `turn-${Date.now()}`,
     forceAllowMutationTools = false,
     turnStartTs = Date.now()
   }) => {
@@ -422,9 +415,6 @@ function AgentPanel({ toast, active }) {
       const reasoningJsonBlocks = extractJsonCodeBlocks(reasoning);
       const jsonCodeBlocks = [...replyJsonBlocks, ...reasoningJsonBlocks];
       const hasRealToolRound = !!(toolInfo?.tool || jsonCodeBlocks.length > 0);
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`trace-${Date.now()}`,hypothesisId:'H12',location:'AgentPanel.jsx:flushTrace',message:'trace round classification',data:{toolName:String(toolInfo?.tool||''),replyJsonBlocks:replyJsonBlocks.length,reasoningJsonBlocks:reasoningJsonBlocks.length,totalJsonBlocks:jsonCodeBlocks.length,hasRealToolRound,replyPreview:String(reply||'').slice(0,120)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       streamingTraceDraft = null;
       if (hasRealToolRound) {
         traceRounds.push({
@@ -464,20 +454,15 @@ function AgentPanel({ toast, active }) {
       const prompt = `${transcriptText}\n\n${continuationSuffix}`;
       const prefersRelay = prefersRelayGlobal;
       const resolvedModelName = resolveModelName(apiModel);
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H51',location:'AgentPanel.jsx:runAgentWithTools:roundStart',message:'round begins',data:{round,prefersRelay,maxRounds,convoLen:convo.length,existingToolLogs:toolLogs.length,existingTraceRounds:traceRounds.length,allowMutationTools,continuationMode:continuationSuffix===readOnlyContinue?'readonly':continuationSuffix===defaultContinue?'default':continuationSuffix===finalizeAfterMutation?'finalize':'other'},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
 
       if (prefersRelay && round === 0) {
         setMessages((prev) => {
           const idx = prev.length;
           agentSlotIndexRef.current = idx;
-          // #region agent log
-          fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H76',location:'AgentPanel.jsx:runAgentWithTools:slotInsert',message:'insert streaming assistant slot',data:{round,idx,sinceTurnStartMs:Math.max(0,Date.now()-Number(turnStartTs||Date.now()))},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           return [
             ...prev,
             {
+              _messageId: nextMessageId(),
               role: "agent",
               content: "",
               reasoningApi: "",
@@ -495,9 +480,6 @@ function AgentPanel({ toast, active }) {
           if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
             const shouldClearStaleContent = traceRounds.length > 0;
             if (shouldClearStaleContent) {
-              // #region agent log
-              fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H62',location:'AgentPanel.jsx:roundStart',message:'clear stale assistant content before next round with existing trace',data:{round,traceRoundsLen:traceRounds.length,allowMutationTools},timestamp:Date.now()})}).catch(()=>{});
-              // #endregion
             }
             next[idx] = {
               ...next[idx],
@@ -535,17 +517,11 @@ function AgentPanel({ toast, active }) {
                     ? [...traceRounds, streamingTraceDraft]
                     : next[idx].traceRounds || [...traceRounds];
                 if (round > 0 && traceRounds.length > 0 && (!Array.isArray(next[idx].traceRounds) || next[idx].traceRounds.length === 0)) {
-                  // #region agent log
-                  fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H63',location:'AgentPanel.jsx:onDelta',message:'ui trace fallback to local traceRounds due state lag',data:{round,localTraceRoundsLen:traceRounds.length,stateTraceRoundsLen:Array.isArray(next[idx].traceRounds)?next[idx].traceRounds.length:0,traceForUiLen:Array.isArray(traceForUi)?traceForUi.length:0},timestamp:Date.now()})}).catch(()=>{});
-                  // #endregion
                 }
                 const suppressStreamingText =
                   !maybeTool?.tool && round > 0 && Array.isArray(traceForUi) && traceForUi.length > 0;
                 const contentForUi = maybeTool?.tool || suppressStreamingText ? "" : reply || "";
                 if (maybeTool?.tool || suppressStreamingText) {
-                  // #region agent log
-                  fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H59',location:'AgentPanel.jsx:onDelta',message:'hide assistant text during streaming tool-chain rounds',data:{toolName:String(maybeTool?.tool||''),suppressStreamingText,round,allowMutationTools,replyLen:String(reply||'').length,traceRoundsLen:traceForUi.length},timestamp:Date.now()})}).catch(()=>{});
-                  // #endregion
                 }
                 // Show actual model output, not placeholder text
                 // Tool rounds will be shown in traceRounds
@@ -566,9 +542,6 @@ function AgentPanel({ toast, active }) {
                 };
               } else if (!missingSlotLogged) {
                 missingSlotLogged = true;
-                // #region agent log
-                fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H81',location:'AgentPanel.jsx:onDelta',message:'delta arrived but streaming slot missing',data:{round,idx,messagesLen:next.length,slotRole:String(next[idx]?.role||''),slotStreaming:!!next[idx]?.streaming,traceRoundsLen:traceRounds.length,replyLen:String(reply||'').length},timestamp:Date.now()})}).catch(()=>{});
-                // #endregion
               }
               return next;
             });
@@ -613,9 +586,6 @@ function AgentPanel({ toast, active }) {
         const built = buildDisplayReplyAndReasoning(reply, parsed.reasoning);
         displayReply = built.displayReply;
         displayReasoning = built.displayReasoning;
-        // #region agent log
-        fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`model-json-${Date.now()}`,hypothesisId:'H41',location:'AgentPanel.jsx:runAgentWithTools:afterParse',message:'model and json source visibility',data:{targetKind:String(target?.kind||''),resolvedModelName,payloadModel:String(payload?.model||''),replyJsonBlocksRaw:extractJsonCodeBlocks(reply).length,replyJsonBlocksDisplay:extractJsonCodeBlocks(displayReply).length,reasoningJsonBlocksDisplay:extractJsonCodeBlocks(displayReasoning).length,replyPreview:String(reply||'').slice(0,100),displayReplyPreview:String(displayReply||'').slice(0,100)},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         // Set reasoningApi if model returns reasoning (even if empty, to distinguish from no reasoning support)
         if (typeof payload?.reasoning === "string" && prefersRelay) {
           setMessages((prev) => {
@@ -644,20 +614,10 @@ function AgentPanel({ toast, active }) {
       const looseToolCall = extractToolCallFromText(reply);
       const toolCall = extractStandaloneToolCall(reply);
       const effectiveToolCall = toolCall || (allowMutationTools ? looseToolCall : null);
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`model-json-${Date.now()}`,hypothesisId:'H42',location:'AgentPanel.jsx:runAgentWithTools:preFlush',message:'raw/display json comparison before trace flush',data:{hasToolCall:!!toolCall,toolName:String(toolCall?.tool||''),rawJsonBlocks:extractJsonCodeBlocks(reply).length,displayJsonBlocks:extractJsonCodeBlocks(displayReply).length,displayReasoningJsonBlocks:extractJsonCodeBlocks(displayReasoning).length},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H52',location:'AgentPanel.jsx:runAgentWithTools:toolDetect',message:'tool detection for round',data:{round,hasStandaloneToolCall:!!toolCall,standaloneToolName:String(toolCall?.tool||''),hasLooseToolCall:!!looseToolCall,looseToolName:String(looseToolCall?.tool||''),hasEffectiveToolCall:!!effectiveToolCall,effectiveToolName:String(effectiveToolCall?.tool||''),rawJsonBlocks:extractJsonCodeBlocks(reply).length,displayJsonBlocks:extractJsonCodeBlocks(displayReply).length},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
+
       const willAutoBridge = !toolCall && canAutoBridgeFromAnalysis();
       const toolNames = toolLogs.map((t) => t.call.tool);
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`ui-order-${Date.now()}`,hypothesisId:'H11',location:'AgentPanel.jsx:runAgentWithTools',message:'pre-render decision for assistant bubble',data:{hasToolCall:!!toolCall,toolName:String(toolCall?.tool||''),hasLooseToolCall:!!looseToolCall,hasEffectiveToolCall:!!effectiveToolCall,effectiveToolName:String(effectiveToolCall?.tool||''),willAutoBridge,replyLen:String(reply||'').length,traceRoundsLen:traceRounds.length},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`model-json-${Date.now()}`,hypothesisId:'H43',location:'AgentPanel.jsx:runAgentWithTools:beforeRender',message:'model display field availability',data:{resolvedModelName,apiModel:String(apiModel||''),payloadModel:String(payload?.model||''),willWriteModelFieldToMessage:true},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
+
       if (prefersRelay && target?.kind === "backend-relay" && !effectiveToolCall && !willAutoBridge) {
         setMessages((prev) => {
           const next = [...prev];
@@ -693,18 +653,12 @@ function AgentPanel({ toast, active }) {
       // The actual model output (including tool JSON) is preserved in content
       // Tool execution status is shown via traceRounds
       if (!effectiveToolCall) {
-        // #region agent log
-        fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H57',location:'AgentPanel.jsx:runAgentWithTools:noToolCall',message:'model returned without standalone tool call',data:{round,allowMutationTools,willAutoBridge,hasLooseToolCall:!!looseToolCall,replyLen:String(reply||'').length},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         if (round === 0 && toolLogs.length === 0 && shouldAutoBootstrapContext(userText)) {
           const bootstrapCall = { tool: "agent.get_context", args: { run_id: "default" } };
           const rawExecResult = await executeAgentTool({ tool: bootstrapCall.tool, args: bootstrapCall.args });
           const execResult = normalizeToolExecutionResult(rawExecResult);
           toolLogs.push({ call: bootstrapCall, result: execResult });
           flushTrace(displayReply, displayReasoning, bootstrapCall, execResult);
-          // #region agent log
-          fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H56',location:'AgentPanel.jsx:runAgentWithTools:autoBootstrap',message:'auto bootstrap get_context when model skipped tools',data:{round,userTextLen:String(userText||'').length,toolLogsLen:toolLogs.length},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           convo.push({ role: "assistant", content: reply });
           convo.push({ role: "tool", name: bootstrapCall.tool, content: JSON.stringify(execResult, null, 2) });
           continue;
@@ -723,9 +677,6 @@ function AgentPanel({ toast, active }) {
           const rawExecResult = await executeAgentTool({ tool: fallbackCall.tool, args: fallbackCall.args });
           const execResult = normalizeToolExecutionResult(rawExecResult);
           toolLogs.push({ call: fallbackCall, result: execResult });
-          // #region agent log
-          fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H53',location:'AgentPanel.jsx:runAgentWithTools:autoBridgeExec',message:'auto-bridge tool executed',data:{round,toolName:String(fallbackCall.tool||''),toolLogsLen:toolLogs.length},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           if (prefersRelay && agentSlotIndexRef.current >= 0) {
             const namesAfter = toolLogs.map((t) => t.call.tool);
             setMessages((prev) => {
@@ -770,9 +721,6 @@ function AgentPanel({ toast, active }) {
         };
       }
       if (mutationTools.has(effectiveToolCall.tool) && !allowMutationTools) {
-        // #region agent log
-        fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H55',location:'AgentPanel.jsx:runAgentWithTools:mutationBlocked',message:'mutation tool blocked by intent gate',data:{round,toolName:String(effectiveToolCall?.tool||''),allowMutationTools,forceAllowMutationTools},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         flushTrace(displayReply, displayReasoning, effectiveToolCall, { blocked: true, reason: "mutation_not_allowed" });
         return {
           payload,
@@ -801,16 +749,10 @@ function AgentPanel({ toast, active }) {
         };
       }
       if (!toolCall && effectiveToolCall) {
-        // #region agent log
-        fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H58',location:'AgentPanel.jsx:runAgentWithTools:useLooseToolCall',message:'fallback to loose tool call parser',data:{round,toolName:String(effectiveToolCall?.tool||''),allowMutationTools},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
       }
       const rawExecResult = await executeAgentTool({ tool: effectiveToolCall.tool, args: effectiveToolCall.args || {} });
       const execResult = normalizeToolExecutionResult(rawExecResult);
       toolLogs.push({ call: effectiveToolCall, result: execResult });
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H53',location:'AgentPanel.jsx:runAgentWithTools:toolExec',message:'tool executed from model call',data:{round,toolName:String(effectiveToolCall?.tool||''),toolLogsLen:toolLogs.length,traceRoundsLenBeforeFlush:traceRounds.length},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       flushTrace(displayReply, displayReasoning, effectiveToolCall, execResult);
       if (effectiveToolCall.tool === "agent.apply_patch_with_approval" && execResult && execResult.status === "ok") {
         continuationSuffix = finalizeAfterMutation;
@@ -865,7 +807,10 @@ function AgentPanel({ toast, active }) {
     setApprovalRunId(String(preview.run_id || "default"));
     setApprovalRequestHash(String(preview.request_hash || ""));
     setApprovalOpen(true);
-    setMessages((prev) => [...prev, { role: "agent", content: formatChangeSummaryForChat(cs), kind: "config_summary" }]);
+    setMessages((prev) => [
+      ...prev,
+      { _messageId: nextMessageId(), role: "agent", content: formatChangeSummaryForChat(cs), kind: "config_summary" }
+    ]);
     toast(
       source === "tool"
         ? "已通过工具触发审批预览，可在对话区「批准修改训练配置」中采纳。"
@@ -946,7 +891,7 @@ function AgentPanel({ toast, active }) {
       const preview = await previewAgentPatch({ patch });
       applyPreviewResponseToUi(preview, "markdown");
     } catch (error) {
-      setMessages((prev) => [...prev, { role: "agent", content: `Patch 校验失败: ${error.message}` }]);
+      setMessages((prev) => [...prev, { _messageId: nextMessageId(), role: "agent", content: `Patch 校验失败: ${error.message}` }]);
       toast(`Patch 校验失败: ${error.message}`, "error");
     }
   };
@@ -996,28 +941,16 @@ function AgentPanel({ toast, active }) {
     setLoading(true);
     if (clearInput) setInput("");
     setMessages((prev) => {
-      const cleaned = allowMutationForThisTurn
-        ? prev
-        : prev.filter((m) => {
-            if (m?.kind === "config_summary") return false;
-            const content = String(m?.content || "");
-            return !/批准修改训练配置|审批预览|让 agent 执行|人工审核/.test(content);
-          });
-      return [...cleaned, { role: "user", content: text }];
+      return [...prev, { _messageId: nextMessageId(), role: "user", content: text }];
     });
-    const debugRunId = `turn-${Date.now()}`;
     const turnStartTs = Date.now();
     const preTail = messages.slice(-5);
     const preHasAnyStreamingAgent = messages.some((m) => m?.role === "agent" && !!m?.streaming);
     const preLatest = messages.length ? messages[messages.length - 1] : null;
-    // #region agent log
-    fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H50',location:'AgentPanel.jsx:executeUserText:start',message:'new user turn started',data:{textLen:String(text||'').length,allowMutationForThisTurn,hasRecentMutationContext,hasRecentAnyToolContext,continuationMutationIntent,explicitMutationToolForUserText,isMutationIntent:isMutationIntentRequested(text),textPreview:String(text||'').slice(0,120),loadingAtStart:!!loading,preMessagesLen:messages.length,preHasAnyStreamingAgent,preLatestRole:String(preLatest?.role||''),preLatestStreaming:!!preLatest?.streaming,preTailRoles:preTail.map((m)=>String(m?.role||''))},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     try {
       const { payload, reply, displayReply, displayReasoning, target, toolLogs, streamedRelay, traceRounds } =
         await runAgentWithTools({
           userText: text,
-          debugRunId,
           forceAllowMutationTools: allowMutationForThisTurn,
           turnStartTs
         });
@@ -1027,6 +960,7 @@ function AgentPanel({ toast, active }) {
         setMessages((prev) => [
           ...prev,
           {
+            _messageId: nextMessageId(),
             role: "agent",
             content: displayReply,
             toolsUsed: names,
@@ -1036,9 +970,6 @@ function AgentPanel({ toast, active }) {
           }
         ]);
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H54',location:'AgentPanel.jsx:executeUserText:done',message:'turn completed',data:{streamedRelay,toolLogsLen:Array.isArray(toolLogs)?toolLogs.length:0,traceRoundsLen:Array.isArray(traceRounds)?traceRounds.length:0,targetKind:String(target?.kind||'')},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (target.kind === "openai") {
         toast("已通过 OpenAI 兼容接口完成请求", "success");
       } else if (target.kind === "backend-relay") {
@@ -1074,6 +1005,7 @@ function AgentPanel({ toast, active }) {
             setMessages((prev) => [
               ...prev,
               {
+                _messageId: nextMessageId(),
                 role: "agent",
                 content: "当前请求未明确要求修改参数，已跳过配置写入。是否需要我提供一版参数修改方案？"
               }
@@ -1086,10 +1018,7 @@ function AgentPanel({ toast, active }) {
         }
       }
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:debugRunId,hypothesisId:'H82',location:'AgentPanel.jsx:executeUserText:catch',message:'turn failed before normal completion',data:{errorName:String(error?.name||''),errorMessage:String(error?.message||''),loadingAtCatch:!!loading,messagesLenAtCatch:messages.length},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
-      setMessages((prev) => [...prev, { role: "agent", content: `请求失败: ${error.message}` }]);
+      setMessages((prev) => [...prev, { _messageId: nextMessageId(), role: "agent", content: `请求失败: ${error.message}` }]);
     } finally {
       setLoading(false);
     }
@@ -1104,15 +1033,9 @@ function AgentPanel({ toast, active }) {
     const text = (presetText || "").trim();
     const panelEl = document.getElementById("panel-agent");
     const rootEl = document.getElementById("root");
-    // #region agent log
-    fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`preset-${Date.now()}`,hypothesisId:'H68',location:'AgentPanel.jsx:sendPresetMessage',message:'common tool button pressed',data:{textLen:String(text||'').length,textPreview:String(text||'').slice(0,100),loading:!!loading,panelHeight:Number(panelEl?.clientHeight||0),rootHeight:Number(rootEl?.clientHeight||0)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     Promise.resolve().then(() => {
       const panelAfter = document.getElementById("panel-agent");
       const rootAfter = document.getElementById("root");
-      // #region agent log
-      fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`preset-${Date.now()}`,hypothesisId:'H71',location:'AgentPanel.jsx:sendPresetMessage:microtask',message:'post-click geometry snapshot',data:{panelHeight:Number(panelAfter?.clientHeight||0),panelDisplay:String(panelAfter?getComputedStyle(panelAfter).display:''),rootHeight:Number(rootAfter?.clientHeight||0)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
     });
     // #endregion
     await executeUserText(text, false);

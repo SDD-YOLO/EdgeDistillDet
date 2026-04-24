@@ -6,6 +6,23 @@
     <title>EdgeDistillDet - 训练控制台</title>
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
     <link rel="stylesheet" href="/static/dist/app.css">
+    <style>
+      .md-btn.send-btn {
+        width: 42px;
+        height: 42px;
+        min-width: 42px;
+        flex: 0 0 42px;
+        border-radius: 50%;
+        padding: 0;
+      }
+      .md-btn.btn-icon-sm {
+        width: 28px !important;
+        min-width: 28px !important;
+        height: 28px !important;
+        padding: 0 !important;
+        flex: 0 0 28px !important;
+      }
+    </style>
 </head>
 <body>
     <script>
@@ -55,6 +72,80 @@
           document.addEventListener("DOMContentLoaded", init, { once: true });
         } else {
           init();
+        }
+      })();
+    </script>
+    <script>
+      (function debugExportIconButtonWidth() {
+        function sendDebug(hypothesisId, message, data) {
+          // #region agent log
+          fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
+            body: JSON.stringify({
+              sessionId: "b84065",
+              runId: "baseline-dom-probe",
+              hypothesisId,
+              location: "templates/index.html:74",
+              message,
+              data,
+              timestamp: Date.now()
+            })
+          }).catch(() => {});
+          // #endregion
+        }
+
+        function probe() {
+          const btn = document.querySelector(".chat-controls .btn-icon-sm[aria-label='导出会话']");
+          const icon = btn ? btn.querySelector(".material-icons") : null;
+          if (!btn) {
+            sendDebug("H5", "export button not found", { selector: ".chat-controls .btn-icon-sm[aria-label='导出会话']" });
+            return;
+          }
+          const st = window.getComputedStyle(btn);
+          const ist = icon ? window.getComputedStyle(icon) : null;
+          const rect = btn.getBoundingClientRect();
+          sendDebug("H1", "button rect size", { width: rect.width, height: rect.height, className: btn.className });
+          sendDebug("H2", "button min-width and padding", {
+            minWidth: st.minWidth,
+            width: st.width,
+            paddingLeft: st.paddingLeft,
+            paddingRight: st.paddingRight
+          });
+          sendDebug("H3", "button flex values", {
+            flexGrow: st.flexGrow,
+            flexShrink: st.flexShrink,
+            flexBasis: st.flexBasis
+          });
+          sendDebug("H4", "icon metrics", {
+            iconClientWidth: icon ? icon.clientWidth : null,
+            iconFontSize: ist ? ist.fontSize : null,
+            iconLineHeight: ist ? ist.lineHeight : null
+          });
+        }
+
+        function probeWhenReady() {
+          let attempts = 0;
+          function tick() {
+            const exists = document.querySelector(".chat-controls .btn-icon-sm[aria-label='导出会话']");
+            if (exists) {
+              probe();
+              return;
+            }
+            attempts += 1;
+            if (attempts >= 120) {
+              sendDebug("H5", "export button not rendered in probe window", { attempts });
+              return;
+            }
+            requestAnimationFrame(tick);
+          }
+          requestAnimationFrame(tick);
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", probeWhenReady, { once: true });
+        } else {
+          probeWhenReady();
         }
       })();
     </script>

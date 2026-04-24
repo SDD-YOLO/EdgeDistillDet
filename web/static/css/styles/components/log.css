@@ -1,0 +1,12 @@
+/* Auto-split from styles.css: components/log.css */
+
+/* Auto-split from styles.css: components/log.css */
+
+.log-line.logo {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    margin: 0;
+    padding: 0;
+    line-height: 1.0;
+}

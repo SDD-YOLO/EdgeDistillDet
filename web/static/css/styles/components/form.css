@@ -1,0 +1,104 @@
+/* Auto-split from styles.css: components/form.css */
+
+/* Auto-split from styles.css: components/form.css */
+
+.btn-start,
+.btn-stop,
+.md-btn,
+.md-btn-text {
+    border: 1px solid transparent;
+    border-radius: 20px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+    line-height: 20px;
+    padding: 0 20px;
+    min-width: 136px;
+    height: 40px;
+    flex: 1 1 150px;
+    white-space: nowrap;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    box-shadow: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.md-btn.send-btn {
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    flex: 0 0 42px;
+    border-radius: 50%;
+    padding: 0;
+}
+
+.md-input,
+.md-select,
+.chat-input-wrapper textarea {
+    width: 100%;
+    border: 1px solid color-mix(in srgb, var(--md-outline-variant) 72%, var(--md-surface));
+    border-radius: 12px;
+    background: var(--md-surface-container-low);
+    color: var(--md-on-surface);
+    font: inherit;
+    font-size: 16px;
+    line-height: 24px;
+    letter-spacing: 0.15px;
+    padding: 15px 16px;
+    outline: none;
+    resize: none;
+    height: 56px;
+    min-height: 56px;
+    max-height: 160px;
+    overflow-y: auto;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.chat-input-wrapper .md-field textarea {
+    font-size: 14px;
+    line-height: 20px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+.md-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 12px 0 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    line-height: 16px;
+    border: 1px solid var(--md-outline-variant);
+    background: var(--md-sys-color-surface-container-low, var(--md-surface-container-low));
+    color: var(--md-on-surface-variant);
+}
+
+.m3-select-option {
+    width: 100%;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--md-on-surface);
+    text-align: left;
+    font: inherit;
+    font-size: 14px;
+    line-height: 20px;
+    letter-spacing: 0.1px;
+    min-height: 40px;
+    padding: 10px 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: background-color 0.14s ease, color 0.14s ease;
+}

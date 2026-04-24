@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { TextField } from "../../components/forms/TextField";
@@ -48,6 +48,9 @@ function ChatBubbleBody({
   isLatestAgentBubble
 }) {
   const bubbleRef = useRef(null);
+  const traceListRef = useRef(null);
+  const traceAutoFollowRef = useRef(true);
+  const [traceExpanded, setTraceExpanded] = useState(true);
 
   const sanitizeTraceText = (value) =>
     sanitizeBlockedCommandHints(String(value || ""))
@@ -74,65 +77,40 @@ function ChatBubbleBody({
     (r) => !!r?.tool?.name || (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0)
   );
   const hasToolRounds = toolRounds.length > 0;
-  const hasMarkdownSyntax = /(^|\n)\s*(?:[-*+]\s+|\d+\.\s+)|\*\*[^*]+\*\*|`[^`]+`|```/.test(text);
-  const hasEscapedMarkdownBold = /\\\*\\\*[^*]+\\\*\\\*/.test(text);
   const showStreamingPlaceholder = role === "agent" && !!streaming && !hasToolRounds && !String(text || "").trim();
   const showToolStreamingPlaceholder = role === "agent" && !!streaming && hasToolRounds && !String(text || "").trim();
 
   useEffect(() => {
     if (role !== "agent") return;
-    // #region agent log
-    fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`view-${Date.now()}`,hypothesisId:'H13',location:'AgentPanelView.jsx:ChatBubbleBody',message:'ui bubble selection state',data:{bubbleIndex,isLatestAgentBubble:!!isLatestAgentBubble,hasToolRounds,toolRoundsLen:toolRounds.length,roundsLen:rounds.length,traceOpen:!!traceOpen,streaming:!!streaming,textLen:String(text||'').length,hasMarkdownSyntax,hasEscapedMarkdownBold},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-  }, [role, bubbleIndex, isLatestAgentBubble, hasToolRounds, toolRounds.length, rounds.length, traceOpen, streaming, text, hasMarkdownSyntax, hasEscapedMarkdownBold]);
+    if (!hasToolRounds) return;
+    const listEl = traceListRef.current;
+    if (!listEl) return;
+    traceAutoFollowRef.current = true;
+    const onTraceScroll = () => {
+      const distance = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+      traceAutoFollowRef.current = distance < 60;
+    };
+    listEl.addEventListener("scroll", onTraceScroll, { passive: true });
+    return () => listEl.removeEventListener("scroll", onTraceScroll);
+  }, [role, hasToolRounds, bubbleIndex]);
 
   useEffect(() => {
-    if (!showStreamingPlaceholder) return;
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
-      body: JSON.stringify({
-        sessionId: "e872f3",
-        runId: `view-${Date.now()}`,
-        hypothesisId: "H83",
-        location: "AgentPanelView.jsx:ChatBubbleBody",
-        message: "show placeholder when streaming text still empty",
-        data: {
-          bubbleIndex,
-          isLatestAgentBubble: !!isLatestAgentBubble,
-          streaming: !!streaming,
-          hasToolRounds
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-  }, [showStreamingPlaceholder, bubbleIndex, isLatestAgentBubble, streaming, hasToolRounds]);
-
-  useEffect(() => {
-    if (!showToolStreamingPlaceholder) return;
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
-      body: JSON.stringify({
-        sessionId: "e872f3",
-        runId: `view-${Date.now()}`,
-        hypothesisId: "H84",
-        location: "AgentPanelView.jsx:ChatBubbleBody",
-        message: "show placeholder when tool rounds streaming with empty final text",
-        data: {
-          bubbleIndex,
-          isLatestAgentBubble: !!isLatestAgentBubble,
-          toolRoundsLen: toolRounds.length,
-          streaming: !!streaming
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-  }, [showToolStreamingPlaceholder, bubbleIndex, isLatestAgentBubble, toolRounds.length, streaming]);
+    if (role !== "agent") return;
+    if (!hasToolRounds) return;
+    const listEl = traceListRef.current;
+    if (!listEl) return;
+    const distanceFromBottom = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+    const isNearBottom = distanceFromBottom < 60;
+    const shouldAutoFollow = isNearBottom || traceAutoFollowRef.current;
+    if (streaming) {
+      if (shouldAutoFollow) {
+        listEl.scrollTop = listEl.scrollHeight;
+        traceAutoFollowRef.current = true;
+      }
+    } else {
+      listEl.scrollTop = listEl.scrollHeight;
+    }
+  }, [role, hasToolRounds, streaming, toolRounds.length, bubbleIndex, traceExpanded]);
 
   if (role !== "agent") {
     return <div className="chat-plain chat-pre-wrap">{text}</div>;
@@ -163,12 +141,18 @@ function ChatBubbleBody({
         <div className="agent-answer-bubble-outer">
           {modelLabel ? <div className="agent-model-label">模型：{modelLabel}</div> : null}
           {/* Tool trace details with JSON code blocks */}
-          <details className="agent-trace-details-nested" open={!!traceOpen}>
+          <details
+            className="agent-trace-details-nested"
+            open={traceExpanded}
+            onToggle={(e) => {
+              setTraceExpanded(e.currentTarget.open);
+            }}
+          >
             <summary className="agent-trace-summary-nested">
               <span className="material-icons">build_circle</span>
               <span>调用工具中…（{toolRounds.length} 轮）</span>
             </summary>
-            <ol className="agent-trace-list-nested">
+            <ol className="agent-trace-list-nested" ref={traceListRef}>
               {toolRounds.map((r, tidx) => (
                 <li key={`trace-${tidx}-${r.round}`} className="agent-trace-item-nested">
                   <div className="agent-trace-round-title">第 {r.round} 轮</div>
@@ -265,64 +249,6 @@ function AgentPanelView({
   resizeChatInput,
   send
 }) {
-  useEffect(() => {
-    const panelEl = document.getElementById("panel-agent");
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
-      body: JSON.stringify({
-        sessionId: "e872f3",
-        runId: `panel-${Date.now()}`,
-        hypothesisId: "H70",
-        location: "AgentPanelView.jsx:activeEffect",
-        message: "agent panel visibility and geometry",
-        data: {
-          active: !!active,
-          ariaHidden: String(panelEl?.getAttribute("aria-hidden") || ""),
-          panelClientHeight: Number(panelEl?.clientHeight || 0),
-          panelDisplay: String(panelEl ? getComputedStyle(panelEl).display : "")
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-  }, [active, messages.length, loading]);
-
-  useEffect(() => {
-    const tail = Array.isArray(messages) ? messages.slice(-3) : [];
-    const hasStreamingAgent = tail.some((m) => m?.role === "agent" && !!m?.streaming);
-    const hasAnyStreamingAgent = Array.isArray(messages)
-      ? messages.some((m) => m?.role === "agent" && !!m?.streaming)
-      : false;
-    const allTailAreUser = tail.length > 0 && tail.every((m) => m?.role === "user");
-    const latest = Array.isArray(messages) && messages.length > 0 ? messages[messages.length - 1] : null;
-    if (!(loading && !hasStreamingAgent)) return;
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
-      body: JSON.stringify({
-        sessionId: "e872f3",
-        runId: `panel-${Date.now()}`,
-        hypothesisId: "H80",
-        location: "AgentPanelView.jsx:loadingTailCheck",
-        message: "loading without trailing streaming agent bubble",
-        data: {
-          tailLen: tail.length,
-          tailRoles: tail.map((m) => String(m?.role || "")),
-          loading: !!loading,
-          allTailAreUser,
-          hasAnyStreamingAgent,
-          latestRole: String(latest?.role || ""),
-          latestStreaming: !!latest?.streaming
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-  }, [messages, loading]);
-
   const latestAgentIndex = (() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       if (messages[i]?.role === "agent") return i;
@@ -333,6 +259,95 @@ function AgentPanelView({
     const tail = Array.isArray(messages) ? messages.slice(-4) : [];
     return tail.some((m) => m?.role === "agent" && !!m?.streaming);
   })();
+  const exportButtonRef = useRef(null);
+  const exportIconRef = useRef(null);
+
+  useEffect(() => {
+    if (!active || !exportButtonRef.current) return;
+    const button = exportButtonRef.current;
+    const icon = exportIconRef.current;
+    const buttonStyle = getComputedStyle(button);
+    const iconStyle = icon ? getComputedStyle(icon) : null;
+    const rect = button.getBoundingClientRect();
+
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
+      body: JSON.stringify({
+        sessionId: "b84065",
+        runId: "baseline",
+        hypothesisId: "H1",
+        location: "AgentPanelView.jsx:263",
+        message: "icon button rendered width baseline",
+        data: { className: button.className, width: rect.width, height: rect.height },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
+      body: JSON.stringify({
+        sessionId: "b84065",
+        runId: "baseline",
+        hypothesisId: "H2",
+        location: "AgentPanelView.jsx:264",
+        message: "check min-width and padding from md-btn",
+        data: {
+          minWidth: buttonStyle.minWidth,
+          paddingLeft: buttonStyle.paddingLeft,
+          paddingRight: buttonStyle.paddingRight,
+          width: buttonStyle.width
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
+      body: JSON.stringify({
+        sessionId: "b84065",
+        runId: "baseline",
+        hypothesisId: "H3",
+        location: "AgentPanelView.jsx:265",
+        message: "check flex model impact",
+        data: {
+          flexGrow: buttonStyle.flexGrow,
+          flexShrink: buttonStyle.flexShrink,
+          flexBasis: buttonStyle.flexBasis,
+          parentClass: button.parentElement?.className || ""
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
+      body: JSON.stringify({
+        sessionId: "b84065",
+        runId: "baseline",
+        hypothesisId: "H4",
+        location: "AgentPanelView.jsx:266",
+        message: "check icon intrinsic width",
+        data: {
+          iconClientWidth: icon?.clientWidth ?? null,
+          iconFontSize: iconStyle?.fontSize ?? null,
+          iconLineHeight: iconStyle?.lineHeight ?? null
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  }, [active, messages.length]);
 
   return (
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-agent" aria-hidden={!active}>
@@ -385,11 +400,12 @@ function AgentPanelView({
                   size="icon"
                   variant="outline"
                   className="btn-icon-sm"
+                  ref={exportButtonRef}
                   title="导出会话 JSON（审计）"
                   onClick={onExportSession}
                   aria-label="导出会话"
                 >
-                  <span className="material-icons">download</span>
+                  <span ref={exportIconRef} className="material-icons">download</span>
                 </Button>
                 <Button size="icon" variant="outline" className="btn-icon-sm" onClick={onClearMessages}>
                   <span className="material-icons">delete_sweep</span>
@@ -398,7 +414,7 @@ function AgentPanelView({
             </div>
             <div id="agent-chat-messages" ref={chatMessagesRef} className="chat-messages">
               {messages.map((msg, index) => (
-                <div key={`${msg.role}-${index}`} className={`chat-message ${msg.role}`}>
+                <div key={msg._messageId || `${msg.role}-${index}`} className={`chat-message ${msg.role}`}>
                   <div className={`message-avatar ${msg.role === "agent" ? "agent-avatar" : "user-avatar"}`}>
                     <span className="material-icons">{msg.role === "agent" ? "smart_toy" : "person"}</span>
                   </div>
