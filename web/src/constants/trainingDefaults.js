@@ -35,7 +35,6 @@ export const DEFAULT_FORM = {
     epochs: 150,
     imgsz: 640,
     batch: -1,
-    workers: 0,
     lr0: 0.01,
     lrf: 0.1,
     warmup_epochs: 3,

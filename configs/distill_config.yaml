@@ -3,16 +3,13 @@ distillation:
   teacher_weight: models/yolov8m.pt
   alpha_init: 0.5
   T_max: 5
-  T_min: 2
-  warm_epochs: 15
-  w_kd: 0.55
+  T_min: 1.5
+  warm_epochs: 20
+  w_kd: 0.6
   w_focal: 0.55
-  w_feat: 0.7
-  scale_boost: 1.2
+  w_feat: 0.5
+  scale_boost: 1.5
   focal_gamma: 2
-  temperature: 6
-  alpha: 0.5
-  distill_type: soft
 training:
   compute_provider: local
   cloud_api:
@@ -34,22 +31,16 @@ training:
   epochs: 120
   imgsz: 640
   batch: 16
-  workers: 6
-  lr0: 0.01
-  lrf: 0.15
-  warmup_epochs: 5
+  lr0: 0.001
+  lrf: 0.05
+  warmup_epochs: 20
   mosaic: 0.8
-  mixup: 0.3
-  close_mosaic: 6
+  mixup: 0.7
+  close_mosaic: 10
   amp: true
-  batch_size: 64
-  learning_rate: 0.0003
-  grad_clip: 5
 output:
-  project: runs\distill
+  project: runs/distill
   name: exp1
-  model_dir: ./output/models
-  log_dir: ./logs
 wandb:
   enabled: false
   mode: online
@@ -60,4 +51,3 @@ wandb:
   job_type: distill-train
   tags: []
   notes: ''
-__agentPreConfirmedOverlap: true

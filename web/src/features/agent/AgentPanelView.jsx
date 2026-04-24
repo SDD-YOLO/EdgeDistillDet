@@ -1,16 +1,143 @@
+import { useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { TextField } from "../../components/forms/TextField";
-import { AGENT_QUICK_PROMPTS, softenAgentBubbleText } from "./agentHelpers";
+import { Button } from "../../components/ui/button";
+import { AGENT_QUICK_PROMPTS, sanitizeBlockedCommandHints, softenAgentBubbleText } from "./agentHelpers";
 
-function ChatBubbleBody({ role, content, reasoningApi, toolsUsed, streaming, messageKind, traceRounds, relayMayMissReasoning }) {
+function MarkdownText({ text, className = "" }) {
+  const value = String(text || "");
+  return (
+    <ReactMarkdown
+      className={`agent-markdown ${className}`.trim()}
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="agent-md-p">{children}</p>,
+        ul: ({ children }) => <ul className="agent-md-list">{children}</ul>,
+        ol: ({ children }) => <ol className="agent-md-list">{children}</ol>,
+        li: ({ children }) => <li className="agent-md-li">{children}</li>,
+        code: ({ inline, children, ...props }) =>
+          inline ? (
+            <code className="agent-md-inline-code" {...props}>
+              {children}
+            </code>
+          ) : (
+            <pre className="agent-md-code-block">
+              <code {...props}>{children}</code>
+            </pre>
+          )
+      }}
+    >
+      {value}
+    </ReactMarkdown>
+  );
+}
+
+function ChatBubbleBody({
+  role,
+  content,
+  modelName,
+  reasoningApi,
+  toolsUsed,
+  streaming,
+  messageKind,
+  traceRounds,
+  traceOpen,
+  relayMayMissReasoning,
+  bubbleIndex,
+  isLatestAgentBubble
+}) {
+  const bubbleRef = useRef(null);
+
+  const sanitizeTraceText = (value) =>
+    sanitizeBlockedCommandHints(String(value || ""))
+      .replace(/\r\n/g, "\n")
+      .replace(/(^|\n)\s*\[tool:[^\]\n]+\]\s*/gi, "$1")
+      .replace(/(^|\n)\s*\[(assistant|agent)\][^\n]*/gi, "$1")
+      .replace(/\[(assistant|agent)\]\s*/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
   const rawText = content ?? "";
   const text =
-    role === "agent" && messageKind !== "config_summary" ? softenAgentBubbleText(rawText, !!streaming) : rawText;
-  const reasoningText = typeof reasoningApi === "string" && reasoningApi.trim() ? reasoningApi.trim() : "";
-  const tools = Array.isArray(toolsUsed) ? toolsUsed.filter(Boolean) : [];
+    role === "agent" && messageKind !== "config_summary"
+      ? softenAgentBubbleText(rawText, !!streaming)
+      : rawText;
+  const tools = Array.isArray(toolsUsed)
+    ? toolsUsed.filter(Boolean)
+    : [];
   const rounds = Array.isArray(traceRounds) ? traceRounds : [];
+  const modelLabel = String(modelName || "").trim();
+
+  // 仅显示真实工具回合：存在工具名或存在 JSON 代码块
+  const toolRounds = rounds.filter(
+    (r) => !!r?.tool?.name || (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0)
+  );
+  const hasToolRounds = toolRounds.length > 0;
+  const hasMarkdownSyntax = /(^|\n)\s*(?:[-*+]\s+|\d+\.\s+)|\*\*[^*]+\*\*|`[^`]+`|```/.test(text);
+  const hasEscapedMarkdownBold = /\\\*\\\*[^*]+\\\*\\\*/.test(text);
+  const showStreamingPlaceholder = role === "agent" && !!streaming && !hasToolRounds && !String(text || "").trim();
+  const showToolStreamingPlaceholder = role === "agent" && !!streaming && hasToolRounds && !String(text || "").trim();
+
+  useEffect(() => {
+    if (role !== "agent") return;
+    // #region agent log
+    fetch('http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e872f3'},body:JSON.stringify({sessionId:'e872f3',runId:`view-${Date.now()}`,hypothesisId:'H13',location:'AgentPanelView.jsx:ChatBubbleBody',message:'ui bubble selection state',data:{bubbleIndex,isLatestAgentBubble:!!isLatestAgentBubble,hasToolRounds,toolRoundsLen:toolRounds.length,roundsLen:rounds.length,traceOpen:!!traceOpen,streaming:!!streaming,textLen:String(text||'').length,hasMarkdownSyntax,hasEscapedMarkdownBold},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+  }, [role, bubbleIndex, isLatestAgentBubble, hasToolRounds, toolRounds.length, rounds.length, traceOpen, streaming, text, hasMarkdownSyntax, hasEscapedMarkdownBold]);
+
+  useEffect(() => {
+    if (!showStreamingPlaceholder) return;
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
+      body: JSON.stringify({
+        sessionId: "e872f3",
+        runId: `view-${Date.now()}`,
+        hypothesisId: "H83",
+        location: "AgentPanelView.jsx:ChatBubbleBody",
+        message: "show placeholder when streaming text still empty",
+        data: {
+          bubbleIndex,
+          isLatestAgentBubble: !!isLatestAgentBubble,
+          streaming: !!streaming,
+          hasToolRounds
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  }, [showStreamingPlaceholder, bubbleIndex, isLatestAgentBubble, streaming, hasToolRounds]);
+
+  useEffect(() => {
+    if (!showToolStreamingPlaceholder) return;
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
+      body: JSON.stringify({
+        sessionId: "e872f3",
+        runId: `view-${Date.now()}`,
+        hypothesisId: "H84",
+        location: "AgentPanelView.jsx:ChatBubbleBody",
+        message: "show placeholder when tool rounds streaming with empty final text",
+        data: {
+          bubbleIndex,
+          isLatestAgentBubble: !!isLatestAgentBubble,
+          toolRoundsLen: toolRounds.length,
+          streaming: !!streaming
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  }, [showToolStreamingPlaceholder, bubbleIndex, isLatestAgentBubble, toolRounds.length, streaming]);
+
   if (role !== "agent") {
     return <div className="chat-plain chat-pre-wrap">{text}</div>;
   }
+
   if (messageKind === "config_summary") {
     return (
       <div className="agent-bubble-config-summary chat-pre-wrap">
@@ -18,41 +145,79 @@ function ChatBubbleBody({ role, content, reasoningApi, toolsUsed, streaming, mes
       </div>
     );
   }
-  const parts = [];
-  const fenceRe = /```([^\n`]*)\n?([\s\S]*?)```/g;
-  let idx = 0;
-  let m;
-  while ((m = fenceRe.exec(text)) !== null) {
-    if (m.index > idx) {
-      parts.push({ kind: "text", value: text.slice(idx, m.index) });
-    }
-    parts.push({ kind: "code", value: (m[2] || "").replace(/\n$/, "") });
-    idx = m.index + m[0].length;
-  }
-  if (idx < text.length) {
-    parts.push({ kind: "text", value: text.slice(idx) });
-  }
-  if (parts.length === 0) {
-    parts.push({ kind: "text", value: text });
-  }
-  const answerBlock = (
-    <>
-      {parts.map((p, i) =>
-        p.kind === "code" ? (
-          <pre key={i} className="agent-inline-codefence">
-            {p.value}
-          </pre>
-        ) : (
-          <div key={i} className="agent-inline-text">
-            {p.value}
-          </div>
-        )
-      )}
-    </>
-  );
 
+  if (showStreamingPlaceholder) {
+    return (
+      <div className="agent-bubble-simple" ref={bubbleRef}>
+        {modelLabel ? <div className="agent-model-label">模型：{modelLabel}</div> : null}
+        <div className="agent-answer-content">处理中...</div>
+      </div>
+    );
+  }
+
+  // Show tool trace OR final answer
+  if (hasToolRounds) {
+    return (
+      <div className="agent-bubble-nested" ref={bubbleRef}>
+        {/* Outer bubble - white background for final answer */}
+        <div className="agent-answer-bubble-outer">
+          {modelLabel ? <div className="agent-model-label">模型：{modelLabel}</div> : null}
+          {/* Tool trace details with JSON code blocks */}
+          <details className="agent-trace-details-nested" open={!!traceOpen}>
+            <summary className="agent-trace-summary-nested">
+              <span className="material-icons">build_circle</span>
+              <span>调用工具中…（{toolRounds.length} 轮）</span>
+            </summary>
+            <ol className="agent-trace-list-nested">
+              {toolRounds.map((r, tidx) => (
+                <li key={`trace-${tidx}-${r.round}`} className="agent-trace-item-nested">
+                  <div className="agent-trace-round-title">第 {r.round} 轮</div>
+                  <div className="agent-trace-reply-snippet">
+                    {typeof r.reply === "string" ? sanitizeTraceText(r.reply).slice(0, 2000) : ""}
+                  </div>
+                  {Array.isArray(r.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0 ? (
+                    <div className="agent-trace-json-blocks">
+                      <div className="agent-trace-tool-label">JSON 代码块（{r.jsonCodeBlocks.length}）</div>
+                      {r.jsonCodeBlocks.map((b, bidx) => (
+                        <pre key={`trace-json-${tidx}-${bidx}`} className="agent-trace-pre-nested">
+                          {sanitizeTraceText(b)}
+                        </pre>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="agent-trace-tool">
+                    {r.tool?.name ? (
+                      <>
+                        <span className="agent-trace-tool-label">工具: {r.tool.name}</span>
+                        <pre className="agent-trace-pre-nested">
+                          {sanitizeTraceText(JSON.stringify(r.toolResultSummary ?? {}, null, 2))}
+                        </pre>
+                      </>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </details>
+
+          {/* Final answer content */}
+          {showToolStreamingPlaceholder ? (
+            <div className="agent-answer-content-outer">处理中...</div>
+          ) : null}
+          {!streaming && text.trim() && (
+            <div className="agent-answer-content-outer">
+              <MarkdownText text={text} />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Simple answer bubble (no reasoning)
   return (
-    <div className="agent-bubble-formatted">
+    <div className="agent-bubble-simple" ref={bubbleRef}>
+      {modelLabel ? <div className="agent-model-label">模型：{modelLabel}</div> : null}
       {tools.length > 0 ? (
         <div className="agent-bubble-tools" role="list" aria-label="已使用工具">
           {tools.map((name) => (
@@ -65,42 +230,9 @@ function ChatBubbleBody({ role, content, reasoningApi, toolsUsed, streaming, mes
           ))}
         </div>
       ) : null}
-      {reasoningText ? (
-        <details className="agent-reasoning-details" open={!!streaming}>
-          <summary className="agent-reasoning-summary">
-            思考过程
-            {streaming ? <span className="agent-reasoning-live">生成中…</span> : null}
-          </summary>
-          <pre className="agent-reasoning-pre">{reasoningText}</pre>
-        </details>
-      ) : relayMayMissReasoning ? (
-        <p className="agent-reasoning-missing">本连接未返回思考字段（非流式中继时部分服务商不提供）。</p>
-      ) : null}
-      {rounds.length > 0 ? (
-        <details className="agent-trace-details">
-          <summary className="agent-trace-summary">回合轨迹（可回溯）</summary>
-          <ol className="agent-trace-list">
-            {rounds.map((r, tidx) => (
-              <li key={`trace-${tidx}-${r.round}`} className="agent-trace-item">
-                <div className="agent-trace-round-title">第 {r.round} 轮</div>
-                {r.reasoning ? <pre className="agent-trace-pre">{r.reasoning}</pre> : null}
-                <div className="agent-trace-reply-snippet">{typeof r.reply === "string" ? r.reply.slice(0, 2000) : ""}</div>
-                <div className="agent-trace-tool">
-                  {r.tool?.name ? (
-                    <>
-                      <span className="agent-trace-tool-label">工具: {r.tool.name}</span>
-                      <pre className="agent-trace-pre">{JSON.stringify(r.toolResultSummary ?? {}, null, 2)}</pre>
-                    </>
-                  ) : (
-                    <span className="agent-trace-tool-none">本回合未通过 JSON 触发工具</span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ol>
-        </details>
-      ) : null}
-      {reasoningText ? <div className="agent-answer-body">{answerBlock}</div> : answerBlock}
+      <div className="agent-answer-content">
+        <MarkdownText text={text} />
+      </div>
     </div>
   );
 }
@@ -133,6 +265,75 @@ function AgentPanelView({
   resizeChatInput,
   send
 }) {
+  useEffect(() => {
+    const panelEl = document.getElementById("panel-agent");
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
+      body: JSON.stringify({
+        sessionId: "e872f3",
+        runId: `panel-${Date.now()}`,
+        hypothesisId: "H70",
+        location: "AgentPanelView.jsx:activeEffect",
+        message: "agent panel visibility and geometry",
+        data: {
+          active: !!active,
+          ariaHidden: String(panelEl?.getAttribute("aria-hidden") || ""),
+          panelClientHeight: Number(panelEl?.clientHeight || 0),
+          panelDisplay: String(panelEl ? getComputedStyle(panelEl).display : "")
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  }, [active, messages.length, loading]);
+
+  useEffect(() => {
+    const tail = Array.isArray(messages) ? messages.slice(-3) : [];
+    const hasStreamingAgent = tail.some((m) => m?.role === "agent" && !!m?.streaming);
+    const hasAnyStreamingAgent = Array.isArray(messages)
+      ? messages.some((m) => m?.role === "agent" && !!m?.streaming)
+      : false;
+    const allTailAreUser = tail.length > 0 && tail.every((m) => m?.role === "user");
+    const latest = Array.isArray(messages) && messages.length > 0 ? messages[messages.length - 1] : null;
+    if (!(loading && !hasStreamingAgent)) return;
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
+      body: JSON.stringify({
+        sessionId: "e872f3",
+        runId: `panel-${Date.now()}`,
+        hypothesisId: "H80",
+        location: "AgentPanelView.jsx:loadingTailCheck",
+        message: "loading without trailing streaming agent bubble",
+        data: {
+          tailLen: tail.length,
+          tailRoles: tail.map((m) => String(m?.role || "")),
+          loading: !!loading,
+          allTailAreUser,
+          hasAnyStreamingAgent,
+          latestRole: String(latest?.role || ""),
+          latestStreaming: !!latest?.streaming
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  }, [messages, loading]);
+
+  const latestAgentIndex = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === "agent") return i;
+    }
+    return -1;
+  })();
+  const hasTailStreamingAgent = (() => {
+    const tail = Array.isArray(messages) ? messages.slice(-4) : [];
+    return tail.some((m) => m?.role === "agent" && !!m?.streaming);
+  })();
+
   return (
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-agent" aria-hidden={!active}>
       <div className="agent-layout">
@@ -146,12 +347,12 @@ function AgentPanelView({
               <TextField label="模型名 / Endpoint ID" value={apiModel} onChange={setApiModel} />
             </div>
             <div className="launch-actions" style={{ marginTop: 12 }}>
-              <button className="md-btn md-btn-tonal" onClick={saveConfig}>
+              <Button variant="secondary" className="md-btn md-btn-tonal" onClick={saveConfig}>
                 <span className="material-icons">save</span>保存配置
-              </button>
-              <button className="md-btn md-btn-outlined" onClick={testAgentApi}>
+              </Button>
+              <Button variant="outline" className="md-btn md-btn-outlined" onClick={testAgentApi}>
                 <span className="material-icons">bolt</span>测试连接
-              </button>
+              </Button>
             </div>
           </div>
           <div className="agent-common-tools md3-surface-container">
@@ -159,16 +360,17 @@ function AgentPanelView({
             <p className="tools-desc">点击后将对应问句发送到对话，并自动请求 Agent。</p>
             <div className="tools-actions" style={{ flexWrap: "wrap" }}>
               {AGENT_QUICK_PROMPTS.map((p) => (
-                <button
+                <Button
                   key={p.id}
                   type="button"
+                  variant="outline"
                   className="md-btn md-btn-outlined md-btn-compact"
                   disabled={loading}
                   onClick={() => sendPresetMessage(p.text)}
                 >
                   <span className="material-icons">chat</span>
                   {p.label}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -178,16 +380,20 @@ function AgentPanelView({
             <div className="chat-header">
               <h3><span className="material-icons">chat</span>对话</h3>
               <div className="chat-controls">
-                <button
+                <Button
                   type="button"
+                  size="icon"
+                  variant="outline"
                   className="btn-icon-sm"
                   title="导出会话 JSON（审计）"
                   onClick={onExportSession}
                   aria-label="导出会话"
                 >
                   <span className="material-icons">download</span>
-                </button>
-                <button className="btn-icon-sm" onClick={onClearMessages}><span className="material-icons">delete_sweep</span></button>
+                </Button>
+                <Button size="icon" variant="outline" className="btn-icon-sm" onClick={onClearMessages}>
+                  <span className="material-icons">delete_sweep</span>
+                </Button>
               </div>
             </div>
             <div id="agent-chat-messages" ref={chatMessagesRef} className="chat-messages">
@@ -200,11 +406,15 @@ function AgentPanelView({
                     <ChatBubbleBody
                       role={msg.role}
                       content={msg.content}
+                      modelName={msg.modelName}
                       reasoningApi={msg.reasoningApi}
                       toolsUsed={msg.toolsUsed}
                       streaming={msg.streaming}
                       messageKind={msg.kind}
                       traceRounds={msg.traceRounds}
+                      traceOpen={msg.traceOpen}
+                      bubbleIndex={index}
+                      isLatestAgentBubble={msg.role === "agent" && index === latestAgentIndex}
                       relayMayMissReasoning={
                         msg.role === "agent" && relayReasoningHint && !msg.reasoningApi && !msg.kind
                       }
@@ -212,10 +422,14 @@ function AgentPanelView({
                   </div>
                 </div>
               ))}
-              {loading && !messages.some((m) => m.streaming) ? (
+              {loading && !hasTailStreamingAgent ? (
                 <div className="chat-message agent">
-                  <div className="message-avatar agent-avatar"><span className="material-icons">smart_toy</span></div>
-                  <div className="message-content"><div>处理中...</div></div>
+                  <div className="message-avatar agent-avatar">
+                    <span className="material-icons">smart_toy</span>
+                  </div>
+                  <div className="message-content">
+                    <div>处理中...</div>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -248,28 +462,35 @@ function AgentPanelView({
                           <tr key={row.path}>
                             <td className="agent-diff-path">{row.path}</td>
                             <td>{row.kind || "—"}</td>
-                            <td><code>{row.before === undefined || row.before === null ? "—" : JSON.stringify(row.before)}</code></td>
-                            <td><code>{row.after === undefined || row.after === null ? "—" : JSON.stringify(row.after)}</code></td>
+                            <td>
+                              <code>{row.before === undefined ? "（缺失）" : JSON.stringify(row.before)}</code>
+                            </td>
+                            <td>
+                              <code>{row.after === undefined ? "（缺失）" : JSON.stringify(row.after)}</code>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 ) : (
-                  <p className="agent-approval-diff-empty">未检测到字段级差异（或与当前配置等价）；请结合上方聊天气泡中的摘要确认。</p>
+                  <p className="agent-approval-diff-empty">
+                    未检测到字段级差异（或与当前配置等价）；请结合上方聊天气泡中的摘要确认。
+                  </p>
                 )}
                 <div className="md-dialog-actions md3-dialog-actions agent-approval-actions">
-                  <button type="button" className="md-btn md-btn-text" onClick={onCloseApproval}>
+                  <Button type="button" variant="ghost" className="md-btn md-btn-text" onClick={onCloseApproval}>
                     取消
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="default"
                     className="md-btn md-btn-filled primary md-btn-compact"
                     onClick={sendAgentExecuteApproval}
                     disabled={loading || !approvalToken}
                   >
                     <span className="material-icons">smart_toy</span>让 agent 执行
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : null}
@@ -292,13 +513,18 @@ function AgentPanelView({
                       }
                     }}
                     placeholder=" "
-                  >
-                  </textarea>
+                  />
                   <label className="md-field-label">输入消息</label>
                 </div>
-                <button className="md-btn md-btn-filled primary send-btn" type="button" onClick={send} disabled={loading}>
+                <Button
+                  className="md-btn md-btn-filled primary send-btn"
+                  size="icon"
+                  type="button"
+                  onClick={send}
+                  disabled={loading}
+                >
                   <span className="material-icons">send</span>
-                </button>
+                </Button>
               </div>
             </div>
           </div>

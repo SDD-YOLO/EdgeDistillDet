@@ -1,8 +1,8 @@
 :root {
-    --md-primary: #006a6b;
+    --md-primary: #4e6472;
     --md-on-primary: #ffffff;
-    --md-primary-container: #9af1f0;
-    --md-on-primary-container: #002020;
+    --md-primary-container: #d6e0e7;
+    --md-on-primary-container: #22313b;
 
     --md-secondary: #4a6363;
     --md-on-secondary: #ffffff;
@@ -48,7 +48,7 @@
     --md-surface-dim: #d6dddc;
     --md-inverse-surface: #2f3131;
     --md-inverse-on-surface: #f0f1f1;
-    --md-inverse-primary: #7dd5d4;
+    --md-inverse-primary: #8ea6b6;
     --m3-state-hover-opacity: 0.08;
     --m3-state-focus-opacity: 0.12;
     --m3-state-pressed-opacity: 0.12;
@@ -65,10 +65,10 @@ html.theme-transition * {
 }
 
 [data-theme="dark"] {
-    --md-primary: #7dd5d4;
-    --md-on-primary: #003738;
-    --md-primary-container: #005051;
-    --md-on-primary-container: #9af1f0;
+    --md-primary: #8ea6b6;
+    --md-on-primary: #19303d;
+    --md-primary-container: #334956;
+    --md-on-primary-container: #dbe7ef;
 
     --md-secondary: #b0cdcb;
     --md-on-secondary: #1b3534;
@@ -104,7 +104,7 @@ html.theme-transition * {
     --md-surface-dim: #121818;
     --md-inverse-surface: #e0e3e2;
     --md-inverse-on-surface: #2b3131;
-    --md-inverse-primary: #006a6b;
+    --md-inverse-primary: #4e6472;
 }
 
 *, *::before, *::after {
@@ -1073,13 +1073,13 @@ body {
 .chat-input-wrapper .md-field textarea {
     font-size: 14px;
     line-height: 20px;
-    padding-top: 16px;
-    padding-bottom: 8px;
+    padding-top: 12px;
+    padding-bottom: 12px;
 }
 
-.md-field .m3-select .m3-select-trigger {
-    padding-top: 20px;
-    padding-bottom: 10px;
+.md-field.md-field-select .m3-select .m3-select-trigger {
+    padding-top: 15px;
+    padding-bottom: 16px;
 }
 
 [data-theme="dark"] .md-select {
@@ -1162,8 +1162,8 @@ body {
 }
 
 .chat-input-wrapper .md-field textarea:focus {
-    padding-top: 15px;
-    padding-bottom: 7px;
+    padding-top: 11px;
+    padding-bottom: 11px;
 }
 
 .chat-input-wrapper textarea {
@@ -2239,6 +2239,20 @@ body {
     margin-bottom: 10px;
 }
 
+.chat-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chat-controls .btn-icon-sm {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    padding: 0;
+    flex: 0 0 32px;
+}
+
 .chat-header h3 {
     margin: 0;
     font-size: 14px;
@@ -2556,6 +2570,17 @@ body {
     justify-content: space-between;
     text-align: left;
     cursor: pointer;
+}
+
+.m3-select.disabled .m3-select-trigger.md-input,
+.m3-select.disabled .m3-select-trigger.md-input:hover,
+.m3-select.disabled .m3-select-trigger.md-input:focus {
+    cursor: not-allowed;
+    opacity: 1;
+    color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+    border-color: color-mix(in srgb, var(--md-outline) 24%, transparent);
+    background: color-mix(in srgb, var(--md-on-surface) 4%, var(--md-surface-container-low));
+    box-shadow: none;
 }
 
 .m3-select-value {
@@ -3256,3 +3281,319 @@ body {
         width: 100%;
     }
 }
+
+/* ============================================
+   Nested agent chat bubbles (DeepSeek style)
+   Outer = answer (white), Inner = thinking (gray)
+   ============================================ */
+
+/* Container */
+.agent-bubble-nested {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+/* Outer bubble - white background for final answer */
+.agent-answer-bubble-outer {
+    background: var(--md-surface);
+    border: 1px solid var(--md-outline-variant);
+    border-radius: 16px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Inner thinking bubble - gray background, nested inside */
+.agent-thinking-bubble-inner {
+    background: color-mix(in srgb, var(--md-surface-variant) 70%, transparent);
+    border: 1px solid var(--md-outline-variant);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.agent-thinking-bubble-inner.thinking {
+    border-color: color-mix(in srgb, var(--md-primary) 30%, var(--md-outline-variant));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--md-primary) 10%, transparent);
+}
+
+.agent-thinking-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s ease;
+}
+
+.agent-thinking-header:hover {
+    background: color-mix(in srgb, var(--md-surface-variant) 90%, transparent);
+}
+
+.agent-thinking-icon {
+    font-size: 18px;
+    color: var(--md-primary);
+}
+
+.agent-thinking-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--md-on-surface-variant);
+}
+
+.agent-thinking-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid color-mix(in srgb, var(--md-primary) 20%, transparent);
+    border-top-color: var(--md-primary);
+    border-radius: 50%;
+    animation: agent-thinking-spin 1s linear infinite;
+}
+
+@keyframes agent-thinking-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.agent-thinking-expand {
+    font-size: 18px;
+    color: var(--md-on-surface-variant);
+    transition: transform 0.2s ease;
+}
+
+.agent-thinking-content {
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 0 12px 12px;
+}
+
+.agent-thinking-pre {
+    margin: 0;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--md-on-surface-variant);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: transparent;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+}
+
+/* Tool summary nested inside outer bubble */
+.agent-tool-summary-nested {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--md-secondary-container) 40%, transparent);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--md-on-surface-variant);
+    margin-bottom: 4px;
+}
+
+.agent-tool-summary-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.agent-tool-summary-header .material-icons {
+    font-size: 14px;
+}
+
+.agent-tool-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.agent-tool-tag {
+    padding: 2px 8px;
+    background: var(--md-secondary-container);
+    color: var(--md-on-secondary-container);
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* Final answer content inside outer bubble */
+.agent-answer-content-outer {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--md-on-surface);
+    padding-top: 4px;
+}
+
+/* 简化版答案气泡（无思考过程时） */
+.agent-bubble-simple {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.agent-bubble-simple .agent-answer-content {
+    background: var(--md-surface);
+    border: 1px solid var(--md-outline-variant);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.agent-model-label {
+    display: inline-flex;
+    align-items: center;
+    margin-bottom: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--md-on-surface-variant);
+    background: color-mix(in srgb, var(--md-surface-container) 88%, transparent);
+    border: 1px solid var(--md-outline-variant);
+}
+
+.agent-markdown {
+    word-break: break-word;
+}
+
+.agent-markdown .agent-md-p {
+    margin: 0 0 8px;
+}
+
+.agent-markdown .agent-md-p:last-child {
+    margin-bottom: 0;
+}
+
+.agent-markdown .agent-md-list {
+    margin: 8px 0;
+    padding-left: 20px;
+}
+
+.agent-markdown .agent-md-li {
+    margin: 4px 0;
+}
+
+.agent-markdown .agent-md-inline-code {
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    background: color-mix(in srgb, var(--md-surface-container-highest) 80%, transparent);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 12px;
+}
+
+.agent-markdown .agent-md-code-block {
+    margin: 8px 0;
+    padding: 8px 10px;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    background: color-mix(in srgb, var(--md-surface-container-highest) 80%, transparent);
+    border: 1px solid var(--md-outline-variant);
+    border-radius: 8px;
+    white-space: pre;
+    overflow-x: auto;
+}
+
+/* Nested tool trace details inside outer bubble */
+.agent-trace-details-nested {
+    margin: 8px 0;
+    border-radius: 10px;
+    border: 1px solid var(--md-outline-variant);
+    background: color-mix(in srgb, var(--md-surface-container-low) 60%, transparent);
+    overflow: hidden;
+}
+
+.agent-trace-summary-nested {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--md-on-surface-variant);
+    cursor: pointer;
+    user-select: none;
+    background: color-mix(in srgb, var(--md-surface-container) 80%, transparent);
+}
+
+.agent-trace-summary-nested::-webkit-details-marker {
+    display: none;
+}
+
+.agent-trace-list-nested {
+    margin: 0;
+    padding: 10px 12px 12px 28px;
+    font-size: 12px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.agent-trace-item-nested {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--md-outline-variant);
+}
+
+.agent-trace-item-nested:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.agent-trace-round-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--md-on-surface);
+}
+
+.agent-trace-pre-nested {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--md-on-surface-variant);
+    background: color-mix(in srgb, var(--md-surface) 80%, transparent);
+    border: 1px solid var(--md-outline-variant);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.agent-trace-reply-snippet {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 160px;
+    overflow-y: auto;
+    font-size: 11px;
+    color: var(--md-on-surface-variant);
+    opacity: 0.95;
+    margin: 6px 0;
+}
+
+.agent-trace-json-blocks {
+    margin: 8px 0;
+}
+
+.agent-trace-tool-label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--md-on-surface-variant);
+}
+
+.agent-trace-tool {
+    margin-top: 8px;
+}
+
+.agent-trace-tool-none {
+    font-size: 11px;
+    color: var(--md-on-surface-variant);
+    font-style: italic;
+}
+

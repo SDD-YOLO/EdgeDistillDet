@@ -7,7 +7,7 @@ EdgeDistillDet — 蒸馏训练唯一入口（CLI + Web 共用）
 2. 断点续训与「新训」共用同一套 ultralytics + AdaptiveKDTrainer 逻辑。
 3. 从 checkpoint 所在 run 目录读取 args.yaml，强制对齐 project / name / data，
    避免前端表单与磁盘上的真实 run 不一致导致写错目录或重复加载。
-4. DataLoader workers 固定为 0（Windows / 小内存 / Web 场景），配置里的 workers 仅作提示，不参与训练。
+4. DataLoader workers 固定为 0（Windows / 小内存 / Web 场景），确保训练过程稳定可控。
 """
 
 from __future__ import annotations

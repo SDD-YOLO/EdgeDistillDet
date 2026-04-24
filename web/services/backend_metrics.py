@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +10,56 @@ from fastapi import Query
 
 from web.core.paths import BASE_DIR
 from web.services.backend_common import _as_float, _build_metric_series, _estimate_run_stats, _load_csv_summary, _summarize_series
+
+_DEBUG_LOG_PATH = BASE_DIR / "debug-dd416d.log"
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict):
+    payload = {
+        "sessionId": "dd416d",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _calc_total_time_with_resumes(rows: list[dict]) -> tuple[float | None, int]:
+    """
+    通过 time 列“重置”来分段累计总时长，覆盖多次断点续练场景。
+    返回: (total_seconds, reset_count)
+    """
+    segment_max = 0.0
+    total = 0.0
+    reset_count = 0
+    prev_time = None
+    has_any = False
+    for row in rows:
+        time_val = _as_float(row.get("time"))
+        if time_val is None:
+            continue
+        has_any = True
+        tv = float(time_val)
+        # time 显著回退视为进入新的续训片段；累计前一段最大值
+        if prev_time is not None and tv + 1e-9 < prev_time:
+            total += segment_max
+            segment_max = 0.0
+            reset_count += 1
+        if tv > segment_max:
+            segment_max = tv
+        prev_time = tv
+    if not has_any:
+        return None, 0
+    total += segment_max
+    return total, reset_count
+
 
 def get_metrics(source: str = Query('')):
     runs_dir = BASE_DIR / 'runs'
@@ -53,6 +105,18 @@ def get_metrics(source: str = Query('')):
             target = (BASE_DIR / selected_path).resolve()
             if target.exists() and target.is_file() and target.suffix == '.csv' and str(target).startswith(str(base_resolved)):
                 columns, rows = _load_csv_summary(target)
+                # region agent log
+                _debug_log(
+                    "H_SOURCE_ROWS",
+                    "web/services/backend_metrics.py:get_metrics:load_csv",
+                    "Loaded metrics csv rows",
+                    {
+                        "source": selected_path,
+                        "rows": len(rows),
+                        "columns_sample": columns[:6],
+                    },
+                )
+                # endregion
                 if rows:
                     chart_series = _build_metric_series(rows, columns, target.parent)
                     summary_metrics = {}
@@ -76,6 +140,48 @@ def get_metrics(source: str = Query('')):
                         total_time = _as_float(row.get('time'))
                         if total_time is not None:
                             break
+                    # region agent log
+                    _debug_log(
+                        "H_LAST_TIME_ONLY",
+                        "web/services/backend_metrics.py:get_metrics:last_time",
+                        "Resolved last non-null time from csv",
+                        {
+                            "source": selected_path,
+                            "last_time_sec": total_time,
+                            "last_epoch": _as_float((rows[-1] or {}).get("epoch")) if rows else None,
+                        },
+                    )
+                    # endregion
+
+                    reset_count = 0
+                    segment_time_sum = 0.0
+                    segment_time_max = 0.0
+                    prev_epoch = None
+                    for row in rows:
+                        epoch_val = _as_float(row.get("epoch"))
+                        time_val = _as_float(row.get("time"))
+                        if epoch_val is not None and prev_epoch is not None and epoch_val < prev_epoch:
+                            reset_count += 1
+                            segment_time_sum += segment_time_max
+                            segment_time_max = 0.0
+                        if time_val is not None:
+                            segment_time_max = max(segment_time_max, float(time_val))
+                        if epoch_val is not None:
+                            prev_epoch = epoch_val
+                    segment_time_sum += segment_time_max
+                    # region agent log
+                    _debug_log(
+                        "H_EPOCH_RESET",
+                        "web/services/backend_metrics.py:get_metrics:epoch_segments",
+                        "Calculated resume segments by epoch reset",
+                        {
+                            "source": selected_path,
+                            "epoch_reset_count": reset_count,
+                            "segment_time_sum_sec": round(segment_time_sum, 3),
+                            "segment_last_max_sec": round(segment_time_max, 3),
+                        },
+                    )
+                    # endregion
 
                     run_stats = _estimate_run_stats(target.parent)
                     ov_map50 = '--'
@@ -84,9 +190,40 @@ def get_metrics(source: str = Query('')):
                             ov_map50 = f"{(summary_metrics['map50']['best'] * 100):.2f}%"
                         except Exception:
                             pass
+                    accumulated_time, time_reset_count = _calc_total_time_with_resumes(rows)
+                    # region agent log
+                    _debug_log(
+                        "H_TIME_RESET_ACC",
+                        "web/services/backend_metrics.py:get_metrics:time_segments",
+                        "Calculated total time using time-reset segments",
+                        {
+                            "source": selected_path,
+                            "accumulated_time_sec": accumulated_time,
+                            "time_reset_count": time_reset_count,
+                            "last_time_sec": total_time,
+                        },
+                    )
+                    # endregion
                     ov_time = '--'
-                    if total_time is not None:
+                    if accumulated_time is not None:
+                        ov_time = f"{int(accumulated_time // 60)}m {int(accumulated_time % 60)}s"
+                    elif total_time is not None:
                         ov_time = f"{int(total_time // 60)}m {int(total_time % 60)}s"
+                    # region agent log
+                    _debug_log(
+                        "H_OV_TIME_RENDER",
+                        "web/services/backend_metrics.py:get_metrics:overview",
+                        "Prepared ov-time for metrics overview",
+                        {
+                            "source": selected_path,
+                            "ov_time": ov_time,
+                            "total_time_sec": total_time,
+                            "segment_time_sum_sec": round(segment_time_sum, 3),
+                            "accumulated_time_sec": accumulated_time,
+                            "time_reset_count": time_reset_count,
+                        },
+                    )
+                    # endregion
                     selected_data = {
                         'source': selected_path,
                         'columns': columns,

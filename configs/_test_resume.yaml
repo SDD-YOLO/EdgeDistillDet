@@ -26,4 +26,3 @@ training:
   mixup: 0.1
   mosaic: 0.8
   warmup_epochs: 3
-  workers: 0

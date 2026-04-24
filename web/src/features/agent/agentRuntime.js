@@ -167,10 +167,13 @@ export async function streamInvokeViaRelay({ apiUrl, apiKey, modelName, apiModel
         throw new Error(msg);
       }
       const { reply, reasoning } = await readAgentInvokeSseStream(res, onDelta);
+      // #region agent log
+      console.log("[streamInvokeViaRelay] reply:", reply?.slice(0, 50), "reasoning:", reasoning?.slice(0, 50), "reasoning empty:", !reasoning);
+      // #endregion
       const payload = {
         status: "ok",
         reply,
-        reasoning: reasoning || undefined
+        reasoning: reasoning  // Keep empty string if model doesn't return reasoning
       };
       return { payload, target: { kind: "backend-relay", url: endpoint || base } };
     } catch (error) {

@@ -1,6 +1,7 @@
 {
-  "version": "v1",
-  "philosophy": "single-purpose tools, JSON input/output, composable pipeline, explicit approval gate",
+  "version": "v2-langgraph",
+  "runtime": "langgraph",
+  "philosophy": "state-graph tools, JSON input/output, explicit approval gate, replay-safe apply",
   "pipeline": [
     "agent.get_context",
     "agent.analyze_params",

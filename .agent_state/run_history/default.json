@@ -1,546 +1,24 @@
 [
   {
-    "version": 31,
-    "run_id": "default",
-    "timestamp": "2026-04-18T23:41:44.119777",
+    "version": 48,
+    "timestamp": 1777021042,
     "operator": "agent-ui",
-    "reason": "",
-    "action": "apply_patch",
-    "before_config": {
+    "reason": "agent.apply_patch_with_approval",
+    "request_hash": "ba022ee850f94b4e075699098e03f71ff304cf83f7d5ef00e1fcbe3e83141281",
+    "before": {
       "distillation": {
         "student_weight": "models/yolov8n.pt",
         "teacher_weight": "models/yolov8m.pt",
         "alpha_init": 0.5,
-        "T_max": 50,
-        "T_min": 2,
-        "warm_epochs": 10,
-        "w_kd": 0.55,
-        "w_focal": 0.55,
-        "w_feat": 0.8,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 4,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.008,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp3",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    },
-    "after_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 50,
-        "T_min": 2,
-        "warm_epochs": 10,
-        "w_kd": 0.45,
-        "w_focal": 0.55,
-        "w_feat": 0.9,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 4,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp3",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    }
-  },
-  {
-    "version": 32,
-    "run_id": "default",
-    "timestamp": "2026-04-18T23:44:33.439220",
-    "operator": "agent-ui",
-    "reason": "agent.propose_patch",
-    "action": "apply_patch",
-    "before_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 5,
-        "T_min": 2,
-        "warm_epochs": 10,
-        "w_kd": 0.45,
-        "w_focal": 0.55,
-        "w_feat": 0.9,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 4,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp4",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    },
-    "after_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 5,
-        "T_min": 2,
-        "warm_epochs": 10,
-        "w_kd": 0.55,
-        "w_focal": 0.55,
-        "w_feat": 0.9,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 4,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp4",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    }
-  },
-  {
-    "version": 33,
-    "run_id": "default",
-    "timestamp": "2026-04-18T23:52:52.442382",
-    "operator": "agent-ui",
-    "reason": "agent.propose_patch",
-    "action": "apply_patch",
-    "before_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 5,
-        "T_min": 2,
-        "warm_epochs": 10,
-        "w_kd": 0.55,
-        "w_focal": 0.55,
-        "w_feat": 0.9,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 4,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp4",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    },
-    "after_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 5,
-        "T_min": 2,
-        "warm_epochs": 10,
-        "w_kd": 0.5500010000000001,
-        "w_focal": 0.55,
-        "w_feat": 0.9,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 4,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp4",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    }
-  },
-  {
-    "version": 34,
-    "run_id": "default",
-    "timestamp": "2026-04-18T23:56:14.649694",
-    "operator": "agent-ui",
-    "reason": "",
-    "action": "apply_patch",
-    "before_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 5,
-        "T_min": 2,
-        "warm_epochs": 10,
-        "w_kd": 0.5500010000000001,
-        "w_focal": 0.55,
-        "w_feat": 0.9,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 4,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp4",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    },
-    "after_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 5,
+        "T_max": 4,
         "T_min": 2,
         "warm_epochs": 15,
-        "w_kd": 0.5500010000000001,
+        "w_kd": 0.6,
         "w_focal": 0.55,
-        "w_feat": 0.7,
+        "w_feat": 0.25,
         "scale_boost": 1.2,
         "focal_gamma": 2,
-        "temperature": 6,
+        "temperature": 3,
         "alpha": 0.5,
         "distill_type": "soft"
       },
@@ -568,8 +46,8 @@
         "imgsz": 640,
         "batch": 16,
         "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
+        "lr0": 0.001,
+        "lrf": 0.05,
         "warmup_epochs": 5,
         "mosaic": 0.8,
         "mixup": 0.3,
@@ -577,86 +55,7 @@
         "amp": true,
         "batch_size": 64,
         "learning_rate": 0.0003,
-        "grad_clip": 5
-      },
-      "output": {
-        "project": "runs/distill",
-        "name": "exp4",
-        "model_dir": "./output/models",
-        "log_dir": "./logs"
-      },
-      "wandb": {
-        "enabled": false,
-        "mode": "online",
-        "project": "edge-distilldet",
-        "entity": "",
-        "name": "",
-        "group": "",
-        "job_type": "distill-train",
-        "tags": [],
-        "notes": ""
-      },
-      "__agentPreConfirmedOverlap": true
-    }
-  },
-  {
-    "version": 35,
-    "run_id": "default",
-    "timestamp": "2026-04-19T00:19:17.360275",
-    "operator": "agent-ui",
-    "reason": "agent.propose_patch",
-    "action": "apply_patch",
-    "before_config": {
-      "distillation": {
-        "student_weight": "models/yolov8n.pt",
-        "teacher_weight": "models/yolov8m.pt",
-        "alpha_init": 0.5,
-        "T_max": 5,
-        "T_min": 2,
-        "warm_epochs": 15,
-        "w_kd": 0.5500010000000001,
-        "w_focal": 0.55,
-        "w_feat": 0.7,
-        "scale_boost": 1.2,
-        "focal_gamma": 2,
-        "temperature": 6,
-        "alpha": 0.5,
-        "distill_type": "soft"
-      },
-      "training": {
-        "compute_provider": "local",
-        "cloud_api": {
-          "base_url": "",
-          "submit_path": "/train/start",
-          "status_path": "/train/status",
-          "logs_path": "/train/logs",
-          "stop_path": "/train/stop",
-          "token": "",
-          "poll_interval_sec": 3
-        },
-        "dataset_api": {
-          "enabled": false,
-          "source": "path",
-          "resolve_url": "",
-          "token": "",
-          "dataset_name": ""
-        },
-        "data_yaml": "coco128.yaml",
-        "device": "0",
-        "epochs": 120,
-        "imgsz": 640,
-        "batch": 16,
-        "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
-        "warmup_epochs": 5,
-        "mosaic": 0.8,
-        "mixup": 0.3,
-        "close_mosaic": 6,
-        "amp": true,
-        "batch_size": 64,
-        "learning_rate": 0.0003,
-        "grad_clip": 5
+        "grad_clip": 2.5
       },
       "output": {
         "project": "runs\\distill",
@@ -677,20 +76,20 @@
       },
       "__agentPreConfirmedOverlap": true
     },
-    "after_config": {
+    "after": {
       "distillation": {
         "student_weight": "models/yolov8n.pt",
         "teacher_weight": "models/yolov8m.pt",
         "alpha_init": 0.5,
-        "T_max": 5,
+        "T_max": 4,
         "T_min": 2,
         "warm_epochs": 15,
-        "w_kd": 0.55,
+        "w_kd": 0.6,
         "w_focal": 0.55,
-        "w_feat": 0.7,
+        "w_feat": 0.25,
         "scale_boost": 1.2,
         "focal_gamma": 2,
-        "temperature": 6,
+        "temperature": 3.2,
         "alpha": 0.5,
         "distill_type": "soft"
       },
@@ -718,8 +117,8 @@
         "imgsz": 640,
         "batch": 16,
         "workers": 6,
-        "lr0": 0.01,
-        "lrf": 0.15,
+        "lr0": 0.001,
+        "lrf": 0.05,
         "warmup_epochs": 5,
         "mosaic": 0.8,
         "mixup": 0.3,
@@ -727,7 +126,7 @@
         "amp": true,
         "batch_size": 64,
         "learning_rate": 0.0003,
-        "grad_clip": 5
+        "grad_clip": 2.5
       },
       "output": {
         "project": "runs\\distill",
@@ -747,6 +146,571 @@
         "notes": ""
       },
       "__agentPreConfirmedOverlap": true
+    }
+  },
+  {
+    "version": 49,
+    "timestamp": 1777021742,
+    "operator": "agent-ui",
+    "reason": "agent.apply_patch_with_approval",
+    "request_hash": "f13a70cb14d256c58a662ec0615354ba30c29c24777a4d98efd7a6ba266f43c7",
+    "before": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "feat_layer": [],
+        "schedule_type": "cosine",
+        "alpha_init": 0.5,
+        "temperature": 3.2,
+        "T_max": 4,
+        "T_min": 2,
+        "warm_epochs": 15,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.25,
+        "scale_boost": 1.2,
+        "focal_gamma": 2,
+        "alpha": 0.5,
+        "distill_type": "soft"
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "workers": 6,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 5,
+        "mosaic": 0.8,
+        "mixup": 0.3,
+        "close_mosaic": 6,
+        "amp": true,
+        "batch_size": 64,
+        "learning_rate": 0.0003,
+        "grad_clip": 2.5
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1",
+        "model_dir": "./output/models",
+        "log_dir": "./logs"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      },
+      "__agentPreConfirmedOverlap": true
+    },
+    "after": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "feat_layer": [],
+        "schedule_type": "cosine",
+        "alpha_init": 0.5,
+        "temperature": 2.5,
+        "T_max": 4,
+        "T_min": 2,
+        "warm_epochs": 15,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.35,
+        "scale_boost": 1.2,
+        "focal_gamma": 2,
+        "alpha": 0.5,
+        "distill_type": "soft"
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "workers": 6,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 5,
+        "mosaic": 0.8,
+        "mixup": 0.5,
+        "close_mosaic": 10,
+        "amp": true,
+        "batch_size": 64,
+        "learning_rate": 0.0003,
+        "grad_clip": 2.5
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1",
+        "model_dir": "./output/models",
+        "log_dir": "./logs"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      },
+      "__agentPreConfirmedOverlap": true
+    }
+  },
+  {
+    "version": 50,
+    "timestamp": 1777023508,
+    "operator": "agent-ui",
+    "reason": "agent.apply_patch_with_approval",
+    "request_hash": "d9f1b6ec5f0a696cb691652af5726338cffeafaac497d68b01a38b6a2aa96fe2",
+    "before": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "feat_layer": [],
+        "schedule_type": "cosine",
+        "alpha_init": 0.5,
+        "temperature": 2.5,
+        "T_max": 4,
+        "T_min": 2,
+        "warm_epochs": 15,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.35,
+        "scale_boost": 1.2,
+        "focal_gamma": 2,
+        "alpha": 0.5,
+        "distill_type": "soft"
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "workers": 6,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 5,
+        "mosaic": 0.8,
+        "mixup": 0.5,
+        "close_mosaic": 10,
+        "amp": true,
+        "batch_size": 64,
+        "learning_rate": 0.0003,
+        "grad_clip": 2.5
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1",
+        "model_dir": "./output/models",
+        "log_dir": "./logs"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      },
+      "__agentPreConfirmedOverlap": true
+    },
+    "after": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "feat_layer": [],
+        "schedule_type": "cosine",
+        "alpha_init": 0.5,
+        "temperature": 2.5,
+        "T_max": 5,
+        "T_min": 1.5,
+        "warm_epochs": 15,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.45,
+        "scale_boost": 1.2,
+        "focal_gamma": 2,
+        "alpha": 0.5,
+        "distill_type": "soft"
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "workers": 6,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 5,
+        "mosaic": 0.8,
+        "mixup": 0.7,
+        "close_mosaic": 10,
+        "amp": true,
+        "batch_size": 64,
+        "learning_rate": 0.0003,
+        "grad_clip": 2.5,
+        "warm_epochs": 20
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1",
+        "model_dir": "./output/models",
+        "log_dir": "./logs"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      },
+      "__agentPreConfirmedOverlap": true
+    }
+  },
+  {
+    "version": 51,
+    "timestamp": 1777025706,
+    "operator": "agent-ui",
+    "reason": "agent.apply_patch_with_approval",
+    "request_hash": "2e0806b9ed55678c9e3fcc77c17dddd28fd4babdac8ec53df7aff653e9e9209a",
+    "before": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "alpha_init": 0.5,
+        "T_max": 5,
+        "T_min": 1.5,
+        "warm_epochs": 15,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.45,
+        "scale_boost": 1.2,
+        "focal_gamma": 2
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 5,
+        "mosaic": 0.8,
+        "mixup": 0.7,
+        "close_mosaic": 10,
+        "amp": true
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      }
+    },
+    "after": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "alpha_init": 0.5,
+        "T_max": 6,
+        "T_min": 1.5,
+        "warm_epochs": 15,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.5,
+        "scale_boost": 1.2,
+        "focal_gamma": 2
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 20,
+        "mosaic": 0.8,
+        "mixup": 0.7,
+        "close_mosaic": 10,
+        "amp": true
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      }
+    }
+  },
+  {
+    "version": 52,
+    "timestamp": 1777027435,
+    "operator": "agent-ui",
+    "reason": "agent.apply_patch_with_approval",
+    "request_hash": "baadaa62daed89d079d00e3f5ac7c7d9e85ae786bbfc0338fb3f4d364e0cb34c",
+    "before": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "alpha_init": 0.5,
+        "T_max": 6,
+        "T_min": 1.5,
+        "warm_epochs": 15,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.5,
+        "scale_boost": 1.2,
+        "focal_gamma": 2
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 20,
+        "mosaic": 0.8,
+        "mixup": 0.7,
+        "close_mosaic": 10,
+        "amp": true
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      }
+    },
+    "after": {
+      "distillation": {
+        "student_weight": "models/yolov8n.pt",
+        "teacher_weight": "models/yolov8m.pt",
+        "alpha_init": 0.5,
+        "T_max": 5,
+        "T_min": 1.5,
+        "warm_epochs": 20,
+        "w_kd": 0.6,
+        "w_focal": 0.55,
+        "w_feat": 0.5,
+        "scale_boost": 1.5,
+        "focal_gamma": 2
+      },
+      "training": {
+        "compute_provider": "local",
+        "cloud_api": {
+          "base_url": "",
+          "submit_path": "/train/start",
+          "status_path": "/train/status",
+          "logs_path": "/train/logs",
+          "stop_path": "/train/stop",
+          "token": "",
+          "poll_interval_sec": 3
+        },
+        "dataset_api": {
+          "enabled": false,
+          "source": "path",
+          "resolve_url": "",
+          "token": "",
+          "dataset_name": ""
+        },
+        "data_yaml": "coco128.yaml",
+        "device": "0",
+        "epochs": 120,
+        "imgsz": 640,
+        "batch": 16,
+        "lr0": 0.001,
+        "lrf": 0.05,
+        "warmup_epochs": 20,
+        "mosaic": 0.8,
+        "mixup": 0.7,
+        "close_mosaic": 10,
+        "amp": true
+      },
+      "output": {
+        "project": "runs/distill",
+        "name": "exp1"
+      },
+      "wandb": {
+        "enabled": false,
+        "mode": "online",
+        "project": "edge-distilldet",
+        "entity": "",
+        "name": "",
+        "group": "",
+        "job_type": "distill-train",
+        "tags": [],
+        "notes": ""
+      }
     }
   }
 ]

@@ -30,20 +30,32 @@ class DialogPickRequest(BaseModel):
     filters: list[DialogFilterItem] = Field(default_factory=list)
 
 
-class AgentPatchPreviewRequest(BaseModel):
-    patch: dict = Field(default_factory=dict)
-    run_id: str = "default"
-    operator: str = "user"
-    reason: str = ""
+class AgentMessageItem(BaseModel):
+    role: str
+    content: str
 
 
-class AgentPatchApplyRequest(BaseModel):
-    approval_token: str | None = None
-    token: str | None = None
-    run_id: str = "default"
-    operator: str = "user"
-    request_hash: str | None = None
-    reason: str = ""
+class AgentChatRequest(BaseModel):
+    provider: str = "openai_compatible"
+    api_url: str
+    api_key: str | None = None
+    model: str | None = None
+    messages: list[AgentMessageItem] = Field(default_factory=list)
+    system_prompt: str | None = None
+    temperature: float = 0.2
+    max_tokens: int | None = None
+    endpoint: str | None = None
+    extra_headers: dict = Field(default_factory=dict)
+    timeout_sec: float = 40.0
+
+
+class AgentChatResponse(BaseModel):
+    status: str = "ok"
+    reply: str = ""
+    reasoning: str | None = None
+    route: str | None = None
+    intent: str | None = None
+    raw: dict = Field(default_factory=dict)
 
 
 class AgentPatchValidateRequest(BaseModel):
@@ -51,22 +63,31 @@ class AgentPatchValidateRequest(BaseModel):
     strict: bool = True
 
 
-class AgentRunHistoryRollbackRequest(BaseModel):
+class AgentPatchPreviewRequest(BaseModel):
     run_id: str = "default"
+    patch: dict = Field(default_factory=dict)
+    operator: str = "agent"
+    reason: str = "agent.preview_patch"
+
+
+class AgentPatchApplyRequest(BaseModel):
+    run_id: str = "default"
+    approval_token: str | None = None
+    request_hash: str | None = None
+    operator: str = "agent"
+    reason: str = "agent.apply_patch_with_approval"
+
+
+class AgentRunHistoryRollbackRequest(BaseModel):
     target_version: int | None = None
-    steps: int | None = None
-    operator: str = "user"
-    reason: str = "manual rollback"
+    steps: int = 1
+    operator: str = "agent"
+    reason: str = "agent.rollback_run_config"
 
 
 class AgentToolExecuteRequest(BaseModel):
     tool: str
     args: dict = Field(default_factory=dict)
-
-
-class AgentMessageItem(BaseModel):
-    role: str
-    content: str
 
 
 class AgentModelInvokeRequest(BaseModel):

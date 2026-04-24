@@ -1,986 +1,632 @@
+"""LangGraph-based agent backend with approval gate."""
+
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
-import re
+import secrets
+import threading
 import time
-import urllib.error
-import urllib.request
-import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
 from fastapi.responses import StreamingResponse
 
-from web.core.paths import AGENT_HISTORY_DIR, CONFIG_DIR
-from web.schemas import AgentModelInvokeRequest, AgentPatchApplyRequest, AgentPatchPreviewRequest, AgentPatchValidateRequest, AgentRunHistoryRollbackRequest, AgentToolExecuteRequest
-from web.services import backend_state
-from web.services.backend_common import _error, _load_yaml_file, _save_yaml_file
-from web.services import training_runtime
-from web.services.backend_metrics import get_metrics
-from web.services.backend_train_runtime import _http_json_request, _set_auth_headers
+from web.agent_graph.runtime import execute_tool_graph, invoke_model_graph, invoke_model_graph_stream
+from web.core.paths import AGENT_HISTORY_DIR, AGENT_STATE_DIR, CONFIG_DIR
+from web.schemas import (
+    AgentModelInvokeRequest,
+    AgentPatchApplyRequest,
+    AgentPatchPreviewRequest,
+    AgentPatchValidateRequest,
+    AgentRunHistoryRollbackRequest,
+    AgentToolExecuteRequest,
+)
+from web.services import backend_state, config_service
+from web.services.backend_common import _error
 
-AGENT_TOOL_CONTRACT_VERSION = 'v1'
+_ALLOWED_TOP_LEVEL = ("distillation", "training", "output")
+_DEPRECATED_LEAF_PATHS = {
+    "distillation.temperature",
+    "distillation.schedule_type",
+    "distillation.feat_layer",
+    "distillation.alpha",
+    "distillation.distill_type",
+    "training.warm_epochs",
+    "training.workers",
+    "training.batch_size",
+    "training.learning_rate",
+    "training.grad_clip",
+    "output.model_dir",
+    "output.log_dir",
+}
+_DEFAULT_CONFIG_NAME = "distill_config.yaml"
+_APPROVAL_TTL_SEC = 15 * 60
+_HISTORY_LIMIT = 5
 
-_AGENT_PATCH_TTL = 600.0
+_approval_lock = threading.RLock()
+_approval_store: dict[str, dict[str, Any]] = {}
+_DEBUG_LOG_PATH = Path("debug-d5a26f.log")
 
-_agent_patch_store = {}
 
-_AGENT_ALLOWED_TOP_LEVEL = frozenset({'distillation', 'training', 'output'})
-_AGENT_PATCH_TOP_ORDER = ('distillation', 'training', 'output')
+def _now_ts() -> float:
+    return time.time()
 
-_AGENT_MAX_ROLLBACKS_PER_RUN = 5
 
-def _safe_run_id(run_id: str) -> str:
-    rid = str(run_id or 'default').strip()
-    rid = re.sub(r'[^a-zA-Z0-9._-]+', '_', rid)
-    return rid[:128] or 'default'
-
-def _agent_history_file(run_id: str) -> Path:
-    AGENT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    return AGENT_HISTORY_DIR / f"{_safe_run_id(run_id)}.json"
-
-def _agent_load_history(run_id: str) -> list[dict]:
-    path = _agent_history_file(run_id)
-    if not path.exists():
-        return []
+def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    # region agent log
     try:
-        payload = json.loads(path.read_text(encoding='utf-8'))
-        if isinstance(payload, list):
-            return [x for x in payload if isinstance(x, dict)]
+        payload = {
+            "sessionId": "d5a26f",
+            "runId": str(run_id or "default"),
+            "hypothesisId": str(hypothesis_id),
+            "location": str(location),
+            "message": str(message),
+            "data": data if isinstance(data, dict) else {},
+            "timestamp": int(time.time() * 1000),
+        }
+        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except Exception:
         pass
-    return []
+    # endregion
 
-def _agent_save_history(run_id: str, entries: list[dict]) -> None:
-    path = _agent_history_file(run_id)
-    keep = list(entries or [])[-_AGENT_MAX_ROLLBACKS_PER_RUN:]
-    path.write_text(json.dumps(keep, ensure_ascii=False, indent=2), encoding='utf-8')
 
-def _agent_request_hash(run_id: str, patch: dict) -> str:
-    raw = json.dumps({'run_id': _safe_run_id(run_id), 'patch': patch}, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+def _json_hash(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-def _prune_agent_patch_store():
-    now = time.time()
-    for k, rec in list(_agent_patch_store.items()):
-        if rec.get('expires', 0) < now:
-            _agent_patch_store.pop(k, None)
 
-def _deep_merge_shallow(dst: dict, src: dict) -> dict:
-    out = copy.deepcopy(dst) if isinstance(dst, dict) else {}
-    for k, v in (src or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _deep_merge_shallow(out[k], v)
+def _distill_config_path() -> Path:
+    return CONFIG_DIR / _DEFAULT_CONFIG_NAME
+
+
+def _load_distill_config() -> dict[str, Any]:
+    return config_service.load_config(_distill_config_path()) or {}
+
+
+def _save_distill_config(config: dict[str, Any]) -> int:
+    name, file_mtime_ns = config_service.save_config(CONFIG_DIR, _DEFAULT_CONFIG_NAME, config)
+    backend_state.last_saved_config = {"name": name, "config": config}
+    return file_mtime_ns
+
+
+def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    out = copy.deepcopy(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
         else:
-            out[k] = copy.deepcopy(v)
+            out[key] = copy.deepcopy(value)
     return out
 
-def _merge_distill_patch(base: dict, patch: dict) -> dict:
-    if not isinstance(patch, dict) or not patch:
-        raise ValueError('patch 必须为非空对象')
-    extra = set(patch.keys()) - _AGENT_ALLOWED_TOP_LEVEL
-    if extra:
-        raise ValueError('不允许的顶层键: ' + ', '.join(sorted(extra)))
-    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
-    for top in patch:
-        sub = patch[top]
-        if not isinstance(sub, dict):
-            merged[top] = copy.deepcopy(sub)
-            continue
-        cur = merged.get(top)
-        merged[top] = _deep_merge_shallow(cur if isinstance(cur, dict) else {}, sub)
-    return merged
+
+def _collect_leaf_paths(payload: dict[str, Any], prefix: str = "") -> list[str]:
+    leaves: list[str] = []
+    for key, value in (payload or {}).items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            leaves.extend(_collect_leaf_paths(value, path))
+        else:
+            leaves.append(path)
+    return leaves
 
 
-def _serialize_diff_value(val: Any) -> Any:
-    """JSON 友好、适合前端展示的叶子值。"""
-    if val is None:
-        return None
-    if isinstance(val, (bool, int, float, str)):
-        return val
-    try:
-        json.dumps(val, ensure_ascii=False)
-        return val
-    except (TypeError, ValueError):
-        return repr(val)
+def _get_by_path(data: dict[str, Any], path: str) -> Any:
+    cur: Any = data
+    for seg in path.split("."):
+        if not isinstance(cur, dict) or seg not in cur:
+            return None
+        cur = cur[seg]
+    return cur
 
 
-def _leaf_config_diff(base: dict | None, merged: dict | None) -> dict[str, Any]:
-    """
-    对比合并前后的 distill 配置，产出叶子级路径变更（仅 distillation / training / output）。
-    path 使用点号连接，如 training.lr0。
-    """
+def _set_by_path(data: dict[str, Any], path: str, value: Any) -> None:
+    cur = data
+    segs = path.split(".")
+    for seg in segs[:-1]:
+        node = cur.get(seg)
+        if not isinstance(node, dict):
+            node = {}
+            cur[seg] = node
+        cur = node
+    cur[segs[-1]] = value
+
+
+def _validate_top_level(patch: dict[str, Any]) -> list[str]:
+    return [k for k in patch.keys() if k not in _ALLOWED_TOP_LEVEL]
+
+
+def _collect_deprecated_leaf_paths(payload: dict[str, Any]) -> list[str]:
+    return sorted(path for path in _collect_leaf_paths(payload or {}) if path in _DEPRECATED_LEAF_PATHS)
+
+
+def _flatten_allowed(data: dict[str, Any]) -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+
+    def walk(prefix: str, val: Any) -> None:
+        if isinstance(val, dict):
+            for k, v in val.items():
+                walk(f"{prefix}.{k}" if prefix else k, v)
+            return
+        if prefix in _DEPRECATED_LEAF_PATHS:
+            return
+        flat[prefix] = val
+
+    for top in _ALLOWED_TOP_LEVEL:
+        if top in data:
+            walk(top, data[top])
+    return flat
+
+
+def _merge_distill_patch(base_config: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    base = copy.deepcopy(base_config or {})
+    invalid = _validate_top_level(patch or {})
+    if invalid:
+        raise ValueError(f"patch includes disallowed top-level keys: {invalid}")
+    return _deep_merge(base, patch or {})
+
+
+def _leaf_config_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    bflat = _flatten_allowed(before or {})
+    aflat = _flatten_allowed(after or {})
+    all_paths = sorted(set(bflat.keys()) | set(aflat.keys()))
     rows: list[dict[str, Any]] = []
-
-    def walk(b: Any, m: Any, path: str) -> None:
-        if isinstance(b, dict) and isinstance(m, dict):
-            keys = set(b.keys()) | set(m.keys())
-            for k in sorted(keys, key=lambda x: str(x)):
-                sub_path = f'{path}.{k}' if path else str(k)
-                if k not in b:
-                    walk(None, m[k], sub_path)
-                elif k not in m:
-                    walk(b[k], None, sub_path)
-                else:
-                    walk(b[k], m[k], sub_path)
-            return
-        if b is None and isinstance(m, dict):
-            for k in sorted(m.keys(), key=lambda x: str(x)):
-                sub_path = f'{path}.{k}' if path else str(k)
-                walk(None, m[k], sub_path)
-            return
-        if m is None and isinstance(b, dict):
-            for k in sorted(b.keys(), key=lambda x: str(x)):
-                sub_path = f'{path}.{k}' if path else str(k)
-                walk(b[k], None, sub_path)
-            return
-        if b == m:
-            return
-        if b is None:
-            kind = 'added'
-        elif m is None:
-            kind = 'removed'
+    for path in all_paths:
+        in_before = path in bflat
+        in_after = path in aflat
+        if in_before and in_after:
+            if bflat[path] != aflat[path]:
+                rows.append({"path": path, "kind": "changed", "before": bflat[path], "after": aflat[path]})
+        elif in_before:
+            rows.append({"path": path, "kind": "removed", "before": bflat[path], "after": None})
         else:
-            kind = 'changed'
-        rows.append({
-            'path': path or '(root)',
-            'kind': kind,
-            'before': _serialize_diff_value(b),
-            'after': _serialize_diff_value(m),
-        })
+            rows.append({"path": path, "kind": "added", "before": None, "after": aflat[path]})
+    return {"paths": rows, "stats": {"changed": len(rows)}}
 
-    b0 = base if isinstance(base, dict) else {}
-    m0 = merged if isinstance(merged, dict) else {}
-    for top in sorted(_AGENT_ALLOWED_TOP_LEVEL):
-        if top not in b0 and top not in m0:
-            continue
-        if top not in b0:
-            walk(None, m0[top], top)
-        elif top not in m0:
-            walk(b0[top], None, top)
+
+def _filter_change_summary_to_patch_declared(raw_summary: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    declared = set(_collect_leaf_paths(patch or {}))
+    filtered = [row for row in list(raw_summary.get("paths") or []) if row.get("path") in declared]
+    return {"paths": filtered, "stats": {"changed": len(filtered)}}
+
+
+def _single_leaf_epsilon_declared_patch(base: dict[str, Any], declared_patch: dict[str, Any]) -> dict[str, Any]:
+    declared_paths = _collect_leaf_paths(declared_patch or {})
+
+    def priority(path: str) -> tuple[int, str]:
+        if path.startswith("distillation."):
+            return (0, path)
+        if path.startswith("training."):
+            return (1, path)
+        return (2, path)
+
+    # Prefer float-ish knobs first for safer epsilon adjustment.
+    for path in sorted(declared_paths, key=priority):
+        val = _get_by_path(base, path)
+        if isinstance(val, float):
+            out: dict[str, Any] = {}
+            _set_by_path(out, path, val + 1e-12)
+            return out
+    for path in sorted(declared_paths, key=priority):
+        val = _get_by_path(base, path)
+        if isinstance(val, int) and not isinstance(val, bool):
+            out = {}
+            _set_by_path(out, path, val + 1)
+            return out
+    if declared_paths:
+        path = sorted(declared_paths, key=priority)[0]
+        val = _get_by_path(base, path)
+        if isinstance(val, str):
+            new_val: Any = val + "_updated"
+        elif isinstance(val, bool):
+            new_val = not val
         else:
-            walk(b0[top], m0[top], top)
-
-    return {
-        'paths': rows,
-        'stats': {
-            'changed': len(rows),
-        },
-    }
-
-
-def _collect_leaf_paths_from_patch(patch: dict | None) -> set[str]:
-    """Patch 中显式出现的叶子路径（点号），用于审批摘要仅反映 Agent 声明要改动的键。"""
-    out: set[str] = set()
-
-    def walk(obj: Any, prefix: str) -> None:
-        if not isinstance(obj, dict):
-            return
-        for k, v in obj.items():
-            sub_path = f'{prefix}.{k}' if prefix else str(k)
-            if isinstance(v, dict) and v:
-                walk(v, sub_path)
-            else:
-                out.add(sub_path)
-
-    if not isinstance(patch, dict):
+            new_val = 1
+        out = {}
+        _set_by_path(out, path, new_val)
         return out
-    for top in _AGENT_PATCH_TOP_ORDER:
-        if top not in patch:
-            continue
-        sub = patch[top]
-        if isinstance(sub, dict):
-            walk(sub, top)
-        else:
-            out.add(top)
-    return out
-
-
-def _filter_change_summary_to_patch_declared(change_summary: dict, patch: dict) -> dict:
-    """仅保留 patch 叶子路径上的 diff 行，避免审批表列出未在 patch 中声明的字段（含类型漂移导致的伪差异）。"""
-    allowed = _collect_leaf_paths_from_patch(patch)
-    paths = [r for r in (change_summary.get('paths') or []) if isinstance(r, dict) and r.get('path') in allowed]
-    return {
-        'paths': paths,
-        'stats': {'changed': len(paths)},
-    }
-
-
-def _agent_record_history(run_id: str, before_cfg: dict, after_cfg: dict, operator: str, reason: str, action: str) -> dict:
-    hist = _agent_load_history(run_id)
-    version = int(hist[-1]['version']) + 1 if hist else 1
-    rec = {
-        'version': version,
-        'run_id': _safe_run_id(run_id),
-        'timestamp': datetime.now().isoformat(),
-        'operator': str(operator or 'user'),
-        'reason': str(reason or ''),
-        'action': str(action or 'apply'),
-        'before_config': before_cfg,
-        'after_config': after_cfg,
-    }
-    hist.append(rec)
-    _agent_save_history(run_id, hist)
-    return rec
-
-def _agent_validate_patch(patch: dict, strict: bool = True) -> dict:
-    errors = []
-    warnings = []
-    if not isinstance(patch, dict) or not patch:
-        errors.append('patch 必须是非空对象')
-        return {'valid': False, 'errors': errors, 'warnings': warnings}
-    extra = set(patch.keys()) - _AGENT_ALLOWED_TOP_LEVEL
-    if extra:
-        errors.append('不允许的顶层键: ' + ', '.join(sorted(extra)))
-    t = patch.get('training')
-    if isinstance(t, dict):
-        if 'epochs' in t:
-            try:
-                if int(t.get('epochs')) <= 0:
-                    errors.append('training.epochs 必须大于 0')
-            except Exception:
-                errors.append('training.epochs 必须为整数')
-        if 'batch' in t:
-            try:
-                b = int(t.get('batch'))
-                if b == 0:
-                    errors.append('training.batch 不能为 0')
-            except Exception:
-                errors.append('training.batch 必须为整数')
-        if 'lr0' in t:
-            try:
-                lr0 = float(t.get('lr0'))
-                if lr0 <= 0:
-                    errors.append('training.lr0 必须大于 0')
-                if lr0 > 1:
-                    warnings.append('training.lr0 偏大，可能导致训练不稳定')
-            except Exception:
-                errors.append('training.lr0 必须为数值')
-    d = patch.get('distillation')
-    if isinstance(d, dict):
-        for k in ('alpha_init', 'w_kd', 'w_focal', 'w_feat'):
-            if k in d:
-                try:
-                    v = float(d.get(k))
-                    if v < 0:
-                        errors.append(f'distillation.{k} 不能小于 0')
-                except Exception:
-                    errors.append(f'distillation.{k} 必须为数值')
-        if 'T_min' in d and 'T_max' in d:
-            try:
-                if float(d.get('T_min')) > float(d.get('T_max')):
-                    errors.append('distillation.T_min 不能大于 T_max')
-            except Exception:
-                errors.append('distillation.T_min/T_max 必须为数值')
-    if strict and errors:
-        return {'valid': False, 'errors': errors, 'warnings': warnings}
-    return {'valid': len(errors) == 0, 'errors': errors, 'warnings': warnings}
-
-def _agent_training_is_active() -> bool:
-    with training_runtime.train_state_lock:
-        if training_runtime.training_status.get('running'):
-            return True
-        if (training_runtime.remote_training_state or {}).get('active'):
-            return True
-    return False
-
-
-def _agent_metrics_summary_for_tools() -> dict:
-    """训练进行中不向 Agent 暴露未定型指标；仅在空闲时附带 metrics 摘要。"""
-    if _agent_training_is_active():
-        return {
-            'status': 'training_in_progress',
-            'hint': '训练尚未结束，指标未定型；请勿将本快照当作最终训练结果，待训练完成后再分析。',
-        }
-    metrics: dict = {}
-    try:
-        m = get_metrics()
-        if isinstance(m, dict):
-            metrics = {
-                'csv_count': len(m.get('csv_metrics') or []),
-                'source': m.get('source') or '',
-                'overview_stats': m.get('overview_stats') or {},
-            }
-    except Exception:
-        metrics = {}
-    return metrics
-
-
-def _agent_get_context(run_id: str, config_name: str = 'distill_config.yaml') -> dict:
-    config_path = CONFIG_DIR / config_name
-    cfg = _load_yaml_file(config_path) or {}
-    return {
-        'run_id': _safe_run_id(run_id),
-        'config_file': config_name,
-        'allowed_top_level': sorted(_AGENT_ALLOWED_TOP_LEVEL),
-        'current_config': cfg,
-        'metrics_summary': _agent_metrics_summary_for_tools(),
-    }
-
-def _agent_analyze_params(run_id: str, objective: str, config_name: str = 'distill_config.yaml') -> dict:
-    ctx = _agent_get_context(run_id=run_id, config_name=config_name)
-    if _agent_training_is_active():
-        return {
-            'run_id': _safe_run_id(run_id),
-            'objective': objective,
-            'analysis': [{'focus': '等待训练结束', 'suggestion': '当前有训练任务进行中，指标未定型；请在训练完成后再调用本工具或基于最终 results.csv 分析。', 'risk': ''}],
-            'need_approval': False,
-            'training_in_progress': True,
-            'context': ctx,
-        }
-    advice = []
-    low_obj = str(objective or '').lower()
-    if any(x in low_obj for x in ('速度', 'latency', '时延')):
-        advice.append({'focus': '降低计算开销', 'suggestion': '优先减小 imgsz/batch 或使用更轻 student_weight', 'risk': '精度可能下降'})
-    if any(x in low_obj for x in ('精度', 'accuracy', 'map')):
-        advice.append({'focus': '提升检测精度', 'suggestion': '可适当提高 epochs 并调整 w_kd/w_focal', 'risk': '训练时长增加'})
-    if any(x in low_obj for x in ('显存', 'memory', 'oom')):
-        advice.append({'focus': '控制显存', 'suggestion': '减小 batch，开启 amp，降低 imgsz', 'risk': '收敛速度可能变慢'})
-    if not advice:
-        advice.append({'focus': '通用优化', 'suggestion': '先小步调整 alpha_init、w_kd、lr0 并观察曲线', 'risk': '需多轮试验'})
-    return {'run_id': _safe_run_id(run_id), 'objective': objective, 'analysis': advice, 'need_approval': True, 'context': ctx}
-
-
-def _bump_declared_leaf(v: Any) -> Any | None:
-    """对「补丁声明值与磁盘相同」的叶子做极小变更，便于产生可审批 diff；无法处理则返回 None。"""
-    if isinstance(v, bool):
-        return not v
-    if isinstance(v, int) and not isinstance(v, bool):
-        return int(v) + 1
-    if isinstance(v, float):
-        return float(v) + 1e-6 if v != 0.0 else 1e-6
-    return None
-
-
-def _single_leaf_epsilon_declared_patch(base: dict, declared: dict) -> dict:
-    """
-    当声明的 patch 与磁盘合并后无差异时，仅在 **declared 中已出现的叶子路径** 上改一个字段，
-    不引入任何未在 declared 中出现的键（避免审批 kd 却写入 temperature 等）。
-    遍历顺序：distillation → training → output；段内键名按字典序，先命中先 bump。
-    """
-    if not isinstance(declared, dict) or not declared:
-        return {}
-    for top in _AGENT_PATCH_TOP_ORDER:
-        if top not in declared or top not in _AGENT_ALLOWED_TOP_LEVEL:
-            continue
-        sub = declared[top]
-        if not isinstance(sub, dict):
-            cur = base.get(top)
-            if cur == sub:
-                b = _bump_declared_leaf(sub)
-                if b is not None:
-                    return {top: b}
-            continue
-        base_sub = base.get(top) if isinstance(base.get(top), dict) else {}
-        for k in sorted(sub.keys()):
-            v = sub[k]
-            if isinstance(v, dict):
-                base_inner = base_sub.get(k) if isinstance(base_sub.get(k), dict) else {}
-                if not isinstance(base_inner, dict):
-                    base_inner = {}
-                for k2 in sorted(v.keys()):
-                    v2 = v[k2]
-                    if isinstance(v2, dict):
-                        continue
-                    cur2 = base_inner.get(k2) if isinstance(base_inner, dict) else None
-                    if cur2 != v2:
-                        continue
-                    b2 = _bump_declared_leaf(v2)
-                    if b2 is not None:
-                        return {top: {k: {k2: b2}}}
-                continue
-            cur = base_sub.get(k) if isinstance(base_sub, dict) else None
-            if cur != v:
-                continue
-            b = _bump_declared_leaf(v)
-            if b is not None:
-                return {top: {k: b}}
     return {}
 
 
-def _agent_propose_patch(goal: str = '', constraints: dict | None = None) -> dict:
-    c = constraints or {}
-    low_goal = str(goal or '').lower()
-    patch = {}
-    if c.get('memory_first'):
-        patch = {'training': {'batch': 8, 'imgsz': 512, 'amp': True}}
-    elif c.get('accuracy_first'):
-        patch = {'training': {'epochs': 200}, 'distillation': {'w_kd': 0.6, 'w_focal': 0.35}}
-    elif c.get('speed_first'):
-        patch = {'training': {'imgsz': 512, 'batch': 8}, 'distillation': {'T_max': 5.0}}
-    elif any(x in low_goal for x in ('memory', '显存', 'oom')):
-        patch = {'training': {'batch': 8, 'imgsz': 512, 'amp': True}}
-    elif any(x in low_goal for x in ('speed', 'latency', '时延', '吞吐')):
-        patch = {'training': {'imgsz': 512, 'batch': 8}, 'distillation': {'T_max': 5.0}}
-    elif any(x in low_goal for x in ('accuracy', 'map', '精度')):
-        patch = {'training': {'epochs': 200}, 'distillation': {'w_kd': 0.6, 'w_focal': 0.35}}
-    else:
-        # 兜底仅触及蒸馏侧 kd 权重，避免无端带上 training 等未讨论字段
-        patch = {'distillation': {'w_kd': 0.55}}
-    path = CONFIG_DIR / 'distill_config.yaml'
-    base_dbg = _load_yaml_file(path) or {}
-    declared_snapshot = copy.deepcopy(patch)
+def _history_path(run_id: str) -> Path:
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(run_id or "default"))
+    AGENT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    return AGENT_HISTORY_DIR / f"{safe}.json"
+
+
+def _load_run_history(run_id: str) -> list[dict[str, Any]]:
+    path = _history_path(run_id)
+    if not path.exists():
+        return []
     try:
-        merged_dbg = _merge_distill_patch(base_dbg, patch)
-        cs_dbg = _leaf_config_diff(base_dbg, merged_dbg)
-        if not (cs_dbg.get('paths') or []):
-            eps = _single_leaf_epsilon_declared_patch(base_dbg, declared_snapshot)
-            if eps:
-                patch = eps
-                _merge_distill_patch(base_dbg, patch)
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        pass
-    return {'goal': goal, 'patch': patch, 'need_approval': True}
+        return []
 
-def _extract_openai_text(data: Any) -> str:
-    if not isinstance(data, dict):
-        return str(data or '')
-    if isinstance(data.get('output_text'), str):
-        return data.get('output_text')
-    choices = data.get('choices') or []
-    if choices and isinstance(choices[0], dict):
-        msg = choices[0].get('message') or {}
-        if isinstance(msg, dict):
-            c = msg.get('content')
-            if isinstance(c, str):
-                return c
-    out = data.get('output')
-    if isinstance(out, list):
-        texts = []
-        for item in out:
-            if not isinstance(item, dict):
-                continue
-            content = item.get('content')
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and isinstance(part.get('text'), str):
-                        texts.append(part['text'])
-        if texts:
-            return '\n'.join(texts)
-    return json.dumps(data, ensure_ascii=False)
 
-def _extract_openai_reasoning_from_message(data: Any) -> str:
-    """非流式响应中 message 里的思考文本（若厂商提供）。"""
-    if not isinstance(data, dict):
-        return ''
-    choices = data.get('choices') or []
-    if not choices or not isinstance(choices[0], dict):
-        return ''
-    msg = choices[0].get('message') or {}
-    if not isinstance(msg, dict):
-        return ''
-    for key in ('reasoning_content', 'reasoning'):
-        v = msg.get(key)
-        if isinstance(v, str) and v.strip():
-            return v
-    return ''
+def _save_run_history(run_id: str, rows: list[dict[str, Any]]) -> None:
+    path = _history_path(run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def _openai_compatible_resolve_url(payload: AgentModelInvokeRequest) -> str:
-    base = str(payload.api_url or '').strip().rstrip('/')
-    endpoint = str(payload.endpoint or '').strip()
-    if endpoint:
-        return endpoint if endpoint.startswith('http') else f"{base}/{endpoint.lstrip('/')}"
-    # 方舟 OpenAI 兼容基地址通常为 /api/v3，默认补全为 /chat/completions。
-    if re.search(r'ark\.[^/]+/api/v\d+$', base):
-        return f"{base}/chat/completions"
-    if base.endswith('/chat/completions') or base.endswith('/responses'):
-        return base
-    return f"{base}/v1/chat/completions"
 
-def _openai_compatible_build_body(payload: AgentModelInvokeRequest, stream: bool = False) -> dict:
-    body_messages = [{'role': m.role, 'content': m.content} for m in payload.messages]
-    if payload.system_prompt:
-        body_messages = [{'role': 'system', 'content': payload.system_prompt}] + body_messages
-    req_body = {
-        'model': payload.model or 'gpt-4o-mini',
-        'messages': body_messages,
-        'temperature': float(payload.temperature),
-    }
-    if payload.max_tokens is not None:
-        req_body['max_tokens'] = int(payload.max_tokens)
-    if stream:
-        req_body['stream'] = True
-    return req_body
-
-def _delta_text_piece(val: Any) -> str:
-    if val is None:
-        return ''
-    if isinstance(val, str):
-        return val
-    if isinstance(val, list):
-        parts = []
-        for item in val:
-            if isinstance(item, dict):
-                if isinstance(item.get('text'), str):
-                    parts.append(item['text'])
-                elif isinstance(item.get('content'), str):
-                    parts.append(item['content'])
-            elif isinstance(item, str):
-                parts.append(item)
-        return ''.join(parts)
-    return str(val)
-
-def _delta_reasoning_from_dict(d: dict) -> str:
-    if not isinstance(d, dict):
-        return ''
-    for key in ('reasoning_content', 'reasoning', 'thinking'):
-        v = d.get(key)
-        if v is None or v == '':
-            continue
-        return _delta_text_piece(v)
-    return ''
-
-def _parse_openai_sse_chunk_json(data_str: str) -> tuple[str, str]:
-    """从一条 SSE data 行解析 (content_delta, reasoning_delta)。"""
-    if not data_str or data_str.strip() == '[DONE]':
-        return '', ''
-    try:
-        obj = json.loads(data_str)
-    except json.JSONDecodeError:
-        return '', ''
-    choices = obj.get('choices') or []
-    if not choices or not isinstance(choices[0], dict):
-        return '', ''
-    ch0 = choices[0]
-    delta = ch0.get('delta') if isinstance(ch0.get('delta'), dict) else {}
-    content = _delta_text_piece(delta.get('content')) if delta else ''
-    reasoning = _delta_reasoning_from_dict(delta) if delta else ''
-    if not content and not reasoning:
-        msg = ch0.get('message')
-        if isinstance(msg, dict):
-            content = _delta_text_piece(msg.get('content'))
-            reasoning = _delta_reasoning_from_dict(msg)
-    return content, reasoning
-
-def _http_stream_post_openai(url: str, payload: dict, headers: dict | None, timeout: float):
-    req_headers = {'Content-Type': 'application/json'}
-    if isinstance(headers, dict):
-        req_headers.update({str(k): str(v) for k, v in headers.items() if k})
-    data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-    req = urllib.request.Request(url=url, data=data, headers=req_headers, method='POST')
-    return urllib.request.urlopen(req, timeout=timeout)
-
-def _generate_openai_compatible_sse(payload: AgentModelInvokeRequest):
-    url = _openai_compatible_resolve_url(payload)
-    req_body = _openai_compatible_build_body(payload, stream=True)
-    headers = _set_auth_headers(payload.extra_headers, payload.api_key, prefer_x_api_key=True)
-    full_reply: list[str] = []
-    full_reasoning: list[str] = []
-    try:
-        resp = _http_stream_post_openai(url, req_body, headers, float(payload.timeout_sec))
-    except urllib.error.HTTPError as e:
-        try:
-            err_body = e.read().decode('utf-8', errors='replace')
-        except Exception:
-            err_body = str(e)
-        yield f"data: {json.dumps({'t': 'error', 'message': f'HTTP {e.code}: {err_body[:2000]}'}, ensure_ascii=False)}\n\n"
-        return
-    except Exception as e:
-        yield f"data: {json.dumps({'t': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-        return
-
-    line_buf = b''
-    try:
-        while True:
-            chunk = resp.read(8192)
-            if not chunk:
-                break
-            line_buf += chunk
-            while b'\n' in line_buf:
-                raw_line, line_buf = line_buf.split(b'\n', 1)
-                line = raw_line.decode('utf-8', errors='replace').rstrip('\r')
-                if not line.strip():
-                    continue
-                if line.startswith(':'):
-                    continue
-                if not line.startswith('data:'):
-                    continue
-                data_part = line[5:].lstrip()
-                if data_part.strip() == '[DONE]':
-                    continue
-                c_delta, r_delta = _parse_openai_sse_chunk_json(data_part)
-                if c_delta:
-                    full_reply.append(c_delta)
-                    yield f"data: {json.dumps({'t': 'content', 'd': c_delta}, ensure_ascii=False)}\n\n"
-                if r_delta:
-                    full_reasoning.append(r_delta)
-                    yield f"data: {json.dumps({'t': 'reasoning', 'd': r_delta}, ensure_ascii=False)}\n\n"
-        if line_buf.strip():
-            line = line_buf.decode('utf-8', errors='replace').rstrip('\r\n')
-            if line.startswith('data:'):
-                data_part = line[5:].lstrip()
-                if data_part.strip() and data_part.strip() != '[DONE]':
-                    c_delta, r_delta = _parse_openai_sse_chunk_json(data_part)
-                    if c_delta:
-                        full_reply.append(c_delta)
-                        yield f"data: {json.dumps({'t': 'content', 'd': c_delta}, ensure_ascii=False)}\n\n"
-                    if r_delta:
-                        full_reasoning.append(r_delta)
-                        yield f"data: {json.dumps({'t': 'reasoning', 'd': r_delta}, ensure_ascii=False)}\n\n"
-    finally:
-        try:
-            resp.close()
-        except Exception:
-            pass
-
-    reply = ''.join(full_reply)
-    reasoning = ''.join(full_reasoning)
-    yield f"data: {json.dumps({'t': 'done', 'reply': reply, 'reasoning': reasoning}, ensure_ascii=False)}\n\n"
-
-def _invoke_model_openai_compatible(payload: AgentModelInvokeRequest) -> dict:
-    url = _openai_compatible_resolve_url(payload)
-    req_body = _openai_compatible_build_body(payload, stream=False)
-    headers = _set_auth_headers(payload.extra_headers, payload.api_key, prefer_x_api_key=True)
-    raw = _http_json_request('POST', url=url, payload=req_body, headers=headers, timeout=float(payload.timeout_sec))
-    out: dict = {'reply': _extract_openai_text(raw), 'raw': raw, 'provider': 'openai_compatible'}
-    rsn = _extract_openai_reasoning_from_message(raw)
-    if rsn:
-        out['reasoning'] = rsn
-    return out
-
-def _invoke_model_anthropic(payload: AgentModelInvokeRequest) -> dict:
-    base = str(payload.api_url or '').strip().rstrip('/')
-    endpoint = str(payload.endpoint or '').strip()
-    url = endpoint if endpoint else (f"{base}/v1/messages" if not base.endswith('/messages') else base)
-    req_body = {
-        'model': payload.model or 'claude-3-5-sonnet-latest',
-        'messages': [{'role': m.role, 'content': m.content} for m in payload.messages],
-        'max_tokens': int(payload.max_tokens or 1024),
-        'temperature': float(payload.temperature),
-    }
-    if payload.system_prompt:
-        req_body['system'] = payload.system_prompt
-    headers = {'anthropic-version': '2023-06-01'}
-    headers.update(_set_auth_headers(payload.extra_headers, payload.api_key, prefer_x_api_key=True))
-    raw = _http_json_request('POST', url=url, payload=req_body, headers=headers, timeout=float(payload.timeout_sec))
-    text = ''
-    content = raw.get('content') if isinstance(raw, dict) else None
-    if isinstance(content, list):
-        for part in content:
-            if isinstance(part, dict) and isinstance(part.get('text'), str):
-                text += part.get('text', '')
-    return {'reply': text or json.dumps(raw, ensure_ascii=False), 'raw': raw, 'provider': 'anthropic_style'}
-
-def _invoke_model_custom(payload: AgentModelInvokeRequest) -> dict:
-    headers = _set_auth_headers(payload.extra_headers, payload.api_key, prefer_x_api_key=True)
-    req_body = {
-        'model': payload.model,
-        'messages': [{'role': m.role, 'content': m.content} for m in payload.messages],
-        'system_prompt': payload.system_prompt,
-        'temperature': float(payload.temperature),
-        'max_tokens': payload.max_tokens,
-    }
-    raw = _http_json_request('POST', url=payload.api_url, payload=req_body, headers=headers, timeout=float(payload.timeout_sec))
-    if isinstance(raw, dict):
-        reply = raw.get('reply') or raw.get('message') or raw.get('output') or ''
-        return {'reply': str(reply), 'raw': raw, 'provider': 'custom'}
-    return {'reply': str(raw), 'raw': raw, 'provider': 'custom'}
-
-def _agent_invoke_model(payload: AgentModelInvokeRequest) -> dict:
-    provider = str(payload.provider or '').strip().lower()
-    if provider in ('openai_compatible', 'openai', 'openai-compatible'):
-        return _invoke_model_openai_compatible(payload)
-    if provider in ('anthropic', 'anthropic_style', 'claude'):
-        return _invoke_model_anthropic(payload)
-    if provider in ('custom', 'custom_adapter'):
-        return _invoke_model_custom(payload)
-    raise ValueError(f'不支持的 provider: {provider}')
-
-def agent_patch_validate(payload: AgentPatchValidateRequest):
-    result = _agent_validate_patch(payload.patch, strict=bool(payload.strict))
-    return {'status': 'ok', **result}
-
-def agent_patch_preview(payload: AgentPatchPreviewRequest):
-    """合并 patch 到 distill_config.yaml 的内存预览，并签发 run 维度审批令牌。"""
-    _prune_agent_patch_store()
-    patch = payload.patch
-    if not isinstance(patch, dict) or not patch:
-        return _error('patch 必须为非空对象', 400)
-    valid_result = _agent_validate_patch(patch, strict=True)
-    if not valid_result.get('valid'):
-        return _error('; '.join(valid_result.get('errors') or ['patch 不合法']), 400)
-    path = CONFIG_DIR / 'distill_config.yaml'
-    base = _load_yaml_file(path) or {}
-    try:
-        merged = _merge_distill_patch(base, patch)
-    except ValueError as e:
-        return _error(str(e), 400)
-    except Exception as e:
-        return _error(str(e), 500)
-    tok = str(uuid.uuid4())
-    run_id = _safe_run_id(payload.run_id)
-    req_hash = _agent_request_hash(run_id, patch)
-    _agent_patch_store[tok] = {
-        'patch': copy.deepcopy(patch),
-        'base': copy.deepcopy(base),
-        'merged': merged,
-        'run_id': run_id,
-        'operator': payload.operator or 'user',
-        'reason': payload.reason or '',
-        'request_hash': req_hash,
-        'used': False,
-        'expires': time.time() + _AGENT_PATCH_TTL,
-    }
-    patch_yaml = yaml.dump(patch, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    change_summary_raw = _leaf_config_diff(base, merged)
-    change_summary = _filter_change_summary_to_patch_declared(change_summary_raw, patch)
-    return {
-        'status': 'ok',
-        'approval_token': tok,
-        'approval_ticket_id': tok,
-        'expires_in_sec': int(_AGENT_PATCH_TTL),
-        'run_id': run_id,
-        'request_hash': req_hash,
-        'patch_yaml': patch_yaml,
-        'merged_preview': merged,
-        'validation': valid_result,
-        'change_summary': change_summary,
-    }
-
-def agent_patch_apply(payload: AgentPatchApplyRequest):
-    """凭审批令牌将预览中的合并结果写入 configs/distill_config.yaml，并记录 run 历史。"""
-    
-    _prune_agent_patch_store()
-    tok = payload.approval_token or payload.token
-    if not isinstance(tok, str) or not tok:
-        return _error('缺少 approval_token', 400)
-    rec = _agent_patch_store.get(tok)
-    if not rec or rec.get('expires', 0) < time.time():
-        return _error('审批令牌无效或已过期，请重新预览', 400)
-    if rec.get('used'):
-        return _error('审批令牌已使用，禁止重放', 400)
-    expect_run_id = _safe_run_id(payload.run_id)
-    if expect_run_id != rec.get('run_id'):
-        return _error('run_id 与审批票据不匹配', 400)
-    if payload.request_hash and payload.request_hash != rec.get('request_hash'):
-        return _error('request_hash 校验失败，拒绝写入', 400)
-    merged = rec.get('merged')
-    if not isinstance(merged, dict):
-        return _error('内部数据损坏', 500)
-    base_cfg = rec.get('base') if isinstance(rec.get('base'), dict) else {}
-    out_path = CONFIG_DIR / 'distill_config.yaml'
-    try:
-        _save_yaml_file(out_path, merged)
-        backend_state.last_saved_config = {'name': 'distill_config.yaml', 'config': merged}
-        rec['used'] = True
-        _agent_patch_store.pop(tok, None)
-        hist_rec = _agent_record_history(
-            run_id=expect_run_id,
-            before_cfg=base_cfg,
-            after_cfg=merged,
-            operator=payload.operator or rec.get('operator') or 'user',
-            reason=payload.reason or rec.get('reason') or '',
-            action='apply_patch',
-        )
-        try:
-            file_mtime_ns = int(out_path.stat().st_mtime_ns)
-        except OSError:
-            file_mtime_ns = 0
-        return {
-            'status': 'ok',
-            'message': '已写入 configs/distill_config.yaml',
-            'config': merged,
-            'run_id': expect_run_id,
-            'history_version': hist_rec.get('version'),
-            'file_mtime_ns': file_mtime_ns,
+def _append_history(
+    *,
+    run_id: str,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    operator: str | None,
+    reason: str | None,
+    request_hash: str | None,
+) -> int:
+    rows = _load_run_history(run_id)
+    version = (rows[-1]["version"] + 1) if rows else 1
+    rows.append(
+        {
+            "version": version,
+            "timestamp": int(_now_ts()),
+            "operator": operator or "agent",
+            "reason": reason or "",
+            "request_hash": request_hash or "",
+            "before": before,
+            "after": after,
         }
-    except Exception as e:
-        return _error(str(e), 500)
+    )
+    rows = rows[-_HISTORY_LIMIT:]
+    _save_run_history(run_id, rows)
+    return version
 
-def agent_run_history(run_id: str):
-    rid = _safe_run_id(run_id)
-    hist = _agent_load_history(rid)
-    compact = []
-    for rec in reversed(hist):
-        compact.append({
-            'version': rec.get('version'),
-            'timestamp': rec.get('timestamp'),
-            'operator': rec.get('operator'),
-            'reason': rec.get('reason'),
-            'action': rec.get('action'),
-        })
-    return {'status': 'ok', 'run_id': rid, 'window_size': _AGENT_MAX_ROLLBACKS_PER_RUN, 'history': compact}
 
-def agent_run_rollback(run_id: str, payload: AgentRunHistoryRollbackRequest):
-    
-    rid = _safe_run_id(run_id or payload.run_id)
-    hist = _agent_load_history(rid)
-    if not hist:
-        return _error('该 run 没有可回退历史', 404)
-    target = None
-    if payload.target_version is not None:
-        for item in hist:
-            if int(item.get('version', -1)) == int(payload.target_version):
+def _tool_get_context(args: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(args.get("run_id") or "default")
+    config = _load_distill_config()
+    try:
+        mtime = int(_distill_config_path().stat().st_mtime_ns)
+    except OSError:
+        mtime = 0
+    return {
+        "status": "ok",
+        "run_id": run_id,
+        "config_name": _DEFAULT_CONFIG_NAME,
+        "config": config,
+        "file_mtime_ns": mtime,
+    }
+
+
+def _tool_analyze_params(args: dict[str, Any]) -> dict[str, Any]:
+    objective = str(args.get("objective") or "").strip() or "stability"
+    config = _load_distill_config()
+    distill = config.get("distillation") if isinstance(config.get("distillation"), dict) else {}
+    training = config.get("training") if isinstance(config.get("training"), dict) else {}
+    tips: list[str] = []
+    temp = distill.get("temperature")
+    if isinstance(temp, (int, float)) and temp < 1.0:
+        tips.append("temperature may be too small for smooth distillation logits.")
+    lr0 = training.get("lr0")
+    if isinstance(lr0, (int, float)) and lr0 > 0.01:
+        tips.append("lr0 is relatively high; watch for unstable loss.")
+    if not tips:
+        tips.append("current parameters are generally reasonable; try incremental tuning.")
+    return {"status": "ok", "objective": objective, "analysis": tips}
+
+
+def _tool_propose_patch(args: dict[str, Any]) -> dict[str, Any]:
+    goal = str(args.get("goal") or "").strip().lower()
+    base = _load_distill_config()
+    patch: dict[str, Any] = {"distillation": {}}
+    if "稳定" in goal or "stability" in goal:
+        val = base.get("distillation", {}).get("T_max", 6.0)
+        if isinstance(val, (int, float)):
+            patch["distillation"]["T_max"] = round(float(val) + 0.2, 6)
+    else:
+        patch["distillation"]["w_kd"] = 0.6
+    if not patch["distillation"]:
+        patch = _single_leaf_epsilon_declared_patch(base, {"distillation": {"w_kd": base.get("distillation", {}).get("w_kd", 0.5)}})
+    return {
+        "status": "ok",
+        "goal": goal or "generic optimization",
+        "need_approval": True,
+        "patch": patch,
+        "result": {"goal": goal or "generic optimization", "patch": patch, "need_approval": True},
+    }
+
+
+def _tool_validate_patch(args: dict[str, Any]) -> dict[str, Any]:
+    patch = args.get("patch")
+    if not isinstance(patch, dict) or not patch:
+        return {"status": "error", "error": "patch must be a non-empty object"}
+    invalid = _validate_top_level(patch)
+    if invalid:
+        return {"status": "error", "error": f"invalid top-level keys: {invalid}", "invalid_keys": invalid}
+    deprecated = _collect_deprecated_leaf_paths(patch)
+    if deprecated:
+        return {"status": "error", "error": f"patch contains deprecated fields: {deprecated}", "deprecated_paths": deprecated}
+    base = _load_distill_config()
+    merged = _merge_distill_patch(base, patch)
+    diff = _leaf_config_diff(base, merged)
+    filtered = _filter_change_summary_to_patch_declared(diff, patch)
+    return {"status": "ok", "valid": True, "change_summary": filtered}
+
+
+def _tool_preview_patch(args: dict[str, Any]) -> dict[str, Any]:
+    patch = args.get("patch")
+    if not isinstance(patch, dict) or not patch:
+        return {"status": "error", "error": "patch must be a non-empty object"}
+    deprecated = _collect_deprecated_leaf_paths(patch)
+    if deprecated:
+        return {"status": "error", "error": f"patch contains deprecated fields: {deprecated}", "deprecated_paths": deprecated}
+    run_id = str(args.get("run_id") or "default")
+    operator = str(args.get("operator") or "agent")
+    reason = str(args.get("reason") or "agent.preview_patch")
+    base = _load_distill_config()
+    merged = _merge_distill_patch(base, patch)
+    raw_summary = _leaf_config_diff(base, merged)
+    change_summary = _filter_change_summary_to_patch_declared(raw_summary, patch)
+    changed_count = int(change_summary.get("stats", {}).get("changed", 0))
+    if changed_count <= 0:
+        return {
+            "status": "ok",
+            "run_id": run_id,
+            "request_hash": _json_hash({"run_id": run_id, "patch": patch}),
+            "change_summary": change_summary,
+            "patch": patch,
+            "need_approval": False,
+        }
+    request_hash = _json_hash({"run_id": run_id, "patch": patch})
+    token = secrets.token_urlsafe(24)
+    now = _now_ts()
+    with _approval_lock:
+        _approval_store[token] = {
+            "run_id": run_id,
+            "patch": patch,
+            "request_hash": request_hash,
+            "operator": operator,
+            "reason": reason,
+            "created_at": now,
+            "expires_at": now + _APPROVAL_TTL_SEC,
+            "used": False,
+        }
+    return {
+        "status": "ok",
+        "run_id": run_id,
+        "approval_token": token,
+        "request_hash": request_hash,
+        "change_summary": change_summary,
+        "patch": patch,
+        "need_approval": True,
+        "expires_at": int(now + _APPROVAL_TTL_SEC),
+    }
+
+
+def _tool_apply_patch_with_approval(args: dict[str, Any]) -> dict[str, Any]:
+    token = str(args.get("approval_token") or "").strip()
+    if not token:
+        return {"status": "error", "error": "approval_token is required"}
+    run_id = str(args.get("run_id") or "default")
+    request_hash = str(args.get("request_hash") or "").strip()
+    operator = str(args.get("operator") or "agent")
+    reason = str(args.get("reason") or "agent.apply_patch_with_approval")
+    with _approval_lock:
+        rec = _approval_store.get(token)
+        if not rec:
+            return {"status": "error", "error": "E_APPROVAL_EXPIRED"}
+        if rec.get("used"):
+            return {"status": "error", "error": "E_APPROVAL_REPLAY"}
+        if float(rec.get("expires_at") or 0.0) < _now_ts():
+            return {"status": "error", "error": "E_APPROVAL_EXPIRED"}
+        if str(rec.get("run_id") or "default") != run_id:
+            return {"status": "error", "error": "run_id mismatch for approval token"}
+        if request_hash and request_hash != str(rec.get("request_hash") or ""):
+            return {"status": "error", "error": "request_hash mismatch"}
+        patch = rec.get("patch") if isinstance(rec.get("patch"), dict) else {}
+        rec["used"] = True
+    base = _load_distill_config()
+    merged = _merge_distill_patch(base, patch)
+    file_mtime_ns = _save_distill_config(merged)
+    version = _append_history(
+        run_id=run_id,
+        before=base,
+        after=merged,
+        operator=operator,
+        reason=reason,
+        request_hash=str(rec.get("request_hash") or request_hash),
+    )
+    return {
+        "status": "ok",
+        "run_id": run_id,
+        "history_version": version,
+        "config": merged,
+        "file_mtime_ns": file_mtime_ns,
+    }
+
+
+def _tool_list_run_history(args: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(args.get("run_id") or "default")
+    rows = _load_run_history(run_id)
+    rows = rows[-_HISTORY_LIMIT:]
+    return {"status": "ok", "run_id": run_id, "history": rows}
+
+
+def _tool_rollback_run_config(args: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(args.get("run_id") or "default")
+    target_version = args.get("target_version")
+    steps = int(args.get("steps") or 1)
+    operator = str(args.get("operator") or "agent")
+    reason = str(args.get("reason") or "agent.rollback_run_config")
+    rows = _load_run_history(run_id)
+    if not rows:
+        return {"status": "error", "error": "E_RUN_HISTORY_EMPTY"}
+    target: dict[str, Any] | None = None
+    if isinstance(target_version, int):
+        for item in rows:
+            if int(item.get("version") or -1) == target_version:
                 target = item
                 break
+        if target is None:
+            return {"status": "error", "error": f"target_version {target_version} not found"}
     else:
-        steps = int(payload.steps or 1)
-        if steps <= 0:
-            return _error('steps 必须 >= 1', 400)
-        if steps > len(hist):
-            return _error('可回退步数超过历史窗口', 400)
-        target = hist[-steps]
-    if not isinstance(target, dict):
-        return _error('未找到目标版本', 404)
-    restore_cfg = target.get('after_config')
-    if not isinstance(restore_cfg, dict):
-        return _error('目标历史数据损坏', 500)
-    out_path = CONFIG_DIR / 'distill_config.yaml'
-    current_cfg = _load_yaml_file(out_path) or {}
-    try:
-        _save_yaml_file(out_path, restore_cfg)
-        backend_state.last_saved_config = {'name': 'distill_config.yaml', 'config': restore_cfg}
-        new_rec = _agent_record_history(
-            run_id=rid,
-            before_cfg=current_cfg,
-            after_cfg=restore_cfg,
-            operator=payload.operator,
-            reason=payload.reason,
-            action=f'rollback_to_v{target.get("version")}',
-        )
+        idx = max(0, len(rows) - 1 - max(1, steps))
+        target = rows[idx]
+    rollback_config = copy.deepcopy(target.get("after") or {})
+    before = _load_distill_config()
+    file_mtime_ns = _save_distill_config(rollback_config)
+    version = _append_history(
+        run_id=run_id,
+        before=before,
+        after=rollback_config,
+        operator=operator,
+        reason=reason,
+        request_hash="",
+    )
+    return {
+        "status": "ok",
+        "run_id": run_id,
+        "rolled_back_to_version": int(target.get("version") or 0),
+        "history_version": version,
+        "config": rollback_config,
+        "file_mtime_ns": file_mtime_ns,
+    }
+
+
+def _execute_tool(tool: str, args: dict[str, Any], _state: dict[str, Any]) -> Any:
+    handlers = {
+        "agent.get_context": _tool_get_context,
+        "agent.analyze_params": _tool_analyze_params,
+        "agent.propose_patch": _tool_propose_patch,
+        "agent.validate_patch": _tool_validate_patch,
+        "agent.preview_patch": _tool_preview_patch,
+        "agent.apply_patch_with_approval": _tool_apply_patch_with_approval,
+        "agent.list_run_history": _tool_list_run_history,
+        "agent.rollback_run_config": _tool_rollback_run_config,
+    }
+    handler = handlers.get(tool)
+    if handler is None:
+        return {"status": "error", "error": f"unknown tool: {tool}"}
+    return handler(args)
+
+
+def _load_tools_contract() -> dict[str, Any]:
+    contract_path = CONFIG_DIR / "agent_tools_contract.json"
+    if contract_path.exists():
         try:
-            file_mtime_ns = int(out_path.stat().st_mtime_ns)
-        except OSError:
-            file_mtime_ns = 0
-        return {
-            'status': 'ok',
-            'run_id': rid,
-            'rolled_back_to_version': target.get('version'),
-            'history_version': new_rec.get('version'),
-            'config': restore_cfg,
-            'file_mtime_ns': file_mtime_ns,
-        }
-    except Exception as e:
-        return _error(str(e), 500)
+            return json.loads(contract_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "version": "v1",
+        "pipeline": [
+            "agent.get_context",
+            "agent.analyze_params",
+            "agent.propose_patch",
+            "agent.validate_patch",
+            "agent.preview_patch",
+            "user_approval",
+            "agent.apply_patch_with_approval",
+        ],
+        "tools": [],
+    }
+
 
 def agent_tools_contract():
-    return {
-        'status': 'ok',
-        'version': AGENT_TOOL_CONTRACT_VERSION,
-        'philosophy': 'single-purpose tools, JSON in/out, composable pipeline, explicit approval gate',
-        'tools': [
-            {'name': 'agent.get_context', 'input': {'run_id': 'str', 'config_name': 'str?'}, 'output': 'context'},
-            {'name': 'agent.analyze_params', 'input': {'run_id': 'str', 'objective': 'str', 'config_name': 'str?'}, 'output': 'analysis'},
-            {'name': 'agent.propose_patch', 'input': {'goal': 'str', 'constraints': 'dict?'}, 'output': 'patch'},
-            {'name': 'agent.validate_patch', 'input': {'patch': 'dict', 'strict': 'bool?'}, 'output': 'validation'},
-            {'name': 'agent.preview_patch', 'input': {'run_id': 'str', 'patch': 'dict', 'operator': 'str?', 'reason': 'str?'}, 'output': 'approval_ticket'},
-            {'name': 'agent.apply_patch_with_approval', 'input': {'run_id': 'str', 'approval_token': 'str', 'request_hash': 'str?'}, 'output': 'applied_config'},
-            {'name': 'agent.list_run_history', 'input': {'run_id': 'str'}, 'output': 'history'},
-            {'name': 'agent.rollback_run_config', 'input': {'run_id': 'str', 'target_version': 'int?'}, 'output': 'rolled_back_config'},
-        ],
-        'error_codes': {
-            'E_PATCH_INVALID': 400,
-            'E_APPROVAL_EXPIRED': 400,
-            'E_APPROVAL_REPLAY': 400,
-            'E_RUN_HISTORY_EMPTY': 404,
-            'E_INTERNAL': 500,
-        },
-    }
+    return _load_tools_contract()
 
-def _normalize_agent_tool_name(name: Any) -> str:
-    raw = str(name or '').strip()
-    if not raw:
-        return ''
-    lowered = raw.lower().replace('-', '_').replace(' ', '_')
-    compact = lowered.replace('.', '').replace('_', '')
-    alias = {
-        'agent.get_context': 'agent.get_context',
-        'agent.analyze_params': 'agent.analyze_params',
-        'agent.propose_patch': 'agent.propose_patch',
-        'agent.validate_patch': 'agent.validate_patch',
-        'agent.preview_patch': 'agent.preview_patch',
-        'agent.apply_patch_with_approval': 'agent.apply_patch_with_approval',
-        'agent.list_run_history': 'agent.list_run_history',
-        'agent.rollback_run_config': 'agent.rollback_run_config',
-        'get_context': 'agent.get_context',
-        'analyze_params': 'agent.analyze_params',
-        'propose_patch': 'agent.propose_patch',
-        'validate_patch': 'agent.validate_patch',
-        'preview_patch': 'agent.preview_patch',
-        'previewpatch': 'agent.preview_patch',
-        'apply_patch_with_approval': 'agent.apply_patch_with_approval',
-        'list_run_history': 'agent.list_run_history',
-        'rollback_run_config': 'agent.rollback_run_config',
-        'agentpreviewpatch': 'agent.preview_patch',
-    }
-    if lowered in alias:
-        return alias[lowered]
-    if compact in alias:
-        return alias[compact]
-    return raw
 
 def agent_tools_execute(payload: AgentToolExecuteRequest):
-    tool = _normalize_agent_tool_name(payload.tool)
-    args = payload.args or {}
-    try:
-        if tool == 'agent.get_context':
-            return {'status': 'ok', 'tool': tool, 'result': _agent_get_context(args.get('run_id', 'default'), args.get('config_name', 'distill_config.yaml'))}
-        if tool == 'agent.analyze_params':
-            return {'status': 'ok', 'tool': tool, 'result': _agent_analyze_params(args.get('run_id', 'default'), args.get('objective', ''), args.get('config_name', 'distill_config.yaml'))}
-        if tool == 'agent.propose_patch':
-            return {'status': 'ok', 'tool': tool, 'result': _agent_propose_patch(args.get('goal', ''), args.get('constraints') or {})}
-        if tool == 'agent.validate_patch':
-            return {'status': 'ok', 'tool': tool, 'result': _agent_validate_patch(args.get('patch') or {}, bool(args.get('strict', True)))}
-        if tool == 'agent.preview_patch':
-            req = AgentPatchPreviewRequest(
-                patch=args.get('patch') or {},
-                run_id=args.get('run_id', 'default'),
-                operator=args.get('operator', 'agent'),
-                reason=args.get('reason', ''),
-            )
-            return agent_patch_preview(req)
-        if tool == 'agent.apply_patch_with_approval':
-            req = AgentPatchApplyRequest(
-                approval_token=args.get('approval_token') or args.get('token'),
-                run_id=args.get('run_id', 'default'),
-                operator=args.get('operator', 'agent'),
-                request_hash=args.get('request_hash'),
-                reason=args.get('reason', ''),
-            )
-            return agent_patch_apply(req)
-        if tool == 'agent.list_run_history':
-            return agent_run_history(args.get('run_id', 'default'))
-        if tool == 'agent.rollback_run_config':
-            req = AgentRunHistoryRollbackRequest(
-                run_id=args.get('run_id', 'default'),
-                target_version=args.get('target_version'),
-                steps=args.get('steps'),
-                operator=args.get('operator', 'agent'),
-                reason=args.get('reason', 'manual rollback'),
-            )
-            return agent_run_rollback(args.get('run_id', 'default'), req)
-        return _error(f'未知工具: {tool}', 404)
-    except Exception as e:
-        return _error(f'{tool} 执行失败: {e}', 500)
+    tool = str(payload.tool or "").strip()
+    args = payload.args if isinstance(payload.args, dict) else {}
+    run_id = str(args.get("run_id") or "default")
+    # region agent log
+    _debug_log(
+        run_id=run_id,
+        hypothesis_id="H20",
+        location="web/services/backend_agent.py:agent_tools_execute",
+        message="Tool execute request received",
+        data={"tool": tool, "arg_keys": sorted(args.keys())},
+    )
+    # endregion
+    out = execute_tool_graph(tool=tool, args=args, executor=_execute_tool, run_id=run_id)
+    result = out.get("result") if isinstance(out, dict) else None
+    if isinstance(result, dict):
+        return result
+    return {"status": "error", "error": "tool_graph_failed"}
+
+
+def agent_patch_validate(payload: AgentPatchValidateRequest):
+    args = {"patch": payload.patch, "strict": payload.strict}
+    return _tool_validate_patch(args)
+
+
+def agent_patch_preview(payload: AgentPatchPreviewRequest):
+    return _tool_preview_patch(
+        {
+            "run_id": payload.run_id,
+            "patch": payload.patch,
+            "operator": payload.operator,
+            "reason": payload.reason,
+        }
+    )
+
+
+def agent_patch_apply(payload: AgentPatchApplyRequest):
+    return _tool_apply_patch_with_approval(
+        {
+            "run_id": payload.run_id,
+            "approval_token": payload.approval_token,
+            "request_hash": payload.request_hash,
+            "operator": payload.operator,
+            "reason": payload.reason,
+        }
+    )
+
+
+def agent_run_history(run_id: str):
+    return _tool_list_run_history({"run_id": run_id})
+
+
+def agent_run_rollback(run_id: str, payload: AgentRunHistoryRollbackRequest):
+    return _tool_rollback_run_config(
+        {
+            "run_id": run_id,
+            "target_version": payload.target_version,
+            "steps": payload.steps,
+            "operator": payload.operator,
+            "reason": payload.reason,
+        }
+    )
+
 
 def agent_model_invoke(payload: AgentModelInvokeRequest):
     try:
-        result = _agent_invoke_model(payload)
-        return {'status': 'ok', **result}
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read().decode('utf-8', errors='replace')
-        except Exception:
-            body = str(e)
-        return _error(f'模型调用失败(HTTP {e.code}): {body}', 502)
-    except Exception as e:
-        return _error(f'模型调用失败: {e}', 500)
+        return invoke_model_graph(payload.model_dump())
+    except Exception as exc:
+        return _error(f"agent model invoke failed: {exc}", 500)
+
 
 def agent_model_invoke_stream(payload: AgentModelInvokeRequest):
-    """浏览器 HTTPS Agent 走本地中继时的 SSE：与前端 readAgentInvokeSseStream 约定一致（见 _generate_openai_compatible_sse）。"""
-    provider = str(payload.provider or '').strip().lower()
-    if provider not in ('openai_compatible', 'openai', 'openai-compatible'):
-        return _error('invoke-stream 当前仅支持 openai_compatible', 400)
-    return StreamingResponse(
-        _generate_openai_compatible_sse(payload),
-        media_type='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no',
-        },
-    )
+    try:
+        return StreamingResponse(
+            invoke_model_graph_stream(payload.model_dump()),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        )
+    except Exception as exc:
+        return _error(f"agent model stream failed: {exc}", 500)
+
+
+__all__ = [
+    "agent_model_invoke",
+    "agent_model_invoke_stream",
+    "agent_patch_apply",
+    "agent_patch_preview",
+    "agent_patch_validate",
+    "agent_run_history",
+    "agent_run_rollback",
+    "agent_tools_contract",
+    "agent_tools_execute",
+    "_filter_change_summary_to_patch_declared",
+    "_leaf_config_diff",
+    "_merge_distill_patch",
+    "_single_leaf_epsilon_declared_patch",
+]

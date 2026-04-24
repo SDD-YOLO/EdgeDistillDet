@@ -2,36 +2,59 @@ export const AGENT_QUICK_PROMPTS = [
   {
     id: "eval_latest",
     label: "评价训练结果",
-    text: "请结合当前训练指标与输出目录，评价最近一次训练结果，并指出主要问题与改进方向；如需改配置，请用 Markdown 代码块给出可在 PowerShell 中执行的命令。"
+    text: "请基于当前 run 的指标与产物，评估最近一次训练是否达标，指出最关键的瓶颈（如精度、召回、过拟合、数据问题），并给出按优先级排序的下一步优化建议。"
   },
   {
     id: "analyze_params",
     label: "分析蒸馏参数",
-    text: "请先按约定输出 tool JSON 调用 agent.get_context，再调用 agent.analyze_params 获取事实，最后给出优化建议；涉及修改 configs/distill_config.yaml 时，请用 Markdown 代码块输出 PowerShell 命令（如 notepad、code、或 Python 一行读写），不要只给泛泛而谈。"
+    text: "请分析当前蒸馏相关参数设置，结合目标任务判断哪些参数最影响效果与稳定性，并给出可执行的调参方案（包含建议值、原因、预期收益与潜在风险）。"
   },
   {
     id: "list_runs",
     label: "实验目录",
-    text: "请使用工具说明当前训练输出目录、exp 命名规则，以及如何定位某次实验的权重与曲线。"
+    text: "请梳理当前实验输出目录结构，说明各关键文件/子目录的用途（如权重、日志、曲线、配置快照），并告诉我如何最快定位某次实验的核心结果。"
   },
   {
     id: "metrics_report",
     label: "指标摘要",
-    text: "请根据当前训练指标生成简短摘要，并给出下一步建议；若需要本地命令，请用代码块给出。"
+    text: "请生成本次训练的指标摘要：先给关键结论，再列出主要指标表现与变化趋势，最后给出 2-3 条最值得执行的后续动作。"
   }
 ];
 
 const TERMINAL_TOOL_JSON_MAX = 14000;
+const BLOCKED_COMMAND_HINT_RE = /执行命令\s*[（(]\s*需审批\s*[）)]/i;
+const BLOCKED_DISTILL_CMD_RE = /^\s*`{0,3}\s*python\s+distill\.py\s+--config\s+configs[\\/]+distill_config\.yaml\s*`{0,3}\s*$/i;
+
+function isBlockedLine(line) {
+  const raw = typeof line === "string" ? line : "";
+  const t = raw.trim();
+  if (!t) return false;
+  if (BLOCKED_COMMAND_HINT_RE.test(t)) return true;
+  return BLOCKED_DISTILL_CMD_RE.test(t);
+}
+
+export function sanitizeBlockedCommandHints(text) {
+  const raw = typeof text === "string" ? text : "";
+  if (!raw) return "";
+  const cleaned = raw
+    .split("\n")
+    .filter((line) => !isBlockedLine(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return cleaned;
+}
 
 /** 从模型回复中提取「可执行」代码块（排除单行 tool JSON） */
 export function extractExecutableFences(reply) {
-  const raw = typeof reply === "string" ? reply : "";
+  const raw = sanitizeBlockedCommandHints(reply);
   const out = [];
   const fenceRe = /```([^\n`]*)\n?([\s\S]*?)```/g;
   let m;
   while ((m = fenceRe.exec(raw)) !== null) {
     const inner = (m[2] || "").trim();
     if (!inner) continue;
+    if (isBlockedLine(inner)) continue;
     if (/^\s*\{\s*"tool"\s*:/.test(inner) && inner.length < 1200) continue;
     const lang = (m[1] || "").trim().toLowerCase();
     if (lang === "json" && /"tool"\s*:/.test(inner)) continue;
@@ -42,12 +65,14 @@ export function extractExecutableFences(reply) {
 
 /** 右侧「Agent 输出」：分节展示，避免与对话重复堆叠 */
 export function formatAgentTerminalOutput(reply, toolLogs) {
-  const fences = extractExecutableFences(reply);
-  const heuristicLines = (typeof reply === "string" ? reply : "")
+  const sanitizedReply = sanitizeBlockedCommandHints(reply);
+  const fences = extractExecutableFences(sanitizedReply);
+  const heuristicLines = sanitizedReply
     .split("\n")
     .filter((line) => {
       const t = line.trim();
       if (!t || t.startsWith("```")) return false;
+      if (isBlockedLine(t)) return false;
       return /^(python|pip|cd|git|curl|notepad|code|\$|\.\/|Invoke-)/i.test(t);
     })
     .join("\n")
@@ -157,9 +182,10 @@ function splitEmbeddedReasoningFromReply(text) {
 /** displayReply 始终剥离内嵌块；displayReasoning 仅来自 API */
 export function buildDisplayReplyAndReasoning(rawReply, reasoningFromApi) {
   const { main } = splitEmbeddedReasoningFromReply(rawReply);
+  const sanitizedMain = sanitizeBlockedCommandHints(main);
   const apiReason =
     typeof reasoningFromApi === "string" && reasoningFromApi.trim() ? reasoningFromApi.trim() : "";
-  return { displayReply: main, displayReasoning: apiReason };
+  return { displayReply: sanitizedMain, displayReasoning: apiReason };
 }
 
 export function normalizeToolName(name) {
@@ -311,10 +337,11 @@ function findFirstToolJsonRange(raw) {
 }
 
 export function softenAgentBubbleText(raw, streaming) {
-  let t = typeof raw === "string" ? raw : "";
+  let t = sanitizeBlockedCommandHints(raw);
   t = t.replace(/\r\n/g, "\n");
   t = t.replace(/(^|\n)\s*\[tool:[^\]\n]+\]\s*/g, "$1");
-  t = t.replace(/(^|\n)\s*\[assistant\][^\n]*/gi, "$1");
+  t = t.replace(/(^|\n)\s*\[(assistant|agent)\][^\n]*/gi, "$1");
+  t = t.replace(/\[(assistant|agent)\]\s*/gi, "");
   let guard = 0;
   while (guard < 24) {
     guard += 1;
@@ -461,8 +488,8 @@ export function formatChangeSummaryForChat(summary) {
   const n = summary.stats?.changed ?? paths.length;
   const lines = paths.map((p) => {
     const { path, kind, before, after } = p;
-    const b = before === undefined ? "—" : JSON.stringify(before);
-    const a = after === undefined ? "—" : JSON.stringify(after);
+    const b = before === undefined ? "（缺失）" : JSON.stringify(before);
+    const a = after === undefined ? "（缺失）" : JSON.stringify(after);
     if (kind === "added") return `- ${path}: （新增）→ ${a}`;
     if (kind === "removed") return `- ${path}: ${b} → （删除）`;
     return `- ${path}: ${b} → ${a}`;

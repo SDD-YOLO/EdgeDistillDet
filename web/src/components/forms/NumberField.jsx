@@ -1,9 +1,11 @@
+import { Input } from "../ui/input";
+
 export function NumberField({ label, value, onChange, step, disabled }) {
   const hasValue = value !== undefined && value !== null && String(value) !== "";
   return (
     <div className="form-group">
       <div className={`md-field ${hasValue ? "has-value" : ""}`}>
-        <input
+        <Input
           className="md-input"
           type="number"
           step={step}

@@ -20,7 +20,6 @@ training:
   epochs: 150
   imgsz: 640
   batch: 16
-  workers: 0
   lr0: 0.01
   lrf: 0.1
   warmup_epochs: 3

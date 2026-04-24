@@ -14,6 +14,7 @@ import {
 } from "chart.js";
 import { fetchMetricsBySource, fetchMetricsList } from "../../api/metricsApi";
 import { M3Select } from "../../components/forms/M3Select";
+import { Button } from "../../components/ui/button";
 
 Chart.register(
   BarController,
@@ -287,9 +288,9 @@ function MetricsPanel({ toast, active }) {
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-metrics" aria-hidden={!active}>
       <div className="metrics-toolbar">
         <div className="toolbar-left">
-          <button className="md-btn md-btn-outlined metrics-refresh-btn" onClick={() => refreshSources(true)}>
+          <Button variant="outline" className="md-btn md-btn-outlined metrics-refresh-btn" onClick={() => refreshSources(true)}>
             <span className="material-icons">refresh</span>刷新数据
-          </button>
+          </Button>
           <M3Select
             className="metrics-source-select"
             value={source}
@@ -350,7 +351,7 @@ function MetricsPanel({ toast, active }) {
                     options={EPOCH_RANGE_OPTIONS}
                     ariaLabel="选择损失范围"
                   />
-                  <button className="btn-icon-sm" onClick={() => exportChart(lossRef, "loss-chart")}><span className="material-icons">download</span></button>
+                  <Button size="icon" variant="outline" className="btn-icon-sm" onClick={() => exportChart(lossRef, "loss-chart")}><span className="material-icons">download</span></Button>
                 </div>
               </div>
               <div className="chart-body"><canvas ref={lossRef} /></div>
@@ -370,7 +371,7 @@ function MetricsPanel({ toast, active }) {
                     options={EPOCH_RANGE_OPTIONS}
                     ariaLabel="选择 mAP 曲线范围"
                   />
-                  <button className="btn-icon-sm" onClick={() => exportChart(mapRef, "map-chart")}><span className="material-icons">download</span></button>
+                  <Button size="icon" variant="outline" className="btn-icon-sm" onClick={() => exportChart(mapRef, "map-chart")}><span className="material-icons">download</span></Button>
                 </div>
               </div>
               <div className="chart-body"><canvas ref={mapRef} /></div>
@@ -390,7 +391,7 @@ function MetricsPanel({ toast, active }) {
                     options={EPOCH_RANGE_OPTIONS}
                     ariaLabel="选择学习率曲线范围"
                   />
-                  <button className="btn-icon-sm" onClick={() => exportChart(lrRef, "lr-chart")}><span className="material-icons">download</span></button>
+                  <Button size="icon" variant="outline" className="btn-icon-sm" onClick={() => exportChart(lrRef, "lr-chart")}><span className="material-icons">download</span></Button>
                 </div>
               </div>
               <div className="chart-body"><canvas ref={lrRef} /></div>
@@ -427,9 +428,9 @@ function MetricsPanel({ toast, active }) {
             <div className="chart-card full-width">
               <div className="chart-header">
                 <h3>训练结果摘要</h3>
-                <button className="md-btn md-btn-tonal sm-btn" onClick={exportTable}>
+                <Button variant="secondary" className="md-btn md-btn-tonal sm-btn" onClick={exportTable}>
                   <span className="material-icons">table_chart</span>导出表格
-                </button>
+                </Button>
               </div>
               <div className="table-container">
                 <table className="md-table">

@@ -14,6 +14,7 @@ import { NumberField } from "../../components/forms/NumberField";
 import { PathField } from "../../components/forms/PathField";
 import { SelectField } from "../../components/forms/SelectField";
 import { TextField } from "../../components/forms/TextField";
+import { Button } from "../../components/ui/button";
 import { DISTILL_CONFIG_UPDATED_EVENT } from "../../constants/distillConfigSync";
 import { DEFAULT_FORM, COMPUTE_PRESETS, inferComputeProviderFromConfig } from "../../constants/trainingDefaults";
 import { detectLogLevel } from "../../utils/logging";
@@ -28,22 +29,42 @@ function normalizeWandbForUi(wandb) {
   return next;
 }
 
+const LEGACY_DISTILLATION_KEYS = ["temperature", "schedule_type", "feat_layer", "alpha", "distill_type"];
+const LEGACY_TRAINING_KEYS = ["warm_epochs", "workers", "batch_size", "learning_rate", "grad_clip"];
+const LEGACY_OUTPUT_KEYS = ["model_dir", "log_dir"];
+
+function omitKeys(source, keys) {
+  const out = { ...(source || {}) };
+  keys.forEach((key) => delete out[key]);
+  return out;
+}
+
 /** 将服务端/Agent 返回的 distill 配置片段合并进表单 state（与 mergeConfig 行为一致） */
 function mergeDistillConfigIntoForm(prev, config) {
   if (!config || typeof config !== "object") return prev;
   const inferredProvider = inferComputeProviderFromConfig(config, prev.training?.compute_provider || "local");
+  const incomingDistillation = omitKeys(config?.distillation, LEGACY_DISTILLATION_KEYS);
+  const incomingTraining = omitKeys(config?.training, LEGACY_TRAINING_KEYS);
+  const incomingOutput = omitKeys(config?.output, LEGACY_OUTPUT_KEYS);
+  // Backward compatibility: older UI may have written training.warm_epochs by mistake.
+  if (
+    Object.prototype.hasOwnProperty.call(incomingTraining, "warm_epochs") &&
+    !Object.prototype.hasOwnProperty.call(incomingTraining, "warmup_epochs")
+  ) {
+    incomingTraining.warmup_epochs = incomingTraining.warm_epochs;
+  }
+  delete incomingTraining.warm_epochs;
   return {
     ...prev,
-    ...config,
-    distillation: { ...prev.distillation, ...config?.distillation },
+    distillation: { ...prev.distillation, ...incomingDistillation },
     training: {
       ...prev.training,
-      ...config?.training,
-      cloud_api: { ...prev.training?.cloud_api, ...config?.training?.cloud_api },
-      dataset_api: { ...prev.training?.dataset_api, ...config?.training?.dataset_api },
+      ...incomingTraining,
+      cloud_api: { ...prev.training?.cloud_api, ...(incomingTraining?.cloud_api || {}) },
+      dataset_api: { ...prev.training?.dataset_api, ...(incomingTraining?.dataset_api || {}) },
       compute_provider: inferredProvider
     },
-    output: { ...prev.output, ...config?.output },
+    output: { ...prev.output, ...incomingOutput },
     wandb: { ...prev.wandb, ...normalizeWandbForUi(config?.wandb) }
   };
 }
@@ -77,6 +98,44 @@ function TrainingPanel({ toast, active }) {
   const useDatasetApi = isRemoteApi && datasetSource === "api";
   const isResumeMode = mode === "resume";
 
+  useEffect(() => {
+    if (!active) return;
+    // #region agent log
+    try {
+      const labels = Array.from(document.querySelectorAll(".training-form-grid label, .training-form-grid .md-field-label"))
+        .map((node) => String(node?.textContent || "").trim())
+        .filter((text) => text.includes("预热"));
+      fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "87ccac" },
+        body: JSON.stringify({
+          sessionId: "87ccac",
+          runId: "repro-3",
+          hypothesisId: "H5",
+          location: "web/src/features/training/TrainingPanel.jsx:debugWarmupLabels",
+          message: "visible warmup-related labels",
+          data: { labels },
+          timestamp: Date.now()
+        })
+      }).catch(() => {});
+    } catch (error) {
+      fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "87ccac" },
+        body: JSON.stringify({
+          sessionId: "87ccac",
+          runId: "repro-3",
+          hypothesisId: "H5",
+          location: "web/src/features/training/TrainingPanel.jsx:debugWarmupLabels",
+          message: "failed to collect warmup labels",
+          data: { error: String(error?.message || error) },
+          timestamp: Date.now()
+        })
+      }).catch(() => {});
+    }
+    // #endregion
+  }, [active, form.distillation.warm_epochs, form.training.warmup_epochs]);
+
   const setNested = (scope, key, value) => {
     setForm((prev) => ({
       ...prev,
@@ -95,7 +154,13 @@ function TrainingPanel({ toast, active }) {
   };
 
   const buildConfigPayload = (sourceForm) => {
-    const payload = JSON.parse(JSON.stringify(sourceForm || {}));
+    const cloned = JSON.parse(JSON.stringify(sourceForm || {}));
+    const payload = {
+      distillation: omitKeys(cloned.distillation, LEGACY_DISTILLATION_KEYS),
+      training: omitKeys(cloned.training, LEGACY_TRAINING_KEYS),
+      output: omitKeys(cloned.output, LEGACY_OUTPUT_KEYS),
+      wandb: cloned.wandb || {}
+    };
     const wandb = payload.wandb || {};
     const rawTags = wandb.tags;
     if (typeof rawTags === "string") {
@@ -626,7 +691,7 @@ function TrainingPanel({ toast, active }) {
           </div>
 
           <div className="launch-actions">
-            <button
+            <Button
               id="btn-start-training"
               className="btn-start"
               onClick={startTraining}
@@ -634,20 +699,20 @@ function TrainingPanel({ toast, active }) {
               title={isResumeStartDisabled ? "当前没有可用断点，无法开始断点续训" : ""}
             >
               <span className="material-icons">play_arrow</span>开始训练
-            </button>
-            <button id="btn-stop-training" className="btn-stop" onClick={stopTraining} disabled={!running}>
+            </Button>
+            <Button id="btn-stop-training" className="btn-stop" variant="destructive" onClick={stopTraining} disabled={!running}>
               <span className="material-icons">stop</span>停止训练
-            </button>
-            <label className="md-btn md-btn-tonal" style={{ cursor: "pointer" }}>
+            </Button>
+            <label className="md-btn md-btn-tonal cursor-pointer">
               <span className="material-icons">file_open</span>加载配置
               <input type="file" accept=".yaml,.yml" style={{ display: "none" }} onChange={loadConfigFromFile} />
             </label>
-            <button className="md-btn md-btn-outlined" onClick={() => saveConfig().then(() => toast("配置已保存", "success")).catch((e) => toast(e.message, "error"))}>
+            <Button variant="outline" className="md-btn md-btn-outlined" onClick={() => saveConfig().then(() => toast("配置已保存", "success")).catch((e) => toast(e.message, "error"))}>
               <span className="material-icons">save</span>保存配置
-            </button>
-            <button className="md-btn md-btn-text" onClick={resetForm}>
+            </Button>
+            <Button variant="ghost" className="md-btn md-btn-text" onClick={resetForm}>
               <span className="material-icons">refresh</span>重置表单
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -809,7 +874,7 @@ function TrainingPanel({ toast, active }) {
               <NumberField label="初始 Alpha 权重" value={form.distillation.alpha_init} step="0.01" onChange={(v) => setNested("distillation", "alpha_init", v)} disabled={running} />
               <NumberField label="温度上限 T_max" value={form.distillation.T_max} step="0.1" onChange={(v) => setNested("distillation", "T_max", v)} disabled={running} />
               <NumberField label="温度下限 T_min" value={form.distillation.T_min} step="0.1" onChange={(v) => setNested("distillation", "T_min", v)} disabled={running} />
-              <NumberField label="预热轮数" value={form.distillation.warm_epochs} step="1" onChange={(v) => setNested("distillation", "warm_epochs", v)} disabled={running} />
+              <NumberField label="训练预热轮数" value={form.distillation.warm_epochs} step="1" onChange={(v) => setNested("distillation", "warm_epochs", v)} disabled={running} />
               <NumberField label="KD 损失权重 w_kd" value={form.distillation.w_kd} step="0.01" onChange={(v) => setNested("distillation", "w_kd", v)} disabled={running} />
               <NumberField label="Focal KD 权重 w_focal" value={form.distillation.w_focal} step="0.01" onChange={(v) => setNested("distillation", "w_focal", v)} disabled={running} />
               <NumberField label="特征对齐权重 w_feat" value={form.distillation.w_feat} step="0.01" onChange={(v) => setNested("distillation", "w_feat", v)} disabled={running} />
@@ -934,7 +999,6 @@ function TrainingPanel({ toast, active }) {
                 disabled={running}
               />
               <NumberField label="Batch Size" value={form.training.batch} step="1" onChange={(v) => setNested("training", "batch", v)} disabled={running} />
-              <NumberField label="数据加载线程数" value={form.training.workers} step="1" onChange={(v) => setNested("training", "workers", v)} disabled={running} />
               <NumberField label="初始学习率 lr0" value={form.training.lr0} step="0.001" onChange={(v) => setNested("training", "lr0", v)} disabled={running} />
               <NumberField label="最终学习率因子 lrf" value={form.training.lrf} step="0.01" onChange={(v) => setNested("training", "lrf", v)} disabled={running} />
               <NumberField label="学习率预热轮数" value={form.training.warmup_epochs} step="0.5" onChange={(v) => setNested("training", "warmup_epochs", v)} disabled={running} />

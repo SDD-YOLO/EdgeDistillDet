@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Activity, Bot, Moon, Radar, Settings2, Sun } from "lucide-react";
 import AgentPanel from "./features/agent/AgentPanel";
 import MetricsPanel from "./features/metrics/MetricsPanel";
 import TrainingPanel from "./features/training/TrainingPanel";
+import { Button } from "./components/ui/button";
 import { useToast } from "./hooks/useToast";
 
 function App() {
@@ -9,9 +11,9 @@ function App() {
   const [theme, setTheme] = useState(() => window.localStorage.getItem("edgedistilldet-theme") || "light");
   const { toasts, push } = useToast();
   const navItems = [
-    { key: "training", icon: "tune", label: "训练配置", desc: "配置蒸馏参数并启动训练流程" },
-    { key: "metrics", icon: "analytics", label: "指标监控", desc: "查看训练曲线与关键性能指标" },
-    { key: "agent", icon: "smart_toy", label: "Agent", desc: "通过智能助手分析与辅助调参" }
+    { key: "training", icon: Settings2, label: "训练配置", desc: "配置蒸馏参数并启动训练流程" },
+    { key: "metrics", icon: Activity, label: "指标监控", desc: "查看训练曲线与关键性能指标" },
+    { key: "agent", icon: Bot, label: "Agent", desc: "通过智能助手分析与辅助调参" }
   ];
   const activeNav = navItems.find((item) => item.key === activeTab) || navItems[0];
 
@@ -20,12 +22,36 @@ function App() {
     window.localStorage.setItem("edgedistilldet-theme", theme);
   }, [theme]);
 
+  useEffect(() => {
+    const root = document.getElementById("root");
+    // #region agent log
+    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
+      body: JSON.stringify({
+        sessionId: "e872f3",
+        runId: `app-${Date.now()}`,
+        hypothesisId: "H69",
+        location: "App.jsx:activeTabEffect",
+        message: "active tab and root geometry",
+        data: {
+          activeTab: String(activeTab || ""),
+          rootClientHeight: Number(root?.clientHeight || 0),
+          rootClientWidth: Number(root?.clientWidth || 0),
+          bodyClientHeight: Number(document.body?.clientHeight || 0)
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+    // #endregion
+  }, [activeTab]);
+
   return (
     <>
       <div className="console-shell">
         <aside className="console-sidebar">
           <div className="sidebar-brand">
-            <span className="material-icons app-icon">radar</span>
+            <Radar size={22} className="text-primary" />
             <div className="brand-text">
               <h1 className="app-title">EdgeDistillDet</h1>
               <span className="app-subtitle">边缘蒸馏训练工作台</span>
@@ -44,29 +70,30 @@ function App() {
                 className={`sidebar-nav-btn ${activeTab === item.key ? "active" : ""}`}
                 onClick={() => setActiveTab(item.key)}
               >
-                <span className="material-icons tab-icon">{item.icon}</span>
+                <item.icon size={16} />
                 <span>{item.label}</span>
               </button>
             ))}
           </nav>
 
           <div className="sidebar-bottom">
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               className="theme-toggle"
               title="切换明暗主题"
               onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
             >
-              <span className="material-icons icon-sun">light_mode</span>
-              <span className="material-icons icon-moon">dark_mode</span>
+              {theme === "light" ? <Sun size={14} className="icon-sun" /> : <Moon size={14} className="icon-moon" />}
               <span className="theme-toggle-label">{theme === "light" ? "浅色模式" : "深色模式"}</span>
-            </button>
+            </Button>
           </div>
         </aside>
 
         <main className="console-main">
           <header className="console-page-header">
             <div className="console-page-meta">
-              <span className="material-icons">{activeNav.icon}</span>
+              <activeNav.icon size={18} className="text-primary" />
               <div>
                 <h2>{activeNav.label}</h2>
                 <p>{activeNav.desc}</p>
@@ -85,9 +112,7 @@ function App() {
       <div id="toast-container" className="toast-container">
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast ${toast.type}`}>
-            <span className="material-icons">
-              {toast.type === "success" ? "check_circle" : toast.type === "error" ? "error" : "info"}
-            </span>
+            {toast.type === "success" ? <Activity size={16} /> : toast.type === "error" ? <Bot size={16} /> : <Settings2 size={16} />}
             <span>{toast.message}</span>
           </div>
         ))}
