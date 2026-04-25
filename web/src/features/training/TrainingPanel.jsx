@@ -8,7 +8,7 @@ import {
   saveDistillConfig,
   uploadConfigFile
 } from "../../api/configApi";
-import { fetchResumeCandidates, fetchTrainLogs, fetchTrainStatus, startTrain, stopTrain } from "../../api/trainApi";
+import { downloadTrainLogsBlob, fetchResumeCandidates, startTrain, stopTrain } from "../../api/trainApi";
 import { M3Select } from "../../components/forms/M3Select";
 import { NumberField } from "../../components/forms/NumberField";
 import { PathField } from "../../components/forms/PathField";
@@ -17,8 +17,9 @@ import { TextField } from "../../components/forms/TextField";
 import { Button } from "../../components/ui/button";
 import { DISTILL_CONFIG_UPDATED_EVENT } from "../../constants/distillConfigSync";
 import { DEFAULT_FORM, COMPUTE_PRESETS, inferComputeProviderFromConfig } from "../../constants/trainingDefaults";
+import { TrainingModeSelector } from "./components/TrainingModeSelector";
+import { useTrainingData } from "./hooks/useTrainingData";
 import { detectLogLevel } from "../../utils/logging";
-import { formatTime } from "../../utils/time";
 
 function normalizeWandbForUi(wandb) {
   if (!wandb || typeof wandb !== "object") return wandb;
@@ -97,44 +98,6 @@ function TrainingPanel({ toast, active }) {
   const datasetSource = form.training?.dataset_api?.source || (form.training?.dataset_api?.enabled ? "api" : "path");
   const useDatasetApi = isRemoteApi && datasetSource === "api";
   const isResumeMode = mode === "resume";
-
-  useEffect(() => {
-    if (!active) return;
-    // #region agent log
-    try {
-      const labels = Array.from(document.querySelectorAll(".training-form-grid label, .training-form-grid .md-field-label"))
-        .map((node) => String(node?.textContent || "").trim())
-        .filter((text) => text.includes("预热"));
-      fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "87ccac" },
-        body: JSON.stringify({
-          sessionId: "87ccac",
-          runId: "repro-3",
-          hypothesisId: "H5",
-          location: "web/src/features/training/TrainingPanel.jsx:debugWarmupLabels",
-          message: "visible warmup-related labels",
-          data: { labels },
-          timestamp: Date.now()
-        })
-      }).catch(() => {});
-    } catch (error) {
-      fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "87ccac" },
-        body: JSON.stringify({
-          sessionId: "87ccac",
-          runId: "repro-3",
-          hypothesisId: "H5",
-          location: "web/src/features/training/TrainingPanel.jsx:debugWarmupLabels",
-          message: "failed to collect warmup labels",
-          data: { error: String(error?.message || error) },
-          timestamp: Date.now()
-        })
-      }).catch(() => {});
-    }
-    // #endregion
-  }, [active, form.distillation.warm_epochs, form.training.warmup_epochs]);
 
   const setNested = (scope, key, value) => {
     setForm((prev) => ({
@@ -265,6 +228,19 @@ function TrainingPanel({ toast, active }) {
     }
   };
 
+  useTrainingData({
+    running,
+    setRunning,
+    setProgress,
+    setLogs,
+    refreshResumeCandidates,
+    resumeListProjectRef,
+    lastServerRunningRef,
+    startTimestampRef,
+    logOffsetRef,
+    parseMetricsFromLogLines
+  });
+
   useEffect(() => {
     resumeListProjectRef.current = form.output.project || "runs/distill";
   }, [form.output.project]);
@@ -311,124 +287,6 @@ function TrainingPanel({ toast, active }) {
       };
     });
   }, [isResumeMode, resumeCandidates, selectedResumeIndex]);
-
-  useEffect(() => {
-    let statusTimer = null;
-
-    const pollTrainStatus = async () => {
-      try {
-        const data = await fetchTrainStatus();
-        const nextRunning = Boolean(data.running);
-        if (lastServerRunningRef.current && !nextRunning) {
-          refreshResumeCandidates(resumeListProjectRef.current || "runs/distill", false);
-        }
-        lastServerRunningRef.current = nextRunning;
-        setRunning(nextRunning);
-        if (nextRunning) {
-          if (!startTimestampRef.current && data.start_time) {
-            startTimestampRef.current = Math.floor(Number(data.start_time) * 1000);
-          }
-          const currentEpoch = Number(data.current_epoch) || 0;
-          const totalEpoch = Number(data.total_epochs) || 0;
-          const now = Date.now();
-          const started = startTimestampRef.current || now;
-          const elapsedSec = Math.floor((now - started) / 1000);
-          const expectedSec = currentEpoch > 0 && totalEpoch > 0 ? Math.round((elapsedSec / currentEpoch) * totalEpoch) : 0;
-          setProgress({
-            current: currentEpoch,
-            total: totalEpoch,
-            elapsed: formatTime(elapsedSec),
-            expected: expectedSec > 0 ? formatTime(expectedSec) : "--:--:--"
-          });
-        } else if (!nextRunning) {
-          startTimestampRef.current = null;
-        }
-      } catch {
-        // 静默处理
-      }
-    };
-
-    const statusIntervalMs = () => {
-      if (running) return 2000;
-      return document.hidden ? 20000 : 5000;
-    };
-
-    const scheduleStatus = () => {
-      if (statusTimer != null) {
-        window.clearInterval(statusTimer);
-        statusTimer = null;
-      }
-      statusTimer = window.setInterval(pollTrainStatus, statusIntervalMs());
-    };
-
-    const onVisibilityForStatus = () => {
-      if (!document.hidden) {
-        pollTrainStatus();
-        refreshResumeCandidates(resumeListProjectRef.current || "runs/distill", false);
-      }
-      scheduleStatus();
-    };
-
-    document.addEventListener("visibilitychange", onVisibilityForStatus);
-    scheduleStatus();
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityForStatus);
-      if (statusTimer != null) window.clearInterval(statusTimer);
-    };
-  }, [running]);
-
-  useEffect(() => {
-    if (!running) return undefined;
-    const project = () => resumeListProjectRef.current || "runs/distill";
-    const tick = () => {
-      if (document.hidden) return;
-      refreshResumeCandidates(project(), false);
-    };
-    tick();
-    const id = window.setInterval(tick, 12000);
-    return () => window.clearInterval(id);
-  }, [running]);
-
-  useEffect(() => {
-    if (!running) return undefined;
-    let logTimer = null;
-
-    const pollLogs = async () => {
-      try {
-        const offset = Number.isFinite(logOffsetRef.current) ? logOffsetRef.current : 0;
-        const data = await fetchTrainLogs({ offset, limit: 120 });
-        if (!Array.isArray(data.logs) || data.logs.length === 0) return;
-        logOffsetRef.current = data.offset + data.logs.length;
-        setLogs((prev) => [...prev, ...data.logs].slice(-800));
-        parseMetricsFromLogLines(data.logs, setProgress);
-      } catch {
-        // 静默处理
-      }
-    };
-
-    const scheduleLogs = () => {
-      if (logTimer != null) {
-        window.clearInterval(logTimer);
-        logTimer = null;
-      }
-      if (document.hidden) return;
-      logTimer = window.setInterval(pollLogs, 1200);
-    };
-
-    const onVisibilityForLogs = () => {
-      if (!document.hidden) {
-        pollLogs();
-      }
-      scheduleLogs();
-    };
-
-    document.addEventListener("visibilitychange", onVisibilityForLogs);
-    scheduleLogs();
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityForLogs);
-      if (logTimer != null) window.clearInterval(logTimer);
-    };
-  }, [running]);
 
   useEffect(() => {
     const el = logContainerRef.current;
@@ -635,9 +493,7 @@ function TrainingPanel({ toast, active }) {
 
   const downloadLogs = async () => {
     try {
-      const response = await fetch("/api/train/logs/download");
-      if (!response.ok) throw new Error("下载日志失败");
-      const blob = await response.blob();
+      const blob = await downloadTrainLogsBlob();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -667,33 +523,18 @@ function TrainingPanel({ toast, active }) {
             <p className="launch-desc">配置参数后选择训练模式并启动训练任务</p>
           </div>
 
-          <div className="launch-modes">
-            <label className={`mode-option ${mode === "distill" ? "selected" : ""}`}>
-              <input type="radio" checked={mode === "distill"} onChange={switchToDistillMode} disabled={running} />
-              <div className="mode-card">
-                <span className="material-icons mode-icon">school</span>
-                <div className="mode-text">
-                  <strong>蒸馏训练</strong>
-                  <span>知识蒸馏训练，训练完成后自动评估模型性能</span>
-                </div>
-              </div>
-            </label>
-            <label className={`mode-option ${mode === "resume" ? "selected" : ""}`}>
-              <input type="radio" checked={mode === "resume"} onChange={switchToResumeMode} disabled={running} />
-              <div className="mode-card">
-                <span className="material-icons mode-icon">restart_alt</span>
-                <div className="mode-text">
-                  <strong>断点续训</strong>
-                  <span>从上次检查点恢复训练进度</span>
-                </div>
-              </div>
-            </label>
-          </div>
+          <TrainingModeSelector
+            mode={mode}
+            running={running}
+            onSwitchToDistillMode={switchToDistillMode}
+            onSwitchToResumeMode={switchToResumeMode}
+          />
 
           <div className="launch-actions">
             <Button
               id="btn-start-training"
               className="btn-start"
+              variant="default"
               onClick={startTraining}
               disabled={running || isResumeStartDisabled}
               title={isResumeStartDisabled ? "当前没有可用断点，无法开始断点续训" : ""}
@@ -703,14 +544,14 @@ function TrainingPanel({ toast, active }) {
             <Button id="btn-stop-training" className="btn-stop" variant="destructive" onClick={stopTraining} disabled={!running}>
               <span className="material-icons">stop</span>停止训练
             </Button>
-            <label className="md-btn md-btn-tonal cursor-pointer">
+            <Button component="label" variant="secondary" className="cursor-pointer">
               <span className="material-icons">file_open</span>加载配置
               <input type="file" accept=".yaml,.yml" style={{ display: "none" }} onChange={loadConfigFromFile} />
-            </label>
-            <Button variant="outline" className="md-btn md-btn-outlined" onClick={() => saveConfig().then(() => toast("配置已保存", "success")).catch((e) => toast(e.message, "error"))}>
+            </Button>
+            <Button variant="outline" onClick={() => saveConfig().then(() => toast("配置已保存", "success")).catch((e) => toast(e.message, "error"))}>
               <span className="material-icons">save</span>保存配置
             </Button>
-            <Button variant="ghost" className="md-btn md-btn-text" onClick={resetForm}>
+            <Button variant="ghost" onClick={resetForm}>
               <span className="material-icons">refresh</span>重置表单
             </Button>
           </div>
@@ -1091,15 +932,17 @@ function TrainingPanel({ toast, active }) {
               <h3><span className="material-icons">terminal</span>训练日志</h3>
               <div className="log-controls">
                 <span className={`badge ${running ? "running" : "idle"}`}>{running ? "训练中" : "空闲"}</span>
-                <button className="btn-icon-sm" onClick={clearLogs} title="清空日志"><span className="material-icons">delete_outline</span></button>
-                <button className="btn-icon-sm" onClick={downloadLogs} title="下载日志"><span className="material-icons">download</span></button>
-                <button
+                <Button size="icon" variant="outline" className="btn-icon-sm" onClick={clearLogs} title="清空日志"><span className="material-icons">delete_outline</span></Button>
+                <Button size="icon" variant="outline" className="btn-icon-sm" onClick={downloadLogs} title="下载日志"><span className="material-icons">download</span></Button>
+                <Button
+                  size="icon"
+                  variant="outline"
                   className={`btn-icon-sm ${!autoScroll ? "is-disabled" : ""}`}
                   onClick={() => setAutoScroll((prev) => !prev)}
                   title="自动滚动"
                 >
                   <span className="material-icons">vertical_align_bottom</span>
-                </button>
+                </Button>
               </div>
             </div>
 

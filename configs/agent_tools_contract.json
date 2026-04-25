@@ -1,9 +1,10 @@
 {
-  "version": "v2-langgraph",
+  "version": "v3-agentic-rag",
   "runtime": "langgraph",
-  "philosophy": "state-graph tools, JSON input/output, explicit approval gate, replay-safe apply",
+  "philosophy": "agentic rag with server-side react loop, retrieval/tool autonomy, explicit approval gate, replay-safe apply",
   "pipeline": [
     "agent.get_context",
+    "agent.retrieve_context",
     "agent.analyze_params",
     "agent.propose_patch",
     "agent.validate_patch",
@@ -14,14 +15,30 @@
   "tools": [
     {
       "name": "agent.get_context",
-      "description": "读取 run 上下文、当前配置和指标摘要",
+      "description": "读取 run 上下文与当前配置，并内联返回 training_results（来自 results.csv 的 latest/trend/epoch/tail_rows 摘要）",
       "input_schema": {
         "type": "object",
         "properties": {
           "run_id": { "type": "string" },
-          "config_name": { "type": "string", "default": "distill_config.yaml" }
+          "config_name": { "type": "string", "default": "distill_config.yaml" },
+          "run_path": { "type": "string", "description": "可选，results.csv 路径或其父目录" },
+          "tail": { "type": "integer", "default": 10, "description": "可选，返回最后 N 行指标原始数据" },
+          "runs_root": { "type": "string", "default": "runs", "description": "可选，扫描根目录" }
         },
         "required": ["run_id"]
+      }
+    },
+    {
+      "name": "agent.retrieve_context",
+      "description": "从项目语料和训练产物执行混合检索，返回可引用片段",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "run_id": { "type": "string", "default": "default" },
+          "top_k": { "type": "integer", "default": 5 }
+        },
+        "required": ["query"]
       }
     },
     {
@@ -119,7 +136,25 @@
   "constraints": {
     "allowed_patch_top_level": ["distillation", "training", "output"],
     "approval_required_for_apply": true,
-    "rollback_window_per_run": 5
+    "rollback_window_per_run": 5,
+    "max_react_steps_default": 4
+  },
+  "event_protocol": {
+    "stream_route": "/api/agent/model/invoke-stream",
+    "event_types": [
+      "model_output",
+      "retrieval_hit",
+      "tool_start",
+      "tool_end",
+      "done",
+      "error"
+    ],
+    "event_shape": {
+      "event_type": "string",
+      "timestamp": "number",
+      "step": "number",
+      "payload": "object"
+    }
   },
   "error_codes": {
     "E_PATCH_INVALID": 400,

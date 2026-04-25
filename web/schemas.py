@@ -102,6 +102,11 @@ class AgentModelInvokeRequest(BaseModel):
     endpoint: str | None = None
     extra_headers: dict = Field(default_factory=dict)
     timeout_sec: float = 40.0
+    run_id: str = "default"
+    session_id: str = "default"
+    rag_options: dict = Field(default_factory=dict)
+    tool_policy: dict = Field(default_factory=dict)
+    max_steps: int = 4
 
 
 class TrainStartRequest(BaseModel):

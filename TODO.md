@@ -11,7 +11,7 @@
 - [x] 核心：模型蒸馏、训练管理、可视化
 - [x] 云：AutoDL、Google Colab
 - [x] 监控：W&B
-- [ ] 智能分析：OpenAI / DeepSeek
+- [x] 智能分析：OpenAI / DeepSeek
 
 ---
 
@@ -69,16 +69,16 @@
 
 ## 技术栈
 
-- [ ] FastAPI, React
-- [ ] PyTorch, Transformers
+- [x] FastAPI, React
+- [x] PyTorch
 - [ ] SQLAlchemy, Celery, Redis
-- [ ] W&B, OpenAI / DeepSeek
+- [x] W&B, OpenAI / DeepSeek
 
 ---
 
 ## 备注
 
-- [ ] 完成任务后更新文档
+- [x] 完成任务后更新文档（已同步埋点移除与日志清理说明）
 - [ ] 关键功能配套测试
 - [ ] 定期检查代码质量和性能
 - [ ] 关注用户反馈，及时调整优先级

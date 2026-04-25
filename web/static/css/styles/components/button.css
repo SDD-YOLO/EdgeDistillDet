@@ -1,3 +1,61 @@
 /* Auto-split from styles.css: components/button.css */
 
-/* Auto-split from styles.css: components/button.css */
+.btn-start::before,
+.btn-stop::before,
+.md-btn::before,
+.md-btn-text::before,
+.btn-icon-sm::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: currentColor;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--m3-duration-short2) var(--m3-easing-standard);
+}
+
+.md-btn-filled,
+.md-btn-filled.primary {
+    background: var(--md-primary);
+    color: var(--md-on-primary);
+    box-shadow: var(--shadow-1);
+}
+
+.btn-start {
+    background: var(--md-primary);
+    color: var(--md-on-primary);
+    box-shadow: var(--shadow-1);
+}
+
+.btn-stop {
+    background: var(--md-error-container);
+    color: var(--md-error);
+    border-color: color-mix(in srgb, var(--md-error) 35%, transparent);
+}
+
+.md-btn-tonal {
+    background: var(--md-secondary-container);
+    color: var(--md-on-secondary-container);
+    border-color: transparent;
+}
+
+.md-btn-outlined {
+    background: transparent;
+    color: var(--md-primary);
+    border: 1px solid var(--md-outline);
+}
+
+.md-btn-text {
+    background: transparent;
+    color: var(--md-primary);
+    border-color: transparent;
+}
+
+.md-btn:disabled,
+.md-btn-text:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+    box-shadow: none;
+    pointer-events: none;
+}

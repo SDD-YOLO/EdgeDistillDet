@@ -27,6 +27,7 @@ import yaml
 from ultralytics import YOLO
 
 from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer, _scatter_pr_from_ultralytics_box
+from core.distillation.common import w_feat_to_scalar
 from utils import expand_env_vars
 
 # 训练期 DataLoader 始终 0 workers，避免多进程复制数据集与「像两个训练同时跑」的内存形态
@@ -359,7 +360,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
         warm_epochs=int(distill_cfg.get("warm_epochs", 5)),
         w_kd=float(distill_cfg.get("w_kd", 0.5)),
         w_focal=float(distill_cfg.get("w_focal", 0.3)),
-        w_feat=float(distill_cfg.get("w_feat", 0.0)),
+        w_feat=w_feat_to_scalar(distill_cfg.get("w_feat", 0.0)),
         scale_boost=float(distill_cfg.get("scale_boost", 2.0)),
         focal_gamma=float(distill_cfg.get("focal_gamma", 2.0)),
     )

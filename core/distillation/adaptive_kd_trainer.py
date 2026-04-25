@@ -27,7 +27,7 @@ import torch
 from ultralytics import YOLO
 from ultralytics.models.yolo.detect.train import DetectionTrainer, DEFAULT_CFG
 
-from core.distillation.common import safe_scalar
+from core.distillation.common import safe_scalar, w_feat_to_scalar
 from core.distillation.loss_functions import (
     CompositiveDistillLoss,
     CosineTemperatureScheduler,
@@ -268,7 +268,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
             self._teacher_path = kd["teacher_path"]
             self._warm_epochs = int(kd.get("warm_epochs", 5))
             self._w_kd=float(kd.get("w_kd", 0.5)); self._w_focal=float(kd.get("w_focal", 0.3))
-            self._w_feat=float(kd.get("w_feat", 0.0))
+            self._w_feat = w_feat_to_scalar(kd.get("w_feat", 0.0))
             self._T_max=float(kd.get("T_max", 6.0)); self._T_min=float(kd.get("T_min", 1.5))
             self._alpha_init=float(kd.get("alpha_init", 0.5))
             self._scale_boost=float(kd.get("scale_boost", 2.0)); self._focal_gamma=float(kd.get("focal_gamma", 2.0))

@@ -52,6 +52,7 @@ from .types import GraphState
 
 ToolExecutor = Callable[[str, dict[str, Any], GraphState], Any]
 ModelInvoker = Callable[[GraphState], dict[str, Any]]
+Retriever = Callable[[GraphState], list[dict[str, Any]]]
 
 
 def build_tool_graph(executor: ToolExecutor):
@@ -138,4 +139,103 @@ def build_model_graph(invoker: ModelInvoker):
     graph.add_node("invoke_model", invoke_node)
     graph.add_edge(START, "invoke_model")
     graph.add_edge("invoke_model", END)
+    return graph.compile()
+
+
+def build_agentic_rag_graph(
+    planner: ModelInvoker,
+    executor: ToolExecutor,
+    retriever: Retriever,
+):
+    graph = StateGraph(GraphState)
+
+    def plan_node(state: GraphState) -> GraphState:
+        output = planner(state) or {}
+        action = str(output.get("action") or "final")
+        tool = str(output.get("tool") or "").strip()
+        args = output.get("args") or {}
+        updates: GraphState = {
+            "model_reply": str(output.get("reply") or ""),
+            "model_reasoning": str(output.get("reasoning") or ""),
+            "action": action,
+            "response": output,
+        }
+        if tool:
+            updates["tool_call"] = {"tool": tool, "args": args if isinstance(args, dict) else {}}
+        return updates
+
+    def retrieve_node(state: GraphState) -> GraphState:
+        hits = retriever(state)
+        return {"retrieval_hits": list(hits or [])}
+
+    def execute_node(state: GraphState) -> GraphState:
+        tool_call = state.get("tool_call") or {}
+        tool = str(tool_call.get("tool") or "").strip()
+        args = tool_call.get("args") or {}
+        result = executor(tool, args, state)
+        logs = list(state.get("tool_logs") or [])
+        logs.append({"call": {"tool": tool, "args": args}, "result": result})
+        return {"tool_result": result, "tool_logs": logs}
+
+    def observe_node(state: GraphState) -> GraphState:
+        step = int(state.get("step_count") or 0) + 1
+        trace = list(state.get("trace") or [])
+        action = str(state.get("action") or "")
+        event: dict[str, Any] = {"step": step, "action": action}
+        if action == "retrieve":
+            event["retrieval_hits"] = state.get("retrieval_hits") or []
+        if action == "tool":
+            event["tool_call"] = state.get("tool_call") or {}
+            event["tool_result"] = state.get("tool_result")
+        trace.append(event)
+        return {"step_count": step, "trace": trace}
+
+    def finalize_node(state: GraphState) -> GraphState:
+        return {
+            "response": {
+                "status": "ok",
+                "reply": str(state.get("model_reply") or ""),
+                "reasoning": str(state.get("model_reasoning") or ""),
+                "trace": list(state.get("trace") or []),
+                "tool_logs": list(state.get("tool_logs") or []),
+                "retrieval_hits": list(state.get("retrieval_hits") or []),
+                "step_count": int(state.get("step_count") or 0),
+            }
+        }
+
+    def route_after_plan(state: GraphState) -> str:
+        action = str(state.get("action") or "final")
+        if action == "retrieve":
+            return "retrieve"
+        if action == "tool":
+            return "execute"
+        return "finalize"
+
+    def route_after_observe(state: GraphState) -> str:
+        max_steps = int(state.get("max_steps") or 4)
+        step = int(state.get("step_count") or 0)
+        if step >= max_steps:
+            return "finalize"
+        return "plan"
+
+    graph.add_node("plan", plan_node)
+    graph.add_node("retrieve", retrieve_node)
+    graph.add_node("execute", execute_node)
+    graph.add_node("observe", observe_node)
+    graph.add_node("finalize", finalize_node)
+
+    graph.add_edge(START, "plan")
+    graph.add_conditional_edges(
+        "plan",
+        route_after_plan,
+        {"retrieve": "retrieve", "execute": "execute", "finalize": "finalize"},
+    )
+    graph.add_edge("retrieve", "observe")
+    graph.add_edge("execute", "observe")
+    graph.add_conditional_edges(
+        "observe",
+        route_after_observe,
+        {"plan": "plan", "finalize": "finalize"},
+    )
+    graph.add_edge("finalize", END)
     return graph.compile()

@@ -3,7 +3,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { TextField } from "../../components/forms/TextField";
 import { Button } from "../../components/ui/button";
-import { AGENT_QUICK_PROMPTS, sanitizeBlockedCommandHints, softenAgentBubbleText } from "./agentHelpers";
+import { AGENT_QUICK_PROMPTS } from "./constants/agentPrompts";
+import { sanitizeBlockedCommandHints, softenAgentBubbleText } from "./utils/agentTextUtils";
 
 function MarkdownText({ text, className = "" }) {
   const value = String(text || "");
@@ -262,93 +263,6 @@ function AgentPanelView({
   const exportButtonRef = useRef(null);
   const exportIconRef = useRef(null);
 
-  useEffect(() => {
-    if (!active || !exportButtonRef.current) return;
-    const button = exportButtonRef.current;
-    const icon = exportIconRef.current;
-    const buttonStyle = getComputedStyle(button);
-    const iconStyle = icon ? getComputedStyle(icon) : null;
-    const rect = button.getBoundingClientRect();
-
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
-      body: JSON.stringify({
-        sessionId: "b84065",
-        runId: "baseline",
-        hypothesisId: "H1",
-        location: "AgentPanelView.jsx:263",
-        message: "icon button rendered width baseline",
-        data: { className: button.className, width: rect.width, height: rect.height },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
-      body: JSON.stringify({
-        sessionId: "b84065",
-        runId: "baseline",
-        hypothesisId: "H2",
-        location: "AgentPanelView.jsx:264",
-        message: "check min-width and padding from md-btn",
-        data: {
-          minWidth: buttonStyle.minWidth,
-          paddingLeft: buttonStyle.paddingLeft,
-          paddingRight: buttonStyle.paddingRight,
-          width: buttonStyle.width
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
-      body: JSON.stringify({
-        sessionId: "b84065",
-        runId: "baseline",
-        hypothesisId: "H3",
-        location: "AgentPanelView.jsx:265",
-        message: "check flex model impact",
-        data: {
-          flexGrow: buttonStyle.flexGrow,
-          flexShrink: buttonStyle.flexShrink,
-          flexBasis: buttonStyle.flexBasis,
-          parentClass: button.parentElement?.className || ""
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b84065" },
-      body: JSON.stringify({
-        sessionId: "b84065",
-        runId: "baseline",
-        hypothesisId: "H4",
-        location: "AgentPanelView.jsx:266",
-        message: "check icon intrinsic width",
-        data: {
-          iconClientWidth: icon?.clientWidth ?? null,
-          iconFontSize: iconStyle?.fontSize ?? null,
-          iconLineHeight: iconStyle?.lineHeight ?? null
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-  }, [active, messages.length]);
-
   return (
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-agent" aria-hidden={!active}>
       <div className="agent-layout">
@@ -362,10 +276,10 @@ function AgentPanelView({
               <TextField label="模型名 / Endpoint ID" value={apiModel} onChange={setApiModel} />
             </div>
             <div className="launch-actions" style={{ marginTop: 12 }}>
-              <Button variant="secondary" className="md-btn md-btn-tonal" onClick={saveConfig}>
+              <Button variant="secondary" onClick={saveConfig}>
                 <span className="material-icons">save</span>保存配置
               </Button>
-              <Button variant="outline" className="md-btn md-btn-outlined" onClick={testAgentApi}>
+              <Button variant="outline" onClick={testAgentApi}>
                 <span className="material-icons">bolt</span>测试连接
               </Button>
             </div>
@@ -379,7 +293,7 @@ function AgentPanelView({
                   key={p.id}
                   type="button"
                   variant="outline"
-                  className="md-btn md-btn-outlined md-btn-compact"
+                  className="md-btn-compact"
                   disabled={loading}
                   onClick={() => sendPresetMessage(p.text)}
                 >
@@ -495,13 +409,13 @@ function AgentPanelView({
                   </p>
                 )}
                 <div className="md-dialog-actions md3-dialog-actions agent-approval-actions">
-                  <Button type="button" variant="ghost" className="md-btn md-btn-text" onClick={onCloseApproval}>
+                  <Button type="button" variant="ghost" onClick={onCloseApproval}>
                     取消
                   </Button>
                   <Button
                     type="button"
                     variant="default"
-                    className="md-btn md-btn-filled primary md-btn-compact"
+                    className="md-btn-compact"
                     onClick={sendAgentExecuteApproval}
                     disabled={loading || !approvalToken}
                   >
@@ -533,7 +447,7 @@ function AgentPanelView({
                   <label className="md-field-label">输入消息</label>
                 </div>
                 <Button
-                  className="md-btn md-btn-filled primary send-btn"
+                  className="send-btn"
                   size="icon"
                   type="button"
                   onClick={send}

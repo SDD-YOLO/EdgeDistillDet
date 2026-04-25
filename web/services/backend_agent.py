@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import csv
 import hashlib
 import json
+import os
 import secrets
 import threading
 import time
@@ -13,6 +15,7 @@ from typing import Any
 
 from fastapi.responses import StreamingResponse
 
+from web.agent_rag import retrieve_hybrid
 from web.agent_graph.runtime import execute_tool_graph, invoke_model_graph, invoke_model_graph_stream
 from web.core.paths import AGENT_HISTORY_DIR, AGENT_STATE_DIR, CONFIG_DIR
 from web.schemas import (
@@ -45,32 +48,19 @@ _DEFAULT_CONFIG_NAME = "distill_config.yaml"
 _APPROVAL_TTL_SEC = 15 * 60
 _HISTORY_LIMIT = 5
 
+# results.csv 扫描根目录（相对仓库根）
+_RUNS_ROOT = Path("runs")
+# 单次调用最多返回的尾行数
+_RESULTS_TAIL_ROWS = 10
+# 我们关心的指标列前缀
+_METRIC_COL_PREFIXES = ("metrics/", "train/", "val/", "lr/")
+
 _approval_lock = threading.RLock()
 _approval_store: dict[str, dict[str, Any]] = {}
-_DEBUG_LOG_PATH = Path("debug-d5a26f.log")
 
 
 def _now_ts() -> float:
     return time.time()
-
-
-def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    # region agent log
-    try:
-        payload = {
-            "sessionId": "d5a26f",
-            "runId": str(run_id or "default"),
-            "hypothesisId": str(hypothesis_id),
-            "location": str(location),
-            "message": str(message),
-            "data": data if isinstance(data, dict) else {},
-            "timestamp": int(time.time() * 1000),
-        }
-        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # endregion
 
 
 def _json_hash(payload: dict[str, Any]) -> str:
@@ -142,6 +132,16 @@ def _collect_deprecated_leaf_paths(payload: dict[str, Any]) -> list[str]:
     return sorted(path for path in _collect_leaf_paths(payload or {}) if path in _DEPRECATED_LEAF_PATHS)
 
 
+def _validate_w_feat_scalar_in_patch(patch: dict[str, Any]) -> str | None:
+    dist = patch.get("distillation")
+    if not isinstance(dist, dict) or "w_feat" not in dist:
+        return None
+    value = dist.get("w_feat")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "distillation.w_feat must be a numeric scalar (int/float), arrays are not allowed"
+    return None
+
+
 def _flatten_allowed(data: dict[str, Any]) -> dict[str, Any]:
     flat: dict[str, Any] = {}
 
@@ -202,7 +202,6 @@ def _single_leaf_epsilon_declared_patch(base: dict[str, Any], declared_patch: di
             return (1, path)
         return (2, path)
 
-    # Prefer float-ish knobs first for safer epsilon adjustment.
     for path in sorted(declared_paths, key=priority):
         val = _get_by_path(base, path)
         if isinstance(val, float):
@@ -279,6 +278,166 @@ def _append_history(
     return version
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# training results collector — 内部实现（供 get_context 聚合）
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _try_float(value: str) -> float | None:
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _find_results_csvs(runs_root: Path) -> list[Path]:
+    """递归找出 runs_root 下所有 results.csv，按修改时间降序排列。"""
+    found: list[Path] = []
+    if not runs_root.exists():
+        return found
+    for dirpath, _dirs, files in os.walk(runs_root):
+        if "results.csv" in files:
+            found.append(Path(dirpath) / "results.csv")
+    found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return found
+
+
+def _parse_results_csv(path: Path, tail: int) -> dict[str, Any]:
+    """
+    解析单个 results.csv，返回：
+      columns, metric_cols, epoch_count, tail_rows, latest, trend
+    """
+    rows: list[dict[str, str]] = []
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames is None:
+                return {"error": "CSV 无列头"}
+            columns = [c.strip() for c in reader.fieldnames]
+            for row in reader:
+                rows.append({k.strip(): v.strip() for k, v in row.items()})
+    except Exception as exc:
+        return {"error": f"读取失败: {exc}"}
+
+    if not rows:
+        return {"error": "CSV 为空（尚无训练数据）"}
+
+    metric_cols = [c for c in columns if any(c.startswith(p) for p in _METRIC_COL_PREFIXES)]
+    latest = {c: _try_float(rows[-1].get(c, "")) for c in metric_cols}
+
+    # 对每列计算：最新值、历史最优、最优所在 epoch、与最优的差距、是否仍在改善
+    trend: dict[str, Any] = {}
+    for col in metric_cols:
+        values = [_try_float(r.get(col, "")) for r in rows]
+        numeric = [v for v in values if v is not None]
+        if not numeric:
+            continue
+        best = max(numeric)
+        last = numeric[-1]
+        trend[col] = {
+            "last": last,
+            "best": best,
+            "best_epoch": numeric.index(best) + 1,
+            "delta_from_best": round(last - best, 6),
+            "improving": last >= best - 1e-6,
+        }
+
+    return {
+        "columns": columns,
+        "metric_cols": metric_cols,
+        "epoch_count": len(rows),
+        "tail_rows": rows[-tail:],
+        "latest": latest,
+        "trend": trend,
+    }
+
+
+def _collect_training_results(args: dict[str, Any]) -> dict[str, Any]:
+    """
+    internal training results collector
+
+    可选参数:
+        run_path  str  — 指定 results.csv 路径或其父目录
+        run_id    str  — 与 output.name 对应的实验名，用于自动定位
+        tail      int  — 返回最后 N 行，默认 10
+        runs_root str  — 扫描根目录，默认 "runs"
+    """
+    tail = int(args.get("tail") or _RESULTS_TAIL_ROWS)
+    runs_root = Path(str(args.get("runs_root") or _RUNS_ROOT))
+
+    # 优先使用明确指定的路径
+    explicit: Path | None = None
+    if args.get("run_path"):
+        p = Path(str(args["run_path"]))
+        if p.is_dir():
+            c = p / "results.csv"
+            explicit = c if c.exists() else None
+        elif p.exists() and p.name == "results.csv":
+            explicit = p
+
+    # 按 run_id 在 runs_root 下递归匹配目录名
+    if explicit is None and args.get("run_id"):
+        run_id = str(args["run_id"])
+        for dirpath, _dirs, files in os.walk(runs_root):
+            if "results.csv" in files and Path(dirpath).name == run_id:
+                explicit = Path(dirpath) / "results.csv"
+                break
+
+    csvs = [explicit] if explicit is not None else _find_results_csvs(runs_root)
+
+    if not csvs:
+        return {
+            "status": "error",
+            "message": (
+                f"在 {runs_root} 下未找到任何 results.csv。"
+                "请确认训练已运行过，或通过 run_path 参数指定路径。"
+            ),
+        }
+
+    runs_out = []
+    for csv_path in csvs[:3]:  # 最多返回 3 个 run
+        parsed = _parse_results_csv(csv_path, tail)
+        if "error" in parsed:
+            runs_out.append({"path": str(csv_path), "error": parsed["error"]})
+        else:
+            runs_out.append({
+                "path": str(csv_path),
+                "epoch_count": parsed["epoch_count"],
+                "metric_cols": parsed["metric_cols"],
+                "latest": parsed["latest"],
+                "trend": parsed["trend"],
+                "tail_rows": parsed["tail_rows"],
+            })
+
+    # 一句话摘要，供模型快速定位核心信息
+    summary_parts = []
+    for run in runs_out:
+        if "error" in run:
+            summary_parts.append(f"{run['path']}: {run['error']}")
+            continue
+        ep = run["epoch_count"]
+        mAP_key = next((k for k in run["latest"] if "mAP50" in k and "(B)" in k), None)
+        mAP_key = mAP_key or next((k for k in run["latest"] if "mAP50" in k), None)
+        if mAP_key and run["latest"].get(mAP_key) is not None:
+            val = run["latest"][mAP_key]
+            best = run["trend"].get(mAP_key, {}).get("best", val)
+            summary_parts.append(
+                f"{run['path']}：已训练 {ep} epoch，"
+                f"最新 {mAP_key}={val:.4f}，历史最优={best:.4f}"
+            )
+        else:
+            summary_parts.append(f"{run['path']}：已训练 {ep} epoch")
+
+    return {
+        "status": "ok",
+        "runs": runs_out,
+        "summary": "；".join(summary_parts) or "已读取训练结果",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 原有工具函数（不变）
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _tool_get_context(args: dict[str, Any]) -> dict[str, Any]:
     run_id = str(args.get("run_id") or "default")
     config = _load_distill_config()
@@ -286,12 +445,27 @@ def _tool_get_context(args: dict[str, Any]) -> dict[str, Any]:
         mtime = int(_distill_config_path().stat().st_mtime_ns)
     except OSError:
         mtime = 0
+    output_name = ""
+    try:
+        output_name = str((config.get("output") or {}).get("name") or "").strip() if isinstance(config, dict) else ""
+    except Exception:
+        output_name = ""
+    metrics_run_id = run_id if run_id and run_id != "default" else (output_name or run_id)
+    metrics_args: dict[str, Any] = {"run_id": metrics_run_id}
+    if args.get("run_path"):
+        metrics_args["run_path"] = args.get("run_path")
+    if args.get("tail") is not None:
+        metrics_args["tail"] = args.get("tail")
+    if args.get("runs_root"):
+        metrics_args["runs_root"] = args.get("runs_root")
+    training_results = _collect_training_results(metrics_args)
     return {
         "status": "ok",
         "run_id": run_id,
         "config_name": _DEFAULT_CONFIG_NAME,
         "config": config,
         "file_mtime_ns": mtime,
+        "training_results": training_results,
     }
 
 
@@ -310,6 +484,16 @@ def _tool_analyze_params(args: dict[str, Any]) -> dict[str, Any]:
     if not tips:
         tips.append("current parameters are generally reasonable; try incremental tuning.")
     return {"status": "ok", "objective": objective, "analysis": tips}
+
+
+def _tool_retrieve_context(args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"status": "error", "error": "query is required"}
+    run_id = str(args.get("run_id") or "default")
+    top_k = int(args.get("top_k") or 5)
+    hits = retrieve_hybrid(query, run_id=run_id, top_k=top_k)
+    return {"status": "ok", "query": query, "run_id": run_id, "hits": hits}
 
 
 def _tool_propose_patch(args: dict[str, Any]) -> dict[str, Any]:
@@ -337,6 +521,9 @@ def _tool_validate_patch(args: dict[str, Any]) -> dict[str, Any]:
     patch = args.get("patch")
     if not isinstance(patch, dict) or not patch:
         return {"status": "error", "error": "patch must be a non-empty object"}
+    scalar_error = _validate_w_feat_scalar_in_patch(patch)
+    if scalar_error:
+        return {"status": "error", "error": scalar_error}
     invalid = _validate_top_level(patch)
     if invalid:
         return {"status": "error", "error": f"invalid top-level keys: {invalid}", "invalid_keys": invalid}
@@ -354,6 +541,9 @@ def _tool_preview_patch(args: dict[str, Any]) -> dict[str, Any]:
     patch = args.get("patch")
     if not isinstance(patch, dict) or not patch:
         return {"status": "error", "error": "patch must be a non-empty object"}
+    scalar_error = _validate_w_feat_scalar_in_patch(patch)
+    if scalar_error:
+        return {"status": "error", "error": scalar_error}
     deprecated = _collect_deprecated_leaf_paths(patch)
     if deprecated:
         return {"status": "error", "error": f"patch contains deprecated fields: {deprecated}", "deprecated_paths": deprecated}
@@ -421,6 +611,9 @@ def _tool_apply_patch_with_approval(args: dict[str, Any]) -> dict[str, Any]:
         if request_hash and request_hash != str(rec.get("request_hash") or ""):
             return {"status": "error", "error": "request_hash mismatch"}
         patch = rec.get("patch") if isinstance(rec.get("patch"), dict) else {}
+        scalar_error = _validate_w_feat_scalar_in_patch(patch)
+        if scalar_error:
+            return {"status": "error", "error": scalar_error}
         rec["used"] = True
     base = _load_distill_config()
     merged = _merge_distill_patch(base, patch)
@@ -491,8 +684,25 @@ def _tool_rollback_run_config(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _execute_tool(tool: str, args: dict[str, Any], _state: dict[str, Any]) -> Any:
+    normalized_args = dict(args or {})
+    if tool == "agent.preview_patch":
+        patch = normalized_args.get("patch")
+        if not isinstance(patch, dict):
+            candidate_patch = {
+                k: copy.deepcopy(v)
+                for k, v in normalized_args.items()
+                if k in _ALLOWED_TOP_LEVEL and isinstance(v, dict)
+            }
+            if candidate_patch:
+                normalized_args = {
+                    "run_id": str(normalized_args.get("run_id") or "default"),
+                    "patch": candidate_patch,
+                    "operator": str(normalized_args.get("operator") or "agent"),
+                    "reason": str(normalized_args.get("reason") or "agent.preview_patch"),
+                }
     handlers = {
         "agent.get_context": _tool_get_context,
+        "agent.retrieve_context": _tool_retrieve_context,
         "agent.analyze_params": _tool_analyze_params,
         "agent.propose_patch": _tool_propose_patch,
         "agent.validate_patch": _tool_validate_patch,
@@ -504,7 +714,7 @@ def _execute_tool(tool: str, args: dict[str, Any], _state: dict[str, Any]) -> An
     handler = handlers.get(tool)
     if handler is None:
         return {"status": "error", "error": f"unknown tool: {tool}"}
-    return handler(args)
+    return handler(normalized_args)
 
 
 def _load_tools_contract() -> dict[str, Any]:
@@ -537,15 +747,6 @@ def agent_tools_execute(payload: AgentToolExecuteRequest):
     tool = str(payload.tool or "").strip()
     args = payload.args if isinstance(payload.args, dict) else {}
     run_id = str(args.get("run_id") or "default")
-    # region agent log
-    _debug_log(
-        run_id=run_id,
-        hypothesis_id="H20",
-        location="web/services/backend_agent.py:agent_tools_execute",
-        message="Tool execute request received",
-        data={"tool": tool, "arg_keys": sorted(args.keys())},
-    )
-    # endregion
     out = execute_tool_graph(tool=tool, args=args, executor=_execute_tool, run_id=run_id)
     result = out.get("result") if isinstance(out, dict) else None
     if isinstance(result, dict):

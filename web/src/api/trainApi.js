@@ -20,3 +20,11 @@ export function startTrain(body) {
 export function stopTrain() {
   return apiRequest("/api/train/stop", { method: "POST", body: JSON.stringify({}) });
 }
+
+export async function downloadTrainLogsBlob() {
+  const response = await fetch("/api/train/logs/download");
+  if (!response.ok) {
+    throw new Error("下载日志失败");
+  }
+  return response.blob();
+}

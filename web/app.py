@@ -29,7 +29,6 @@ from web.routers.config import router as config_router
 from web.routers.metrics import router as metrics_router
 from web.routers.train import router as train_router
 from web.routers.ui import router as ui_router
-
 from main import __version__
 
 api = FastAPI(title="EdgeDistillDet Backend", version=__version__)

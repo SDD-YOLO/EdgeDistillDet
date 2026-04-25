@@ -3,17 +3,16 @@ import { executeAgentTool, fetchAgentTools, previewAgentPatch } from "../../api/
 import { fetchDistillConfig } from "../../api/configApi";
 import { broadcastDistillConfigUpdate } from "../../constants/distillConfigSync";
 import AgentPanelView from "./AgentPanelView";
+import { buildDisplayReplyAndReasoning, extractReplyAndReasoningFromPayload } from "../../utils/agentPayload";
 import {
-  buildDisplayReplyAndReasoning,
   extractPatchFromResult,
-  extractReplyAndReasoningFromPayload,
-  extractToolCallFromText,
   formatChangeSummaryForChat,
   hasConfigMutationAfter,
-  sanitizeBlockedCommandHints,
   summarizeToolResultForTrace
-} from "./agentHelpers";
+} from "../../utils/patchHelpers";
+import { extractToolCallFromText } from "../../utils/toolHelpers";
 import { requestAgentWithFallback } from "./agentRuntime";
+import { sanitizeBlockedCommandHints } from "./utils/agentTextUtils";
 
 const resolveModelName = (apiModel) => {
   const value = String(apiModel || "").trim();
@@ -68,24 +67,6 @@ const extractJsonCodeBlocks = (text) => {
   }
   return out;
 };
-const extractStandaloneToolCall = (text) => {
-  const raw = typeof text === "string" ? text.trim() : "";
-  if (!raw) return null;
-  // strict: whole message is a single JSON object
-  const direct = extractToolCallFromText(raw);
-  if (direct && raw.startsWith("{") && raw.endsWith("}")) {
-    return direct;
-  }
-  // strict: whole message is exactly one fenced block containing JSON
-  const singleFence = raw.match(/^```[a-zA-Z0-9_-]*\s*([\s\S]*?)```$/);
-  if (singleFence) {
-    const body = String(singleFence[1] || "").trim();
-    const fenced = extractToolCallFromText(body);
-    if (fenced) return fenced;
-  }
-  return null;
-};
-
 const normalizeToolExecutionResult = (result) => {
   if (!result || typeof result !== "object") return result;
   if (
@@ -100,33 +81,9 @@ const normalizeToolExecutionResult = (result) => {
   return result;
 };
 
-const isMutationIntentRequested = (text) => {
-  const raw = String(text || "");
-  // 明确否定改参意图时，不进入审批/写入链路
-  if (
-    /(不改参数|不要改参数|无需修改参数|不用修改参数|暂不修改参数|先不修改参数|仅咨询|只咨询|不要执行|不要应用|不需要执行)/i.test(
-      raw
-    )
-  ) {
-    return false;
-  }
-  return /(?:请|帮我|现在|直接)\s*(?:修改|调整|改)\s*(?:参数|配置)|(?:把|将)[^。\n]{0,48}(?:改为|调到|设为|更新为)|(?:修改|调整|改|更新)[^。\n]{0,48}(?:temperature|w_kd|w_feat|alpha|beta|loss|lr|学习率|蒸馏|distillation|training|output|参数|配置)|(?:生成|给我|出一版|再来一版)\s*(?:patch|补丁|参数修改方案|调参方案)|(?:预览|preview)\s*(?:patch|补丁)|(?:应用|apply|写入|执行)\s*(?:patch|补丁|参数变更)|明确修改(?:哪些)?参数|可执行的?调参方案|参数优化方案/i.test(
-    raw
-  );
-};
-
-const isContinuationLikeMutationText = (text) => {
-  const raw = String(text || "").trim();
-  if (!raw) return false;
-  return /^(继续|接着|下一步|按上面|照上面|就按这个|按这个|执行|应用|确认执行|继续优化|继续调参|继续改|继续调整)/i.test(
-    raw
-  );
-};
-
-const shouldAutoBootstrapContext = (text) => {
-  const raw = String(text || "").trim();
-  if (!raw) return false;
-  return /(评估|分析|指标|run|实验|目录|训练|蒸馏|参数|配置|结果|瓶颈|优化)/i.test(raw);
+const isExperimentStructureIntent = (text) => {
+  const raw = String(text || "").toLowerCase();
+  return /(目录|结构|文件|子目录|用途|权重|日志|曲线|配置快照|核心结果|实验输出|results\.csv|best\.pt|last\.pt)/i.test(raw);
 };
 
 function loadStoredAgentMessages() {
@@ -339,7 +296,7 @@ function AgentPanel({ toast, active }) {
     toast("Agent API 配置已保存", "success");
   };
 
-  const buildAgentSystemPrompt = async () => {
+  const buildAgentSystemPrompt = async (userText = "") => {
     let contract = null;
     try {
       contract = await fetchAgentTools();
@@ -349,23 +306,77 @@ function AgentPanel({ toast, active }) {
     const toolList = Array.isArray(contract?.tools)
       ? contract.tools.map((t) => `- ${t.name}: input=${JSON.stringify(t.input || {})}, output=${t.output || ""}`).join("\n")
       : "- agent.get_context\n- agent.analyze_params\n- agent.propose_patch\n- agent.validate_patch\n- agent.preview_patch\n- agent.apply_patch_with_approval\n- agent.list_run_history\n- agent.rollback_run_config";
+    const structureIntent = isExperimentStructureIntent(userText);
+    if (structureIntent) {
+      return [
+        "你是实验结果解读 Agent，当前任务是说明实验输出目录与关键产物用途。",
+        "优先回答目录结构、关键文件作用、最快定位核心结果的方法。",
+        "若需要事实，可调用只读工具（如 agent.get_context / agent.list_run_history / agent.retrieve_context）。",
+        "禁止主动给出调参方案、禁止生成 patch、禁止进入审批流程。",
+        "",
+        "## 可用工具",
+        toolList,
+        "",
+        "输出要求：",
+        "- 先概览目录层级",
+        "- 再解释关键文件用途（权重、日志、曲线、配置快照）",
+        "- 最后给“最快定位核心结果”的实操步骤",
+      ].join("\n");
+    }
     return [
-      "你是训练参数优化 Agent。你可以且应该使用工具先获取事实，再给结论。",
-      "可用工具如下：",
-      toolList,
-      "",
-      "当需要调用工具时，你必须只输出一个 JSON 对象（不要输出其他文本）：",
-      '{"tool":"agent.get_context","args":{"run_id":"default"}}',
-      "工具结果会在下一轮以 tool 消息回传给你。",
-      "**修改 distill 配置（configs/distill_config.yaml）时**：优先输出 `:{\"tool\":\"agent.preview_patch\",\"args\":{\"patch\":{...}}}`（可先 `agent.validate_patch`）；若只调用了 `agent.propose_patch`，界面也会自动用返回的 patch 请求预览并在对话区显示「批准修改训练配置」。**禁止**在最终答复里用「是否需要我执行/是否生成补丁」等话术向用户索要确认。",
-      "**`patch` 必须与审批内容严格一致**：只包含你打算改动的顶层段（distillation / training / output）及其字段；**禁止**在 patch 里附带未在答复中说明的参数（例如只讨论 kd loss 却写入 temperature）。自然语言列出的每一项都必须在 patch 中出现且数值一致。",
-      "在输出 tool JSON 前后，用一两句话概括拟修改的字段与意图；**字段级旧值→新值以对话区审批摘要与聊天中的服务端摘要为准**，避免与 patch 不一致。",
-      "终端里的训练命令（```powershell``` / ```bash```）只能作为补充说明；真正写入配置必须经过上述工具链或界面审批。",
-      "禁止输出「执行命令（需审批）」这类审批提示模板；禁止建议 `python distill.py --config configs/distill_config.yaml`（仓库无该入口）。如需训练命令，使用项目实际入口（如 `python main.py train --config configs/distill_config.yaml`）。",
-      "当不再需要工具、输出最终答复时：用自然语言说明变更理由与风险；若已调用 `agent.preview_patch`，只需提示用户在对话区「批准修改训练配置」中批准，不要重复询问。仅在确定无法走工具链时，才用 JSON 代码块给出结构化 patch 作为兜底。",
-      "**审批/写入流程结束后**：若用户未主动要求继续改配置，你**不得**主动提出新的修改建议、不得追问「要不要继续调整」「是否还要改某参数」「需不需要再预览一版」等；**不得**自动再发起 `agent.propose_patch` / `agent.preview_patch` 或引导用户进入下一轮审批。此时只做简短收尾（例如已写入/已按对话区审批操作即可训练），然后停止。",
-      "**仅当用户明确说出**要改配置、改某字段、再优化、再出一版 patch 等意图时，你才可以再次使用配置相关工具或给出修改建议。"
-    ].join("\n");
+        "你是训练参数优化 Agent，专注于 YOLO 蒸馏训练场景。",
+        "你可以且应该先用工具获取事实（配置 + 训练指标），再基于数据给出结论，不得凭空猜测。",
+        "",
+        "## 可用工具",
+        toolList,
+        "",
+        "## 工具调用格式",
+        "需要调用工具时，只输出一个 JSON 对象，不附带其他文本：",
+        '{"tool":"agent.get_context","args":{"run_id":"default"}}',
+        "工具结果在下一轮以 tool 消息回传。",
+        "",
+        "## 分析流程（必须遵守）",
+        "**第一步：获取事实**",
+        "- 用 `agent.get_context` 读取当前 distill_config + training_results（必须，不可跳过）",
+        "  - 优先传 run_id（与 config 中 output.name 一致，如 'exp1'）",
+        "  - 若不确定 run_id，可仅传 run_id=default，让工具按配置和 runs 目录自动定位",
+        "",
+        "**第二步：解读指标（基于 get_context.training_results 返回值）**",
+        "关注以下字段：",
+        "- `latest`：当前最新 epoch 的各项指标值",
+        "- `trend[指标名].improving`：该指标是否仍在改善（false = 已停止收益或退步）",
+        "- `trend[指标名].delta_from_best`：当前值与历史最优的差距（负值 = 已回退）",
+        "- `epoch_count`：已训练轮数（结合 config 中 epochs 判断训练进度）",
+        "",
+        "**第三步：给出调参方案（必须包含以下结构）**",
+        "每条建议格式：",
+        "- **参数名**（如 `distillation.T_max`）",
+        "  - 当前值 → 建议值",
+        "  - 依据：引用具体指标数值（如「mAP50 在第 N epoch 达到最优后连续 M epoch 未改善」）",
+        "  - 预期收益",
+        "  - 潜在风险",
+        "",
+        "**第四步（需写入/审批时必做）**",
+        "若用户要修改配置、或你在答复中引用了具体「建议值」并引导用户到「批准修改训练配置」/审批区：",
+        "你必须在本轮 ReAct 中于 `action=final` 之前，先以 `action=tool` 调用 `agent.preview_patch`（`run_id` + 合法 `patch`），使服务端签发 `approval_token`；**禁止**在从未调用过 `agent.preview_patch` 的情况下，仅在 final 正文中写「去批准/审批/请批准」等字样。",
+        "patch 只包含你实际建议修改的字段，禁止附带未讨论的参数。",
+        "",
+        "## 禁止行为",
+        "- 禁止在未读取 `agent.get_context.training_results` 的情况下，声称某指标「波动」「未达标」「过拟合」等（无数据支撑）",
+        "- 禁止在最终答复里用「是否需要我执行/是否生成补丁」向用户索要确认（直接给方案）",
+        "- 禁止输出「执行命令（需审批）」提示模板",
+        "- 禁止建议 `python distill.py --config ...`（仓库无此入口）",
+        "- 禁止在未成功调用 `agent.preview_patch` 时提示用户到审批区或「批准修改训练配置」",
+        "- 审批/写入完成后，未经用户要求禁止再次提出新的修改建议",
+        "",
+        "## patch 一致性要求",
+        "- patch 必须与答复中描述的字段和数值严格一致",
+        "- 只包含 distillation / training / output 中实际要改的字段",
+        "- 每个建议值都必须在答复的自然语言部分有明确说明",
+        "",
+        "当不再需要工具、输出最终答复时：",
+        "用自然语言说明变更理由与风险；**仅当**本回合已成功调用 `agent.preview_patch` 时，可提示用户到「批准修改训练配置」中批准。",
+      ].join("\n");
   };
 
   const runAgentWithTools = async ({
@@ -375,411 +386,208 @@ function AgentPanel({ toast, active }) {
     turnStartTs = Date.now()
   }) => {
     agentSlotIndexRef.current = -1;
-    let streamedToolJsonSeen = false;
-    let streamingTraceDraft = null;
     let missingSlotLogged = false;
-    const systemPrompt = await buildAgentSystemPrompt();
-    const convo = [...messages, { role: "user", content: userText }];
+    const systemPrompt = await buildAgentSystemPrompt(userText);
+    const recentMessages = Array.isArray(messages) ? messages.slice(-4) : [];
+    const convo = [...recentMessages, { role: "user", content: userText }];
     const toolLogs = [];
     const traceRounds = [];
-    const mutationTools = new Set([
-      "agent.propose_patch",
-      "agent.preview_patch",
-      "agent.apply_patch_with_approval",
-      "agent.rollback_run_config"
-    ]);
-    const userTextRaw = String(userText || "");
-    const explicitUserToolCall = extractToolCallFromText(userTextRaw);
-    const allowMutationByIntent = isMutationIntentRequested(userTextRaw) || forceAllowMutationTools;
-    const allowMutationByExplicitToolCall =
-      !!explicitUserToolCall && mutationTools.has(String(explicitUserToolCall.tool || ""));
-    const allowMutationTools = allowMutationByIntent || allowMutationByExplicitToolCall;
-    const canAutoBridgeFromAnalysis = () => {
-      if (!allowMutationTools) return false;
-      const hasAnalyze = toolLogs.some((t) => t.call?.tool === "agent.analyze_params");
-      if (!hasAnalyze) return false;
-      const hasPatchFlow = toolLogs.some((t) => mutationTools.has(t.call?.tool));
-      return !hasPatchFlow;
-    };
     const prefersRelayGlobal = /^https?:\/\//i.test(apiUrl.trim());
-    const defaultContinue = "请继续。若需工具则按约定输出 tool JSON。";
-    const readOnlyContinue =
-      "请继续完成分析结论，但本轮用户未要求改参数。禁止调用 agent.propose_patch / agent.preview_patch / agent.apply_patch_with_approval / agent.rollback_run_config；若你认为值得调整参数，仅用自然语言一句话询问「是否需要我提供参数修改方案」。";
-    /** 写入/回滚完成后若仍用「请继续+tool JSON」，模型会再出一轮 patch，形成审批死循环 */
-    const finalizeAfterMutation =
-      "配置变更已通过工具落盘。请仅用一两句自然语言确认完成（不要输出 JSON 代码块、不要调用任何工具）。在用户未明确要求继续改配置前，禁止主动提出修改建议、禁止追问是否继续调整、禁止再次调用 propose_patch / preview_patch / apply_patch / rollback 相关工具。";
-    let continuationSuffix = allowMutationTools ? defaultContinue : readOnlyContinue;
+    const transcriptText = convo
+      .map((m) => {
+        if (m.role === "tool") return `[tool:${m.name}]\n${m.content}`;
+        return `[${m.role}] ${m.content}`;
+      })
+      .join("\n\n");
+    const prompt = transcriptText;
+    const prefersRelay = prefersRelayGlobal;
+    const resolvedModelName = resolveModelName(apiModel);
 
-    const flushTrace = (reply, reasoning, toolInfo, execRes) => {
-      const replyJsonBlocks = extractJsonCodeBlocks(reply);
-      const reasoningJsonBlocks = extractJsonCodeBlocks(reasoning);
-      const jsonCodeBlocks = [...replyJsonBlocks, ...reasoningJsonBlocks];
-      const hasRealToolRound = !!(toolInfo?.tool || jsonCodeBlocks.length > 0);
-      streamingTraceDraft = null;
-      if (hasRealToolRound) {
-        traceRounds.push({
-          round: traceRounds.length + 1,
-          reply,
-          reasoning: reasoning || "",
-          jsonCodeBlocks,
-          tool: toolInfo ? { name: toolInfo.tool, args: toolInfo.args || {} } : null,
-          toolResultSummary:
-            execRes !== undefined && execRes !== null
-              ? summarizeToolResultForTrace(toolInfo?.tool, execRes)
-              : undefined
-        });
-      }
-      if (prefersRelayGlobal && agentSlotIndexRef.current >= 0) {
-        setMessages((prev) => {
-          const next = [...prev];
-          const idx = agentSlotIndexRef.current;
-          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
-            const hasAnyToolRound = traceRounds.some((r) => !!r.tool?.name);
-            next[idx] = { ...next[idx], traceRounds: [...traceRounds], traceOpen: hasAnyToolRound };
+    if (prefersRelay) {
+      setMessages((prev) => {
+        const idx = prev.length;
+        agentSlotIndexRef.current = idx;
+        return [
+          ...prev,
+          {
+            _messageId: nextMessageId(),
+            role: "agent",
+            content: "",
+            reasoningApi: "",
+            toolsUsed: [],
+            streaming: true,
+            traceOpen: false,
+            modelName: resolvedModelName
           }
-          return next;
-        });
-      }
-    };
-
-    for (let round = 0; round < maxRounds; round += 1) {
-      const transcriptText = convo
-        .map((m) => {
-          if (m.role === "tool") {
-            return `[tool:${m.name}]\n${m.content}`;
-          }
-          return `[${m.role}] ${m.content}`;
-        })
-        .join("\n\n");
-      const prompt = `${transcriptText}\n\n${continuationSuffix}`;
-      const prefersRelay = prefersRelayGlobal;
-      const resolvedModelName = resolveModelName(apiModel);
-
-      if (prefersRelay && round === 0) {
-        setMessages((prev) => {
-          const idx = prev.length;
-          agentSlotIndexRef.current = idx;
-          return [
-            ...prev,
-            {
-              _messageId: nextMessageId(),
-              role: "agent",
-              content: "",
-              reasoningApi: "",
-              toolsUsed: [],
-              streaming: true,
-              traceOpen: false,
-              modelName: resolvedModelName
-            }
-          ];
-        });
-      } else if (prefersRelay && round > 0) {
-        setMessages((prev) => {
-          const next = [...prev];
-          const idx = agentSlotIndexRef.current;
-          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
-            const shouldClearStaleContent = traceRounds.length > 0;
-            if (shouldClearStaleContent) {
-            }
-            next[idx] = {
-              ...next[idx],
-              streaming: true,
-              ...(shouldClearStaleContent ? { content: "" } : {})
-            };
-          }
-          return next;
-        });
-      }
-
-      const onDelta = prefersRelay
-        ? ({ reply, reasoning }) => {
-            const maybeTool = extractToolCallFromText(reply);
-            const jsonBlocks = extractJsonCodeBlocks(reply);
-            if (maybeTool?.tool) {
-              if (!streamedToolJsonSeen) {
-                streamedToolJsonSeen = true;
-              }
-              streamingTraceDraft = {
-                round: traceRounds.length + 1,
-                reply: String(reply || ""),
-                reasoning: String(reasoning || ""),
-                jsonCodeBlocks: jsonBlocks,
-                tool: { name: maybeTool.tool, args: maybeTool.args || {} },
-                toolResultSummary: { status: "streaming" }
-              };
-            }
-            setMessages((prev) => {
-              const next = [...prev];
-              const idx = agentSlotIndexRef.current;
-              if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
-                const traceForUi =
-                  streamingTraceDraft && streamedToolJsonSeen
-                    ? [...traceRounds, streamingTraceDraft]
-                    : next[idx].traceRounds || [...traceRounds];
-                if (round > 0 && traceRounds.length > 0 && (!Array.isArray(next[idx].traceRounds) || next[idx].traceRounds.length === 0)) {
-                }
-                const suppressStreamingText =
-                  !maybeTool?.tool && round > 0 && Array.isArray(traceForUi) && traceForUi.length > 0;
-                const contentForUi = maybeTool?.tool || suppressStreamingText ? "" : reply || "";
-                if (maybeTool?.tool || suppressStreamingText) {
-                }
-                // Show actual model output, not placeholder text
-                // Tool rounds will be shown in traceRounds
-                const keepTraceOpen =
-                  !!(
-                    next[idx].traceOpen ||
-                    (streamingTraceDraft && streamedToolJsonSeen) ||
-                    traceRounds.some((r) => !!r.tool?.name)
-                  );
-                next[idx] = {
-                  ...next[idx],
-                  content: contentForUi,
-                  reasoningApi: reasoning || "",
-                  streaming: true,
-                  traceRounds: traceForUi,
-                  traceOpen: keepTraceOpen,
-                  modelName: resolvedModelName
-                };
-              } else if (!missingSlotLogged) {
-                missingSlotLogged = true;
-              }
-              return next;
-            });
-          }
-        : undefined;
-
-      const onRelayFallback = prefersRelay
-        ? () => {
-            setMessages((prev) => {
-              const idx = agentSlotIndexRef.current;
-              const next = [...prev];
-              if (idx >= 0 && idx < next.length && next[idx].streaming) {
-                next.splice(idx, 1);
-              }
-              agentSlotIndexRef.current = -1;
-              return next;
-            });
-          }
-        : undefined;
-
-      let payload;
-      let target;
-      let reply;
-      let displayReply;
-      let displayReasoning;
-      try {
-        const result = await requestAgentWithFallback({
-          apiUrl,
-          apiKey,
-          apiModel,
-          modelName: resolvedModelName,
-          text: prompt,
-          mode: "chat",
-          systemPrompt,
-          onDelta,
-          onRelayFallback
-        });
-        payload = result.payload;
-        target = result.target;
-        const parsed = extractReplyAndReasoningFromPayload(payload?.reply || payload);
-        reply = parsed.reply;
-        const built = buildDisplayReplyAndReasoning(reply, parsed.reasoning);
-        displayReply = built.displayReply;
-        displayReasoning = built.displayReasoning;
-        // Set reasoningApi if model returns reasoning (even if empty, to distinguish from no reasoning support)
-        if (typeof payload?.reasoning === "string" && prefersRelay) {
-          setMessages((prev) => {
-            const next = [...prev];
-            const idx = agentSlotIndexRef.current;
-            if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
-              next[idx] = { ...next[idx], reasoningApi: payload.reasoning };
-            }
-            return next;
-          });
-        }
-      } catch (error) {
-        if (prefersRelay) {
-          setMessages((prev) => {
-            const next = [...prev];
-            const idx = agentSlotIndexRef.current;
-            if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
-              next[idx] = { ...next[idx], streaming: false };
-            }
-            return next;
-          });
-        }
-        throw error;
-      }
-
-      const looseToolCall = extractToolCallFromText(reply);
-      const toolCall = extractStandaloneToolCall(reply);
-      const effectiveToolCall = toolCall || (allowMutationTools ? looseToolCall : null);
-
-      const willAutoBridge = !toolCall && canAutoBridgeFromAnalysis();
-      const toolNames = toolLogs.map((t) => t.call.tool);
-
-      if (prefersRelay && target?.kind === "backend-relay" && !effectiveToolCall && !willAutoBridge) {
-        setMessages((prev) => {
-          const next = [...prev];
-          const idx = agentSlotIndexRef.current;
-          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
-            // Use reasoning if model supports it (check if reasoningApi was ever set during streaming)
-            const streamedReasoning = next[idx].reasoningApi;
-            const hasReasoningSupport = typeof streamedReasoning === "string";
-            const finalReasoning = hasReasoningSupport 
-              ? (displayReasoning || streamedReasoning || "")
-              : "";
-            const traceForUi =
-              streamingTraceDraft && streamedToolJsonSeen
-                ? [...traceRounds, streamingTraceDraft]
-                : next[idx].traceRounds || [...traceRounds];
-            const hasAnyToolRound = traceForUi.some((r) => !!r.tool?.name);
-            next[idx] = {
-              ...next[idx],
-              content: displayReply,
-              toolsUsed: toolNames,
-              traceRounds: traceForUi,
-              traceOpen: hasAnyToolRound ? true : next[idx].traceOpen,
-              modelName: payload?.model || resolvedModelName,
-              streaming: false,
-              // Always keep reasoningApi if model supports reasoning (even if content is empty)
-              ...(hasReasoningSupport ? { reasoningApi: finalReasoning } : {})
-            };
-          }
-          return next;
-        });
-      }
-      // Note: We no longer replace content with placeholder text
-      // The actual model output (including tool JSON) is preserved in content
-      // Tool execution status is shown via traceRounds
-      if (!effectiveToolCall) {
-        if (round === 0 && toolLogs.length === 0 && shouldAutoBootstrapContext(userText)) {
-          const bootstrapCall = { tool: "agent.get_context", args: { run_id: "default" } };
-          const rawExecResult = await executeAgentTool({ tool: bootstrapCall.tool, args: bootstrapCall.args });
-          const execResult = normalizeToolExecutionResult(rawExecResult);
-          toolLogs.push({ call: bootstrapCall, result: execResult });
-          flushTrace(displayReply, displayReasoning, bootstrapCall, execResult);
-          convo.push({ role: "assistant", content: reply });
-          convo.push({ role: "tool", name: bootstrapCall.tool, content: JSON.stringify(execResult, null, 2) });
-          continue;
-        }
-        if (willAutoBridge) {
-          const fallbackCall = {
-            tool: "agent.propose_patch",
-            args: {
-              goal: String(userText || "").trim() || "根据分析结果生成可审批的配置 patch",
-              constraints: {
-                source: "auto_bridge_from_analyze",
-                require_preview: true
-              }
-            }
-          };
-          const rawExecResult = await executeAgentTool({ tool: fallbackCall.tool, args: fallbackCall.args });
-          const execResult = normalizeToolExecutionResult(rawExecResult);
-          toolLogs.push({ call: fallbackCall, result: execResult });
-          if (prefersRelay && agentSlotIndexRef.current >= 0) {
-            const namesAfter = toolLogs.map((t) => t.call.tool);
-            setMessages((prev) => {
-              const next = [...prev];
-              const idx = agentSlotIndexRef.current;
-              if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
-                next[idx] = { ...next[idx], toolsUsed: namesAfter };
-              }
-              return next;
-            });
-          }
-          convo.push({ role: "assistant", content: reply });
-          convo.push({
-            role: "tool",
-            name: fallbackCall.tool,
-            content: JSON.stringify(execResult, null, 2)
-          });
-          continuationSuffix = allowMutationTools ? defaultContinue : readOnlyContinue;
-          flushTrace(displayReply, displayReasoning, fallbackCall, execResult);
-          continue;
-        }
-        flushTrace(displayReply, displayReasoning, null, null);
-        if (prefersRelay && target?.kind === "backend-relay") {
-          setMessages((prev) => {
-            const next = [...prev];
-            const idx = agentSlotIndexRef.current;
-            if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
-              next[idx] = { ...next[idx], traceOpen: false };
-            }
-            return next;
-          });
-        }
-        return {
-          payload,
-          reply,
-          displayReply,
-          displayReasoning,
-          target,
-          toolLogs,
-          streamedRelay: target?.kind === "backend-relay",
-          traceRounds
-        };
-      }
-      if (mutationTools.has(effectiveToolCall.tool) && !allowMutationTools) {
-        flushTrace(displayReply, displayReasoning, effectiveToolCall, { blocked: true, reason: "mutation_not_allowed" });
-        return {
-          payload,
-          reply,
-          displayReply:
-            "当前消息未明确要求修改参数，已跳过参数变更流程。是否需要我提供一版参数修改方案？",
-          displayReasoning,
-          target,
-          toolLogs,
-          streamedRelay: target?.kind === "backend-relay",
-          traceRounds
-        };
-      }
-      if (effectiveToolCall.tool === "agent.apply_patch_with_approval") {
-        flushTrace(displayReply, displayReasoning, effectiveToolCall, { blocked: true, reason: "apply_via_sidebar" });
-        return {
-          payload,
-          reply,
-          displayReply:
-            "已拦截自动写入请求。请先在对话区审批区核对 patch，再使用「让 agent 执行」完成写入。",
-          displayReasoning,
-          target,
-          toolLogs,
-          streamedRelay: target?.kind === "backend-relay",
-          traceRounds
-        };
-      }
-      if (!toolCall && effectiveToolCall) {
-      }
-      const rawExecResult = await executeAgentTool({ tool: effectiveToolCall.tool, args: effectiveToolCall.args || {} });
-      const execResult = normalizeToolExecutionResult(rawExecResult);
-      toolLogs.push({ call: effectiveToolCall, result: execResult });
-      flushTrace(displayReply, displayReasoning, effectiveToolCall, execResult);
-      if (effectiveToolCall.tool === "agent.apply_patch_with_approval" && execResult && execResult.status === "ok") {
-        continuationSuffix = finalizeAfterMutation;
-      } else if (effectiveToolCall.tool === "agent.rollback_run_config" && execResult && execResult.status === "ok") {
-        continuationSuffix = finalizeAfterMutation;
-      } else {
-        continuationSuffix = allowMutationTools ? defaultContinue : readOnlyContinue;
-      }
-      const namesAfter = toolLogs.map((t) => t.call.tool);
-      if (prefersRelay && agentSlotIndexRef.current >= 0) {
-        setMessages((prev) => {
-          const next = [...prev];
-          const idx = agentSlotIndexRef.current;
-          if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
-            next[idx] = { ...next[idx], toolsUsed: namesAfter };
-          }
-          return next;
-        });
-      }
-      convo.push({ role: "assistant", content: reply });
-      convo.push({
-        role: "tool",
-        name: effectiveToolCall.tool,
-        content: JSON.stringify(execResult, null, 2)
+        ];
       });
     }
-    throw new Error("工具调用达到上限，请缩小问题范围后重试。");
+
+    const roundMap = new Map();
+    const upsertRound = (step) => {
+      const key = Number(step) || roundMap.size + 1;
+      if (!roundMap.has(key)) {
+        roundMap.set(key, {
+          round: key,
+          reply: "",
+          reasoning: "",
+          jsonCodeBlocks: [],
+          tool: null
+        });
+      }
+      return roundMap.get(key);
+    };
+
+    const onDelta = prefersRelay
+      ? ({ reply, reasoning, event }) => {
+          if (event?.event_type === "model_output") {
+            const step = event.step || 1;
+            const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+            const row = upsertRound(step);
+            row.reply = String(payload.reply || reply || "");
+            row.reasoning = String(payload.reasoning || reasoning || "");
+            row.jsonCodeBlocks = extractJsonCodeBlocks(row.reply);
+          } else if (event?.event_type === "tool_end") {
+            const step = event.step || 1;
+            const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+            const row = upsertRound(step);
+            row.tool = { name: String(payload.tool || ""), args: payload.args || {} };
+            row.toolResultSummary = summarizeToolResultForTrace(payload.tool, payload.result);
+          } else if (event?.event_type === "retrieval_hit") {
+            const step = event.step || 1;
+            const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+            const row = upsertRound(step);
+            const retrievalJson = JSON.stringify({ retrieval: payload }, null, 2);
+            if (!row.jsonCodeBlocks.includes(retrievalJson)) {
+              row.jsonCodeBlocks.push(retrievalJson);
+            }
+          }
+          const traceForUi = Array.from(roundMap.values()).sort((a, b) => a.round - b.round);
+          setMessages((prev) => {
+            const next = [...prev];
+            const idx = agentSlotIndexRef.current;
+            if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
+              next[idx] = {
+                ...next[idx],
+                content: reply || "",
+                reasoningApi: reasoning || "",
+                streaming: true,
+                traceRounds: traceForUi,
+                traceOpen: traceForUi.some((r) => !!r.tool?.name),
+                modelName: resolvedModelName
+              };
+            } else if (!missingSlotLogged) {
+              missingSlotLogged = true;
+            }
+            return next;
+          });
+        }
+      : undefined;
+
+    const onRelayFallback = prefersRelay
+      ? () => {
+          setMessages((prev) => {
+            const idx = agentSlotIndexRef.current;
+            const next = [...prev];
+            if (idx >= 0 && idx < next.length && next[idx].streaming) {
+              next.splice(idx, 1);
+            }
+            agentSlotIndexRef.current = -1;
+            return next;
+          });
+        }
+      : undefined;
+
+    let payload;
+    let target;
+    let reply;
+    let displayReply;
+    let displayReasoning;
+    try {
+      const result = await requestAgentWithFallback({
+        apiUrl,
+        apiKey,
+        apiModel,
+        modelName: resolvedModelName,
+        text: prompt,
+        mode: "chat",
+        systemPrompt,
+        onDelta,
+        onRelayFallback,
+        runId: "default",
+        sessionId: `agent-${turnStartTs}`,
+        ragOptions: { mode: "hybrid", top_k: 5 },
+        toolPolicy: {
+          allow_mutation_tools: true,
+          allow_auto_apply: false
+        },
+        maxSteps: Math.max(2, Number(maxRounds || 6))
+      });
+      payload = result.payload;
+      target = result.target;
+      const parsed = extractReplyAndReasoningFromPayload(payload?.reply || payload);
+      reply = parsed.reply;
+      const built = buildDisplayReplyAndReasoning(reply, parsed.reasoning);
+      displayReply = built.displayReply;
+      displayReasoning = built.displayReasoning;
+    } catch (error) {
+      if (prefersRelay) {
+        setMessages((prev) => {
+          const next = [...prev];
+          const idx = agentSlotIndexRef.current;
+          if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
+            next[idx] = { ...next[idx], streaming: false };
+          }
+          return next;
+        });
+      }
+      throw error;
+    }
+
+    const events = Array.isArray(payload?.events) ? payload.events : [];
+    for (const ev of events) {
+      if (!ev || typeof ev !== "object") continue;
+      if (ev.event_type === "tool_end") {
+        const p = ev.payload && typeof ev.payload === "object" ? ev.payload : {};
+        toolLogs.push({
+          call: { tool: String(p.tool || ""), args: p.args || {} },
+          result: normalizeToolExecutionResult(p.result)
+        });
+      }
+    }
+    const finalTraceRounds = Array.from(roundMap.values()).sort((a, b) => a.round - b.round);
+    const toolNames = toolLogs.map((t) => t.call.tool).filter(Boolean);
+
+    if (prefersRelay && target?.kind === "backend-relay") {
+      setMessages((prev) => {
+        const next = [...prev];
+        const idx = agentSlotIndexRef.current;
+        if (idx >= 0 && idx < next.length && next[idx].role === "agent") {
+          next[idx] = {
+            ...next[idx],
+            content: displayReply,
+            toolsUsed: toolNames,
+            traceRounds: finalTraceRounds,
+            traceOpen: finalTraceRounds.some((r) => !!r.tool?.name),
+            modelName: payload?.model || resolvedModelName,
+            streaming: false,
+            reasoningApi: displayReasoning || ""
+          };
+        }
+        return next;
+      });
+    }
+
+    return {
+      payload,
+      reply,
+      displayReply,
+      displayReasoning,
+      target,
+      toolLogs,
+      streamedRelay: target?.kind === "backend-relay",
+      traceRounds: finalTraceRounds
+    };
   };
 
   const applyPreviewResponseToUi = (preview, source) => {
@@ -902,51 +710,23 @@ function AgentPanel({ toast, active }) {
       toast("请先填写 Agent API 地址", "warning");
       return;
     }
-    lastUserMutationIntentRef.current = isMutationIntentRequested(text);
+    // 语义驱动：不再基于关键词预判是否“改参意图”，由模型在工具链中自行决策是否进入 preview/apply 审批流程。
+    lastUserMutationIntentRef.current = true;
     // 新消息到来时先清空旧审批态，避免残留 token 被误执行；若本轮确实需要审批，会在 preview 返回后重新打开。
     setApprovalOpen(false);
     setApprovalChangeSummary(null);
     setApprovalToken("");
     setApprovalRunId("default");
     setApprovalRequestHash("");
-    const explicitToolCallForUserText = extractToolCallFromText(text);
-    const explicitMutationToolForUserText =
-      !!explicitToolCallForUserText &&
-      new Set(["agent.propose_patch", "agent.preview_patch", "agent.apply_patch_with_approval", "agent.rollback_run_config"]).has(
-        String(explicitToolCallForUserText.tool || "")
-      );
-    const hasRecentMutationContext = messages
-      .slice(-8)
-      .some(
-        (m) =>
-          m?.role === "agent" &&
-          Array.isArray(m?.traceRounds) &&
-          m.traceRounds.some((r) =>
-            ["agent.propose_patch", "agent.preview_patch", "agent.apply_patch_with_approval", "agent.rollback_run_config"].includes(
-              String(r?.tool?.name || "")
-            )
-          )
-      );
-    const continuationMutationIntent = hasRecentMutationContext && isContinuationLikeMutationText(text);
-    const hasRecentAnyToolContext = messages
-      .slice(-8)
-      .some(
-        (m) =>
-          m?.role === "agent" &&
-          Array.isArray(m?.traceRounds) &&
-          m.traceRounds.some((r) => !!r?.tool?.name || (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0))
-      );
-    const allowMutationForThisTurn =
-      isMutationIntentRequested(text) || explicitMutationToolForUserText || continuationMutationIntent;
+    // 始终允许模型在理解语义后自主选择是否调用 mutation tools；
+    // 实际写入仍受 preview+approval 双重门控约束。
+    const allowMutationForThisTurn = true;
     setLoading(true);
     if (clearInput) setInput("");
     setMessages((prev) => {
       return [...prev, { _messageId: nextMessageId(), role: "user", content: text }];
     });
     const turnStartTs = Date.now();
-    const preTail = messages.slice(-5);
-    const preHasAnyStreamingAgent = messages.some((m) => m?.role === "agent" && !!m?.streaming);
-    const preLatest = messages.length ? messages[messages.length - 1] : null;
     try {
       const { payload, reply, displayReply, displayReasoning, target, toolLogs, streamedRelay, traceRounds } =
         await runAgentWithTools({
@@ -1016,6 +796,29 @@ function AgentPanel({ toast, active }) {
             await maybeHandlePatch(data, reply);
           }
         }
+        if (!configMutationDone && allowMutationForThisTurn && !isExperimentStructureIntent(String(text || ""))) {
+          const replyText = String(reply || "");
+          const approvalCta = /批准修改训练配置|在对话区[「"']*批准|审批区|让\s*agent\s*执行|去审批|请.*批准|核对以下变更/.test(replyText);
+          const hasPreviewInLogs = toolLogs.some((t) => t.call?.tool === "agent.preview_patch");
+          const alreadyProposed = toolLogs.some((t) => t.call?.tool === "agent.propose_patch");
+          if (approvalCta && !hasPreviewInLogs && !alreadyProposed) {
+            try {
+              const pr = await executeAgentTool({
+                tool: "agent.propose_patch",
+                args: {
+                  goal: `根据上条助手答复中已给出的可落地参数与数值，生成可写入的 distill 配置 patch（仅讨论过的 distillation/training/output 叶子）。用户输入：${String(text).trim().slice(0, 500)}`,
+                  constraints: { source: "approval_cta_repair" }
+                }
+              });
+              const norm = normalizeToolExecutionResult(pr);
+              const followUpToolLogs = [
+                { call: { tool: "agent.propose_patch", args: { run_id: "default" } }, result: norm },
+                ...toolLogs
+              ];
+              await syncProposePatchViaPreview(followUpToolLogs);
+            } catch {}
+          }
+        }
       }
     } catch (error) {
       setMessages((prev) => [...prev, { _messageId: nextMessageId(), role: "agent", content: `请求失败: ${error.message}` }]);
@@ -1031,13 +834,6 @@ function AgentPanel({ toast, active }) {
 
   const sendPresetMessage = async (presetText) => {
     const text = (presetText || "").trim();
-    const panelEl = document.getElementById("panel-agent");
-    const rootEl = document.getElementById("root");
-    Promise.resolve().then(() => {
-      const panelAfter = document.getElementById("panel-agent");
-      const rootAfter = document.getElementById("root");
-    });
-    // #endregion
     await executeUserText(text, false);
   };
 

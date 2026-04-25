@@ -56,8 +56,18 @@
     --m3-state-hover-opacity: 0.08;
     --m3-state-focus-opacity: 0.12;
     --m3-state-pressed-opacity: 0.12;
+    --m3-duration-short1: 120ms;
+    --m3-duration-short2: 180ms;
+    --m3-duration-medium1: 220ms;
+    --m3-duration-medium2: 280ms;
+    --m3-duration-long1: 360ms;
+    --m3-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+    --m3-easing-emphasized: cubic-bezier(0.2, 0, 0, 1);
+    --m3-easing-decelerate: cubic-bezier(0, 0, 0, 1);
+    --m3-easing-accelerate: cubic-bezier(0.3, 0, 1, 1);
+    --m3-focus-ring: 0 0 0 3px color-mix(in srgb, var(--md-primary) 24%, transparent);
 }
 
 html.theme-transition * {
-    transition: background-color 0.35s ease, color 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease, filter 0.35s ease, fill 0.35s ease, stroke 0.35s ease;
+    transition: background-color var(--m3-duration-medium2) var(--m3-easing-standard), color var(--m3-duration-medium2) var(--m3-easing-standard), border-color var(--m3-duration-medium2) var(--m3-easing-standard), box-shadow var(--m3-duration-medium2) var(--m3-easing-standard), filter var(--m3-duration-medium2) var(--m3-easing-standard), fill var(--m3-duration-medium2) var(--m3-easing-standard), stroke var(--m3-duration-medium2) var(--m3-easing-standard);
 }

@@ -6,6 +6,8 @@ core/distillation/common.py
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 
@@ -25,3 +27,20 @@ def safe_scalar(value) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def w_feat_to_scalar(v: Any) -> float:
+    """
+    将配置中的 w_feat 统一为标量。历史上曾使用多元素列表，读入时取算术平均，与训练端 CompositiveDistillLoss 一致。
+    """
+    if v is None:
+        return 0.0
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, (list, tuple)):
+        if not v:
+            return 0.0
+        return float(sum(float(x) for x in v) / len(v))
+    return safe_scalar(v)

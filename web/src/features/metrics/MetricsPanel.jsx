@@ -12,9 +12,11 @@ import {
   PointElement,
   Tooltip
 } from "chart.js";
-import { fetchMetricsBySource, fetchMetricsList } from "../../api/metricsApi";
 import { M3Select } from "../../components/forms/M3Select";
 import { Button } from "../../components/ui/button";
+import { EpochRangeHint } from "./components/EpochRangeHint";
+import { OverviewCard } from "./components/OverviewCard";
+import { useMetricsData } from "./hooks/useMetricsData";
 
 Chart.register(
   BarController,
@@ -51,41 +53,24 @@ function epochStartIndex(range, totalLen) {
   return 0;
 }
 
-/** 与后端序列对齐后的可见点数（用于标题旁提示） */
-function visibleEpochCount(total, range) {
-  const r = normalizeEpochRange(range);
-  if (!total) return 0;
-  if (r === "last30") return Math.min(30, total);
-  if (r === "last10") return Math.min(10, total);
-  return total;
-}
-
 function minPositiveLen(...lengths) {
   const nums = lengths.filter((n) => typeof n === "number" && n > 0);
   if (!nums.length) return 0;
   return Math.min(...nums);
 }
 
-function EpochRangeHint({ total, range, unit = "epoch" }) {
-  const r = normalizeEpochRange(range);
-  if (!total || r === "all") return null;
-  const vis = visibleEpochCount(total, range);
-  const sameAsAll =
-    (r === "last30" && total <= 30) || (r === "last10" && total <= 10);
-  return (
-    <span className="chart-epoch-hint">
-      显示 {vis}/{total} 个{unit}
-      {sameAsAll ? "（与「全部」相同）" : ""}
-    </span>
-  );
+function renderTrendIcon(trend) {
+  const normalized = String(trend || "stable").toLowerCase();
+  if (normalized === "up") {
+    return <span className="material-icons trend-icon trend-up" title="上升" aria-label="上升">trending_up</span>;
+  }
+  if (normalized === "down") {
+    return <span className="material-icons trend-icon trend-down" title="下降" aria-label="下降">trending_down</span>;
+  }
+  return <span className="material-icons trend-icon trend-stable" title="持平" aria-label="持平">trending_flat</span>;
 }
 
 function MetricsPanel({ toast, active }) {
-  const [sources, setSources] = useState([]);
-  const [source, setSource] = useState("");
-  const [overview, setOverview] = useState({});
-  const [summaryMetrics, setSummaryMetrics] = useState({});
-  const [hasData, setHasData] = useState(false);
   const [chartType, setChartType] = useState("all");
   const [rangeLoss, setRangeLoss] = useState("all");
   const [rangeMap, setRangeMap] = useState("all");
@@ -93,7 +78,6 @@ function MetricsPanel({ toast, active }) {
   const [rangeDistill, setRangeDistill] = useState("all");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshLeft, setRefreshLeft] = useState(30);
-  const [chartSeriesState, setChartSeriesState] = useState(null);
   const [themeMode, setThemeMode] = useState(() => document.documentElement.getAttribute("data-theme") || "light");
 
   const lossRef = useRef(null);
@@ -102,134 +86,19 @@ function MetricsPanel({ toast, active }) {
   const distillRef = useRef(null);
   const classRef = useRef(null);
   const chartInstances = useRef({});
-  const rawSeriesRef = useRef(null);
-  const lastDataFingerprintRef = useRef("");
 
-  const sendDebugLog = (hypothesisId, location, message, data = {}, runId = "initial") => {
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ea807b" },
-      body: JSON.stringify({
-        sessionId: "ea807b",
-        runId,
-        hypothesisId,
-        location,
-        message,
-        data,
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-  };
-
-  const refreshSources = async (showToast = false) => {
-    try {
-      const data = await fetchMetricsList();
-      const available = Array.isArray(data.csv_metrics) ? data.csv_metrics.filter((x) => x.has_results) : [];
-      const nextSource = available.some((it) => it.path === source) ? source : (available[0]?.path || "");
-      sendDebugLog("H1", "MetricsPanel.jsx:refreshSources", "source candidates resolved", {
-        availableCount: available.length,
-        previousSource: source || "",
-        nextSource: nextSource || "",
-        labels: available.slice(0, 3).map((it) => String(it.display_name || it.name || ""))
-      });
-      setSources(available);
-      if (!available.length) {
-        setHasData(false);
-        sendDebugLog("H2", "MetricsPanel.jsx:refreshSources", "no available source branch", {
-          hasDataNext: false
-        });
-        if (showToast) toast("暂无训练结果可展示", "info");
-        return;
-      }
-      const sourceUnchanged = nextSource && nextSource === source;
-      setSource(nextSource);
-      if (sourceUnchanged) {
-        loadMetricsData(nextSource, !showToast);
-        return;
-      }
-      if (showToast) toast("指标来源已刷新", "success");
-    } catch (error) {
-      toast(error.message, "error");
-    }
-  };
-
-  const loadMetricsData = async (sourcePath, silent = false) => {
-    if (!sourcePath) return;
-    try {
-      const data = await fetchMetricsBySource(sourcePath);
-      const epochs = data.chart_series?.epochs || [];
-      const lastEpoch = epochs.length ? epochs[epochs.length - 1] : null;
-      const nextFingerprint = `${sourcePath}|${data.rows || 0}|${lastEpoch ?? "na"}`;
-      const prevFingerprint = lastDataFingerprintRef.current;
-      const changed = prevFingerprint !== nextFingerprint;
-      lastDataFingerprintRef.current = nextFingerprint;
-      setHasData(epochs.length > 0);
-      sendDebugLog("H2", "MetricsPanel.jsx:loadMetricsData", "metrics payload loaded", {
-        sourcePath: sourcePath || "",
-        epochsLen: epochs.length,
-        hasDataNext: epochs.length > 0,
-        changed
-      });
-      setOverview(data.overview_stats || {});
-      setSummaryMetrics(data.summary_metrics || {});
-      const nextSeries = data.chart_series || null;
-      rawSeriesRef.current = nextSeries;
-      setChartSeriesState(nextSeries);
-      if (!silent) toast(changed ? "图表已更新" : "暂无新数据，已是最新结果", changed ? "success" : "info");
-    } catch (error) {
-      setHasData(false);
-      setChartSeriesState(null);
-      toast(error.message, "error");
-    }
-  };
-
-  useEffect(() => {
-    refreshSources();
-  }, []);
-
-  useEffect(() => {
-    const panel = document.getElementById("panel-metrics");
-    const toolbarLeft = panel?.querySelector(".toolbar-left");
-    const refreshBtn = panel?.querySelector(".metrics-refresh-btn");
-    const selectRoot = panel?.querySelector(".metrics-source-select");
-    const selectValue = panel?.querySelector(".metrics-source-select .m3-select-value");
-    if (!toolbarLeft || !refreshBtn || !selectRoot) return;
-    const logLayout = (phase) => {
-      const leftRect = toolbarLeft.getBoundingClientRect();
-      const btnRect = refreshBtn.getBoundingClientRect();
-      const selectRect = selectRoot.getBoundingClientRect();
-      const selectStyle = window.getComputedStyle(selectRoot);
-      const btnStyle = window.getComputedStyle(refreshBtn);
-      sendDebugLog("H3", "MetricsPanel.jsx:layoutEffect", `toolbar layout ${phase}`, {
-        hasData,
-        sourceCount: sources.length,
-        sourceValue: source || "",
-        labelText: String(selectValue?.textContent || "").trim(),
-        labelLen: String(selectValue?.textContent || "").trim().length,
-        toolbarLeftX: Math.round(leftRect.x),
-        toolbarLeftW: Math.round(leftRect.width),
-        refreshX: Math.round(btnRect.x),
-        refreshW: Math.round(btnRect.width),
-        selectX: Math.round(selectRect.x),
-        selectW: Math.round(selectRect.width),
-        selectCssWidth: selectStyle.width,
-        selectCssFlex: selectStyle.flex,
-        refreshCssFlex: btnStyle.flex
-      });
-    };
-    logLayout("before-raf");
-    const rafId = window.requestAnimationFrame(() => {
-      logLayout("after-raf");
-    });
-    return () => window.cancelAnimationFrame(rafId);
-  }, [sources, source, hasData]);
-
-  useEffect(() => {
-    if (!source) return;
-    loadMetricsData(source, true);
-  }, [source]);
+  const {
+    sources,
+    source,
+    setSource,
+    overview,
+    summaryMetrics,
+    hasData,
+    chartSeriesState,
+    rawSeriesRef,
+    refreshSources,
+    loadMetricsData
+  } = useMetricsData({ toast });
 
   useEffect(() => {
     if (!active || !rawSeriesRef.current) return;
@@ -335,7 +204,7 @@ function MetricsPanel({ toast, active }) {
       toast("暂无可导出数据", "warning");
       return;
     }
-    let csv = "\uFEFF指标,最佳值,最终值,改善幅度,趋势\n";
+    let csv = "\uFEFF指标,最优值,最终值,改善幅度,趋势\n";
     entries.forEach(([name, val]) => {
       csv += `${name},${val.best},${val.final},${val.improvement || ""},${val.trend || ""}\n`;
     });
@@ -358,7 +227,7 @@ function MetricsPanel({ toast, active }) {
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-metrics" aria-hidden={!active}>
       <div className="metrics-toolbar">
         <div className="toolbar-left">
-          <Button variant="outline" className="md-btn md-btn-outlined metrics-refresh-btn" onClick={() => refreshSources(true)}>
+          <Button variant="outline" className="metrics-refresh-btn" onClick={() => refreshSources(true)}>
             <span className="material-icons">refresh</span>刷新数据
           </Button>
           <M3Select
@@ -375,10 +244,10 @@ function MetricsPanel({ toast, active }) {
         </div>
         <div className="toolbar-right metrics-toolbar-right">
           <div className="chip-group">
-            <button className={`chip ${chartType === "loss" ? "active" : ""}`} onClick={() => setChartType("loss")}>损失</button>
-            <button className={`chip ${chartType === "accuracy" ? "active" : ""}`} onClick={() => setChartType("accuracy")}>精度</button>
-            <button className={`chip ${chartType === "lr" ? "active" : ""}`} onClick={() => setChartType("lr")}>学习率</button>
-            <button className={`chip ${chartType === "all" ? "active" : ""}`} onClick={() => setChartType("all")}>全部</button>
+            <Button variant={chartType === "loss" ? "secondary" : "outline"} className={`chip ${chartType === "loss" ? "active" : ""}`} onClick={() => setChartType("loss")}>损失</Button>
+            <Button variant={chartType === "accuracy" ? "secondary" : "outline"} className={`chip ${chartType === "accuracy" ? "active" : ""}`} onClick={() => setChartType("accuracy")}>精度</Button>
+            <Button variant={chartType === "lr" ? "secondary" : "outline"} className={`chip ${chartType === "lr" ? "active" : ""}`} onClick={() => setChartType("lr")}>学习率</Button>
+            <Button variant={chartType === "all" ? "secondary" : "outline"} className={`chip ${chartType === "all" ? "active" : ""}`} onClick={() => setChartType("all")}>全部</Button>
           </div>
           <div className="auto-refresh-bar">
             <label className="auto-refresh-label">
@@ -498,14 +367,14 @@ function MetricsPanel({ toast, active }) {
             <div className="chart-card full-width">
               <div className="chart-header">
                 <h3>训练结果摘要</h3>
-                <Button variant="secondary" className="md-btn md-btn-tonal sm-btn" onClick={exportTable}>
+                <Button variant="secondary" className="sm-btn" onClick={exportTable}>
                   <span className="material-icons">table_chart</span>导出表格
                 </Button>
               </div>
               <div className="table-container">
                 <table className="md-table">
                   <thead>
-                    <tr><th>指标</th><th>最佳值</th><th>最终值</th><th>改善幅度</th><th>趋势</th></tr>
+                    <tr><th>指标</th><th>最优值</th><th>最终值</th><th>改善幅度</th><th>趋势</th></tr>
                   </thead>
                   <tbody>
                     {Object.entries(summaryMetrics).length === 0 ? (
@@ -517,7 +386,7 @@ function MetricsPanel({ toast, active }) {
                           <td>{Number(val.best).toFixed(4)}</td>
                           <td>{Number(val.final).toFixed(4)}</td>
                           <td>{val.improvement || "--"}</td>
-                          <td>{val.trend || "stable"}</td>
+                          <td>{renderTrendIcon(val.trend)}</td>
                         </tr>
                       ))
                     )}
@@ -528,18 +397,6 @@ function MetricsPanel({ toast, active }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function OverviewCard({ icon, label, value }) {
-  return (
-    <div className="overview-card">
-      <div className="overview-icon"><span className="material-icons">{icon}</span></div>
-      <div className="overview-info">
-        <span className="overview-label">{label}</span>
-        <span className="overview-value">{value}</span>
-      </div>
     </div>
   );
 }

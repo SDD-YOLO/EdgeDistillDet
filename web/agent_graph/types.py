@@ -22,15 +22,24 @@ class GraphState(TypedDict, total=False):
     requested_tool: str
     requested_args: dict[str, Any]
     system_prompt: str
+    session_id: str
+    max_steps: int
+    rag_options: dict[str, Any]
+    tool_policy: dict[str, Any]
+    messages: list[dict[str, Any]]
 
     # model interaction
     model_reply: str
     model_reasoning: str
     tool_call: ToolCall
+    action: str
 
     # tool execution
     tool_result: Any
     tool_logs: list[ToolLog]
+    retrieval_hits: list[dict[str, Any]]
+    trace: list[dict[str, Any]]
+    step_count: int
 
     # patch / approval context
     patch: dict[str, Any]

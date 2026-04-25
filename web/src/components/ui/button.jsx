@@ -1,34 +1,55 @@
 import { forwardRef } from "react";
 
-const VARIANT_CLASS = {
-  default: "md-btn md-btn-filled",
-  secondary: "md-btn md-btn-tonal",
-  outline: "md-btn md-btn-outlined",
-  ghost: "md-btn md-btn-text",
-  destructive: "md-btn"
-};
+function legacyClassName(variant, size, extra) {
+  const classes = ["md-btn"];
+  if (variant === "ghost") classes.push("md-btn-text");
+  if (variant === "outline") classes.push("md-btn-outlined");
+  if (variant === "secondary" || variant === "tonal") classes.push("md-btn-tonal");
+  if (variant === "default") classes.push("md-btn-filled");
+  if (size === "sm") classes.push("sm-btn");
+  if (extra) classes.push(extra);
+  return classes.join(" ");
+}
 
-const SIZE_CLASS = {
-  default: "",
-  sm: "sm-btn",
-  icon: ""
-};
-
-function mergeClassNames(...parts) {
-  return parts.filter(Boolean).join(" ");
+function modernClassName(variant, size, extra) {
+  const classes = ["btn"];
+  if (variant === "ghost") classes.push("btn-ghost");
+  if (variant === "outline") classes.push("btn-outline");
+  if (variant === "secondary" || variant === "tonal") classes.push("btn-secondary");
+  if (variant === "destructive") classes.push("btn-destructive");
+  if (size === "sm") classes.push("btn-sm");
+  if (size === "icon") classes.push("btn-icon");
+  if (extra) classes.push(extra);
+  return classes.join(" ");
 }
 
 const Button = forwardRef(function Button(
-  { className = "", variant = "default", size = "default", type = "button", ...props },
+  {
+    className = "",
+    variant = "default",
+    size = "default",
+    type = "button",
+    loading = false,
+    children,
+    legacy = true,
+    ...props
+  },
   ref
 ) {
+  const mergedClassName = legacy ? legacyClassName(variant, size, className) : modernClassName(variant, size, className);
+
   return (
     <button
       ref={ref}
       type={type}
-      className={mergeClassNames("md-btn", VARIANT_CLASS[variant], SIZE_CLASS[size], className)}
+      className={mergedClassName}
+      disabled={loading || props.disabled}
+      aria-busy={loading ? "true" : undefined}
       {...props}
-    />
+    >
+      {loading ? <span className="btn-spinner" aria-hidden="true" /> : null}
+      <span className={loading ? "btn-content is-loading" : "btn-content"}>{children}</span>
+    </button>
   );
 });
 

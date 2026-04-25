@@ -3,53 +3,26 @@ from __future__ import annotations
 import json
 import re
 import time
-from pathlib import Path
 from typing import Any, Callable, Generator
 
-from .graph import build_model_graph, build_tool_graph
-from .model_client import invoke_chat_completion, stream_chat_completion
+from web.agent_rag import retrieve_hybrid
+
+from .graph import build_agentic_rag_graph, build_model_graph, build_tool_graph
+from .model_client import invoke_chat_completion
 from .types import GraphState
 
 ToolExecutor = Callable[[str, dict[str, Any], GraphState], Any]
-_DEBUG_LOG_PATH = Path("debug-d5a26f.log")
 _BLOCKED_LINE_RE = re.compile(
     r"执行命令\s*[（(]\s*需审批\s*[）)]|python\s+distill\.py\b[^\n\r]*configs[\\/]+distill_config\.ya?ml",
     re.IGNORECASE,
 )
-
-
-def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    # region agent log
-    try:
-        payload = {
-            "sessionId": "d5a26f",
-            "runId": str(run_id or "default"),
-            "hypothesisId": str(hypothesis_id),
-            "location": str(location),
-            "message": str(message),
-            "data": data if isinstance(data, dict) else {},
-            "timestamp": int(time.time() * 1000),
-        }
-        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # endregion
+_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+_BRACED_JSON_RE = re.compile(r"\{[\s\S]*\}")
 
 
 def _extract_tool_name(reply: str) -> str:
     m = re.search(r'"tool"\s*:\s*"([^"]+)"', str(reply or ""))
     return m.group(1).strip() if m else ""
-
-
-def _extract_last_user_text(payload: dict[str, Any]) -> str:
-    msgs = payload.get("messages")
-    if not isinstance(msgs, list):
-        return ""
-    for item in reversed(msgs):
-        if isinstance(item, dict) and str(item.get("role") or "") == "user":
-            return str(item.get("content") or "")
-    return ""
 
 
 def _sanitize_blocked_reply_text(text: str) -> str:
@@ -60,6 +33,108 @@ def _sanitize_blocked_reply_text(text: str) -> str:
     cleaned = "\n".join(cleaned_lines)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
+
+
+def _extract_action_payload(reply: str) -> dict[str, Any]:
+    raw = str(reply or "").strip()
+    if not raw:
+        return {}
+    candidates = [raw]
+    candidates.extend(m.group(1).strip() for m in _JSON_BLOCK_RE.finditer(raw))
+    brace_match = _BRACED_JSON_RE.search(raw)
+    if brace_match:
+        candidates.append(brace_match.group(0))
+    for item in candidates:
+        try:
+            parsed = json.loads(item)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _extract_last_user_message(messages: list[dict[str, Any]]) -> str:
+    for msg in reversed(list(messages or [])):
+        if isinstance(msg, dict) and str(msg.get("role") or "") == "user":
+            return str(msg.get("content") or "")
+    return ""
+
+
+def _build_agentic_system_prompt(base_prompt: str | None) -> str:
+    control_prompt = (
+        "你是一个 Agentic RAG 助手。你可以在每一步自主选择：\n"
+        "1) 检索（action=retrieve）\n"
+        "2) 调用工具（action=tool）\n"
+        "3) 直接回答（action=final）\n"
+        "输出必须是 JSON 对象，格式之一：\n"
+        '{"action":"retrieve","query":"...","top_k":5}\n'
+        '{"action":"tool","tool":"agent.get_context","args":{"run_id":"default"}}\n'
+        '{"action":"final","reply":"给用户的最终答复","reasoning":"可选"}\n'
+        "若你引导用户到「批准修改训练配置」或需写入配置，须先以 action=tool 调用 agent.preview_patch（或 propose_patch 后 preview）拿到 approval；禁止在从未调用过 preview 时仅在 final 中写去批准。\n"
+        "当你修改 distillation.w_feat 时，必须使用数值标量（int/float），禁止输出数组/列表。\n"
+        "如果工具返回需要审批（approval_token），不要自动执行 apply，改为告知用户在审批区执行。"
+    )
+    base = str(base_prompt or "").strip()
+    if not base:
+        return control_prompt
+    return f"{base}\n\n{control_prompt}"
+
+
+def _plan_once(payload: dict[str, Any], state: GraphState) -> dict[str, Any]:
+    messages = list(state.get("messages") or [])
+    resp = invoke_chat_completion(
+        api_url=str(payload.get("api_url") or ""),
+        api_key=payload.get("api_key"),
+        model=payload.get("model"),
+        messages=messages,
+        system_prompt=_build_agentic_system_prompt(payload.get("system_prompt")),
+        temperature=float(payload.get("temperature") or 0.2),
+        max_tokens=payload.get("max_tokens"),
+        endpoint=payload.get("endpoint"),
+        timeout_sec=float(payload.get("timeout_sec") or 40.0),
+        extra_headers=payload.get("extra_headers") or {},
+    )
+    reply = _sanitize_blocked_reply_text(str(resp.get("reply") or ""))
+    reasoning = str(resp.get("reasoning") or "")
+    parsed = _extract_action_payload(reply)
+    action = str(parsed.get("action") or "").strip().lower()
+    if action in {"rag", "search"}:
+        action = "retrieve"
+    if action not in {"retrieve", "tool", "final"}:
+        action = "final"
+    out: dict[str, Any] = {"status": "ok", "action": action, "reply": reply, "reasoning": reasoning}
+    if action == "retrieve":
+        out["query"] = str(parsed.get("query") or _extract_last_user_message(messages))
+        out["top_k"] = int(parsed.get("top_k") or 5)
+    if action == "tool":
+        tool = str(parsed.get("tool") or _extract_tool_name(reply) or "").strip()
+        args = parsed.get("args") if isinstance(parsed.get("args"), dict) else {}
+        out.update({"tool": tool, "args": args})
+    if action == "final":
+        # 允许模型仅输出 JSON 决策，真正答复由 reply 字段承载。
+        final_reply = str(parsed.get("reply") or "").strip()
+        if final_reply:
+            out["reply"] = final_reply
+        final_reasoning = str(parsed.get("reasoning") or "").strip()
+        if final_reasoning:
+            out["reasoning"] = final_reasoning
+    return out
+
+
+def _retrieve_once(state: GraphState) -> list[dict[str, Any]]:
+    messages = list(state.get("messages") or [])
+    query = str(state.get("retrieval_query") or _extract_last_user_message(messages))
+    rag_opts = state.get("rag_options") if isinstance(state.get("rag_options"), dict) else {}
+    run_id = str(state.get("run_id") or rag_opts.get("run_id") or "default")
+    top_k = int(rag_opts.get("top_k") or state.get("retrieval_top_k") or 5)
+    return retrieve_hybrid(query, run_id=run_id, top_k=top_k)
+
+
+def _append_observation_message(messages: list[dict[str, Any]], role: str, content: str) -> list[dict[str, Any]]:
+    out = list(messages or [])
+    out.append({"role": role, "content": content})
+    return out
 
 
 def execute_tool_graph(
@@ -83,87 +158,146 @@ def execute_tool_graph(
 
 
 def invoke_model_graph(payload: dict[str, Any]) -> dict[str, Any]:
-    def _invoker(state: GraphState) -> dict[str, Any]:
-        return invoke_chat_completion(
-            api_url=str(payload.get("api_url") or ""),
-            api_key=payload.get("api_key"),
-            model=payload.get("model"),
-            messages=list(payload.get("messages") or []),
-            system_prompt=payload.get("system_prompt"),
-            temperature=float(payload.get("temperature") or 0.2),
-            max_tokens=payload.get("max_tokens"),
-            endpoint=payload.get("endpoint"),
-            timeout_sec=float(payload.get("timeout_sec") or 40.0),
-            extra_headers=payload.get("extra_headers") or {},
-        )
+    try:
+        initial_messages = list(payload.get("messages") or [])
+        initial_state: GraphState = {
+            "messages": initial_messages,
+            "run_id": str(payload.get("run_id") or "default"),
+            "session_id": str(payload.get("session_id") or "default"),
+            "max_steps": int(payload.get("max_steps") or 4),
+            "rag_options": payload.get("rag_options") if isinstance(payload.get("rag_options"), dict) else {},
+            "tool_policy": payload.get("tool_policy") if isinstance(payload.get("tool_policy"), dict) else {},
+            "step_count": 0,
+        }
 
-    app = build_model_graph(_invoker)
-    out = app.invoke({"user_text": "invoke_model"})
-    if isinstance(out, dict) and isinstance(out.get("response"), dict):
-        response = dict(out["response"])
-        raw_reply_text = str(response.get("reply") or "")
-        reply_text = _sanitize_blocked_reply_text(raw_reply_text)
-        response["reply"] = reply_text
-        reasoning_text = str(response.get("reasoning") or "")
-        return response
-    return {"status": "error", "error": "model_graph_failed", "reply": ""}
+        def _planner(state: GraphState) -> dict[str, Any]:
+            step_out = _plan_once(payload, state)
+            if step_out.get("action") == "retrieve":
+                state["retrieval_query"] = str(step_out.get("query") or "")
+                state["retrieval_top_k"] = int(step_out.get("top_k") or 5)
+            return step_out
+
+        def _executor(tool: str, args: dict[str, Any], state: GraphState) -> Any:
+            # 非流式调用也复用 tools graph，保持审批语义一致。
+            from web.services.backend_agent import _execute_tool  # local import to avoid circular
+
+            return _execute_tool(tool, args, state)
+
+        app = build_agentic_rag_graph(_planner, _executor, _retrieve_once)
+        out = app.invoke(initial_state)
+        if isinstance(out, dict) and isinstance(out.get("response"), dict):
+            return dict(out["response"])
+        return {"status": "error", "error": "model_graph_failed", "reply": ""}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc), "reply": ""}
 
 
 def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, None]:
     reply_full = ""
     reasoning_full = ""
+    trace: list[dict[str, Any]] = []
     try:
-        stream = stream_chat_completion(
-            api_url=str(payload.get("api_url") or ""),
-            api_key=payload.get("api_key"),
-            model=payload.get("model"),
-            messages=list(payload.get("messages") or []),
-            system_prompt=payload.get("system_prompt"),
-            temperature=float(payload.get("temperature") or 0.2),
-            max_tokens=payload.get("max_tokens"),
-            endpoint=payload.get("endpoint"),
-            timeout_sec=float(payload.get("timeout_sec") or 40.0),
-            extra_headers=payload.get("extra_headers") or {},
-        )
-        while True:
-            try:
-                event = next(stream)
-            except StopIteration as done:
-                final_payload = done.value or {}
-                reply_full = str(final_payload.get("reply") or reply_full)
-                reasoning_full = str(final_payload.get("reasoning") or reasoning_full)
-                break
-            if not isinstance(event, dict):
+        run_id = str(payload.get("run_id") or "default")
+        max_steps = max(1, int(payload.get("max_steps") or 4))
+        state_messages = list(payload.get("messages") or [])
+        step = 0
+
+        from web.services.backend_agent import _execute_tool  # local import to avoid circular
+
+        while step < max_steps:
+            step += 1
+            step_state: GraphState = {
+                "messages": state_messages,
+                "run_id": run_id,
+                "max_steps": max_steps,
+                "rag_options": payload.get("rag_options") if isinstance(payload.get("rag_options"), dict) else {},
+                "tool_policy": payload.get("tool_policy") if isinstance(payload.get("tool_policy"), dict) else {},
+                "step_count": step - 1,
+            }
+            planned = _plan_once(payload, step_state)
+            action = str(planned.get("action") or "final")
+            step_reply = str(planned.get("reply") or "")
+            step_reasoning = str(planned.get("reasoning") or "")
+            reply_full = step_reply
+            reasoning_full = step_reasoning
+            model_event = {
+                "event_type": "model_output",
+                "timestamp": int(time.time() * 1000),
+                "step": step,
+                "payload": {"reply": step_reply, "reasoning": step_reasoning, "action": action},
+            }
+            trace.append(model_event)
+            yield f"data: {json.dumps(model_event, ensure_ascii=False)}\n\n"
+            # 兼容旧前端：仍发送一次 content/done 语义。
+            if step == 1:
+                yield f"data: {json.dumps({'t': 'content', 'd': step_reply}, ensure_ascii=False)}\n\n"
+                if step_reasoning:
+                    yield f"data: {json.dumps({'t': 'reasoning', 'd': step_reasoning}, ensure_ascii=False)}\n\n"
+
+            if action == "retrieve":
+                q = str(planned.get("query") or _extract_last_user_message(state_messages))
+                rag_options = payload.get("rag_options") if isinstance(payload.get("rag_options"), dict) else {}
+                top_k = int(planned.get("top_k") or rag_options.get("top_k") or 5)
+                hits = retrieve_hybrid(q, run_id=run_id, top_k=top_k)
+                for hit in hits:
+                    ev = {
+                        "event_type": "retrieval_hit",
+                        "timestamp": int(time.time() * 1000),
+                        "step": step,
+                        "payload": hit,
+                    }
+                    trace.append(ev)
+                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                observe_text = json.dumps({"query": q, "hits": hits}, ensure_ascii=False)
+                state_messages = _append_observation_message(state_messages, "assistant", step_reply)
+                state_messages = _append_observation_message(state_messages, "user", f"[retrieval_observation]\n{observe_text}")
                 continue
-            if event.get("t") == "content":
-                chunk = str(event.get("d") or "")
-                reply_full += chunk
-                yield f"data: {json.dumps({'t': 'content', 'd': chunk}, ensure_ascii=False)}\n\n"
-            elif event.get("t") == "reasoning":
-                chunk = str(event.get("d") or "")
-                reasoning_full += chunk
-                yield f"data: {json.dumps({'t': 'reasoning', 'd': chunk}, ensure_ascii=False)}\n\n"
-        # region agent log
-        _debug_log(
-            run_id=str(payload.get("run_id") or "default"),
-            hypothesis_id="H21",
-            location="web/agent_graph/runtime.py:invoke_model_graph_stream",
-            message="Model stream finished",
-            data={
-                "reply_len": len(reply_full),
-                "tool_in_reply": _extract_tool_name(reply_full),
-                "last_user_text": _extract_last_user_text(payload)[:220],
-                "user_has_negation": bool(
-                    re.search(r"不改参数|不要改参数|无需修改参数|不用修改参数|先不修改参数|仅咨询|只咨询|不需要执行", _extract_last_user_text(payload))
-                ),
-                "user_has_mutation_hint": bool(
-                    re.search(r"修改|调整|patch|补丁|预览|preview|应用|apply|写入|执行", _extract_last_user_text(payload), re.I)
-                ),
+
+            if action == "tool":
+                tool = str(planned.get("tool") or "").strip()
+                args = planned.get("args") if isinstance(planned.get("args"), dict) else {}
+                ev_start = {
+                    "event_type": "tool_start",
+                    "timestamp": int(time.time() * 1000),
+                    "step": step,
+                    "payload": {"tool": tool, "args": args},
+                }
+                trace.append(ev_start)
+                yield f"data: {json.dumps(ev_start, ensure_ascii=False)}\n\n"
+                tool_result = execute_tool_graph(tool=tool, args=args, executor=_execute_tool, run_id=run_id)
+                ev_end = {
+                    "event_type": "tool_end",
+                    "timestamp": int(time.time() * 1000),
+                    "step": step,
+                    "payload": {"tool": tool, "args": args, "result": tool_result},
+                }
+                trace.append(ev_end)
+                yield f"data: {json.dumps(ev_end, ensure_ascii=False)}\n\n"
+                state_messages = _append_observation_message(state_messages, "assistant", step_reply)
+                state_messages = _append_observation_message(
+                    state_messages,
+                    "user",
+                    f"[tool_observation:{tool}]\n{json.dumps(tool_result, ensure_ascii=False)}",
+                )
+                continue
+
+            break
+
+        done_event = {
+            "event_type": "done",
+            "timestamp": int(time.time() * 1000),
+            "step": step,
+            "payload": {
+                "reply": _sanitize_blocked_reply_text(reply_full),
+                "reasoning": reasoning_full,
+                "trace": trace,
             },
-        )
-        # endregion
-        done_event = {"t": "done", "reply": _sanitize_blocked_reply_text(reply_full), "reasoning": reasoning_full}
+        }
         yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'t': 'done', 'reply': _sanitize_blocked_reply_text(reply_full), 'reasoning': reasoning_full, 'events': trace}, ensure_ascii=False)}\n\n"
     except Exception as exc:
+        err = {"event_type": "error", "timestamp": int(time.time() * 1000), "payload": {"message": str(exc)}}
+        yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        # 兼容旧前端
         err = {"t": "error", "message": str(exc)}
         yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"

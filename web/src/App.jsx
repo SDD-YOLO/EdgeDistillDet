@@ -22,30 +22,6 @@ function App() {
     window.localStorage.setItem("edgedistilldet-theme", theme);
   }, [theme]);
 
-  useEffect(() => {
-    const root = document.getElementById("root");
-    // #region agent log
-    fetch("http://127.0.0.1:7934/ingest/2c4bcf68-efd6-4fd1-8130-1f5a368246bc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e872f3" },
-      body: JSON.stringify({
-        sessionId: "e872f3",
-        runId: `app-${Date.now()}`,
-        hypothesisId: "H69",
-        location: "App.jsx:activeTabEffect",
-        message: "active tab and root geometry",
-        data: {
-          activeTab: String(activeTab || ""),
-          rootClientHeight: Number(root?.clientHeight || 0),
-          rootClientWidth: Number(root?.clientWidth || 0),
-          bodyClientHeight: Number(document.body?.clientHeight || 0)
-        },
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-    // #endregion
-  }, [activeTab]);
-
   return (
     <>
       <div className="console-shell">
@@ -65,14 +41,16 @@ function App() {
 
           <nav className="sidebar-nav" role="tablist" aria-label="主导航">
             {navItems.map((item) => (
-              <button
+              <Button
                 key={item.key}
                 className={`sidebar-nav-btn ${activeTab === item.key ? "active" : ""}`}
                 onClick={() => setActiveTab(item.key)}
+                variant="ghost"
+                legacy={false}
               >
                 <item.icon size={16} />
                 <span>{item.label}</span>
-              </button>
+              </Button>
             ))}
           </nav>
 

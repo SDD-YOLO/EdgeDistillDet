@@ -342,12 +342,16 @@ def _summarize_series(rows, key, better='higher'):
     best = max(values) if better == 'higher' else min(values)
     diff = final - best
     sign = '+' if diff >= 0 else '-'
+    if abs(diff) <= 1e-12:
+        trend = 'stable'
+    else:
+        trend = 'up' if diff > 0 else 'down'
     improvement = f"{sign}{abs(diff) * 100:.2f}%"
     return {
         'best': best,
         'final': final,
         'improvement': improvement,
-        'trend': 'down' if better == 'lower' else 'up'
+        'trend': trend
     }
 
 def _extract_class_performance(rows, columns, class_labels=None, run_dir=None):

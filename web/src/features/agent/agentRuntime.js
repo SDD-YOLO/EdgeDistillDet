@@ -1,3 +1,5 @@
+import { invokeAgentStreamViaRelay } from "../../api/agentStreamApi";
+
 export function parseResponsePayload(text) {
   if (!text) return null;
   try {
@@ -76,6 +78,7 @@ export async function readAgentInvokeSseStream(response, onDelta) {
   let buffer = "";
   let reply = "";
   let reasoning = "";
+  const events = [];
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -96,16 +99,34 @@ export async function readAgentInvokeSseStream(response, onDelta) {
       }
       if (ev.t === "content" && ev.d) {
         reply += ev.d;
-        onDelta?.({ reply, reasoning });
+        onDelta?.({ reply, reasoning, event: ev });
       } else if (ev.t === "reasoning" && ev.d) {
         reasoning += ev.d;
-        onDelta?.({ reply, reasoning });
+        onDelta?.({ reply, reasoning, event: ev });
       } else if (ev.t === "done") {
         if (typeof ev.reply === "string") reply = ev.reply;
         if (typeof ev.reasoning === "string") reasoning = ev.reasoning;
-        onDelta?.({ reply, reasoning });
+        if (Array.isArray(ev.events)) {
+          events.splice(0, events.length, ...ev.events);
+        }
+        onDelta?.({ reply, reasoning, event: ev });
       } else if (ev.t === "error") {
         throw new Error(ev.message || "流式调用失败");
+      } else if (ev.event_type) {
+        events.push(ev);
+        if (ev.event_type === "model_output") {
+          const payload = ev.payload && typeof ev.payload === "object" ? ev.payload : {};
+          if (typeof payload.reply === "string") reply = payload.reply;
+          if (typeof payload.reasoning === "string") reasoning = payload.reasoning;
+        } else if (ev.event_type === "done") {
+          const payload = ev.payload && typeof ev.payload === "object" ? ev.payload : {};
+          if (typeof payload.reply === "string") reply = payload.reply;
+          if (typeof payload.reasoning === "string") reasoning = payload.reasoning;
+        } else if (ev.event_type === "error") {
+          const payload = ev.payload && typeof ev.payload === "object" ? ev.payload : {};
+          throw new Error(payload.message || "流式调用失败");
+        }
+        onDelta?.({ reply, reasoning, event: ev });
       }
     }
   }
@@ -118,17 +139,34 @@ export async function readAgentInvokeSseStream(response, onDelta) {
         if (ev.t === "done") {
           if (typeof ev.reply === "string") reply = ev.reply;
           if (typeof ev.reasoning === "string") reasoning = ev.reasoning;
-          onDelta?.({ reply, reasoning });
+          if (Array.isArray(ev.events)) {
+            events.splice(0, events.length, ...ev.events);
+          }
+          onDelta?.({ reply, reasoning, event: ev });
         }
       } catch {
         /* ignore */
       }
     }
   }
-  return { reply, reasoning };
+  return { reply, reasoning, events };
 }
 
-export async function streamInvokeViaRelay({ apiUrl, apiKey, modelName, apiModel, text, mode, systemPrompt, onDelta }) {
+export async function streamInvokeViaRelay({
+  apiUrl,
+  apiKey,
+  modelName,
+  apiModel,
+  text,
+  mode,
+  systemPrompt,
+  onDelta,
+  runId = "default",
+  sessionId = "default",
+  ragOptions = {},
+  toolPolicy = {},
+  maxSteps = 4
+}) {
   const base = String(apiUrl || "").trim();
   if (/ark\./i.test(base) && /\/api\/v/i.test(base) && !String(apiModel || "").trim()) {
     throw new Error("检测到方舟地址，请先填写“模型名 / Endpoint ID”（如 ep-xxxxxx）");
@@ -137,20 +175,22 @@ export async function streamInvokeViaRelay({ apiUrl, apiKey, modelName, apiModel
   const errors = [];
   for (const endpoint of endpointCandidates) {
     try {
-      const res = await fetch("/api/agent/model/invoke-stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: "openai_compatible",
-          api_url: base,
-          api_key: String(apiKey || "").trim() || null,
-          endpoint,
-          model: modelName,
-          temperature: 0.2,
-          max_tokens: mode === "test" ? 8 : null,
-          system_prompt: systemPrompt || null,
-          messages: [{ role: "user", content: mode === "test" ? "ping" : text }]
-        })
+      const res = await invokeAgentStreamViaRelay({
+        provider: "openai_compatible",
+        api_url: base,
+        api_key: String(apiKey || "").trim() || null,
+        endpoint,
+        model: modelName,
+        temperature: 0.2,
+        max_tokens: mode === "test" ? 8 : null,
+        system_prompt: systemPrompt || null,
+        messages: [{ role: "user", content: mode === "test" ? "ping" : text }]
+        ,
+        run_id: runId,
+        session_id: sessionId,
+        rag_options: ragOptions,
+        tool_policy: toolPolicy,
+        max_steps: maxSteps
       });
       if (!res.ok) {
         let msg = `HTTP ${res.status}`;
@@ -166,11 +206,12 @@ export async function streamInvokeViaRelay({ apiUrl, apiKey, modelName, apiModel
         }
         throw new Error(msg);
       }
-      const { reply, reasoning } = await readAgentInvokeSseStream(res, onDelta);
+      const { reply, reasoning, events } = await readAgentInvokeSseStream(res, onDelta);
       const payload = {
         status: "ok",
         reply,
-        reasoning: reasoning  // Keep empty string if model doesn't return reasoning
+        reasoning,  // Keep empty string if model doesn't return reasoning
+        events
       };
       return { payload, target: { kind: "backend-relay", url: endpoint || base } };
     } catch (error) {
@@ -193,7 +234,12 @@ export async function requestAgentWithFallback({
   mode,
   systemPrompt,
   onDelta,
-  onRelayFallback
+  onRelayFallback,
+  runId = "default",
+  sessionId = "default",
+  ragOptions = {},
+  toolPolicy = {},
+  maxSteps = 4
 }) {
   const trimmedApiUrl = String(apiUrl || "").trim();
   if (/ark\./i.test(trimmedApiUrl) && /\/api\/v/i.test(trimmedApiUrl) && !String(apiModel || "").trim()) {
@@ -206,7 +252,21 @@ export async function requestAgentWithFallback({
   const isArkBase = /ark\./i.test(trimmedApiUrl) && /\/api\/v\d+$/i.test(trimmedApiUrl);
   if (prefersRelay) {
     try {
-      return await streamInvokeViaRelay({ apiUrl, apiKey, modelName, apiModel, text, mode, systemPrompt, onDelta });
+      return await streamInvokeViaRelay({
+        apiUrl,
+        apiKey,
+        modelName,
+        apiModel,
+        text,
+        mode,
+        systemPrompt,
+        onDelta,
+        runId,
+        sessionId,
+        ragOptions,
+        toolPolicy,
+        maxSteps
+      });
     } catch (error) {
       errors.push(error.message);
       onRelayFallback?.();
