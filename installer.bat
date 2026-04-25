@@ -91,12 +91,32 @@ if errorlevel 1 (
   popd
   goto :FAILED
 )
+if not exist "static\dist\app.js" (
+  echo [ERROR] Frontend build output missing: web\static\dist\app.js
+  popd
+  goto :FAILED
+)
+if not exist "static\dist\app.css" (
+  echo [ERROR] Frontend build output missing: web\static\dist\app.css
+  popd
+  goto :FAILED
+)
+if not exist "static\dist\assets\material-icons*.woff2" (
+  echo [ERROR] Icon font missing: material-icons*.woff2
+  popd
+  goto :FAILED
+)
+if not exist "static\dist\assets\material-symbols-outlined*.woff2" (
+  echo [ERROR] Icon font missing: material-symbols-outlined*.woff2
+  popd
+  goto :FAILED
+)
 popd
 
 echo.
 echo ==============================================
 echo Setup completed successfully.
-echo Frontend build output: web\dist
+echo Frontend build output: web\static\dist
 echo ==============================================
 echo.
 echo Press any key to exit...
