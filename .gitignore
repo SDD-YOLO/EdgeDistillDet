@@ -22,6 +22,7 @@ web/node_modules/
 *.pt.bak
 debug-*.log
 .cursor/
+.agent_state/
 
 # IDE
 .idea/
