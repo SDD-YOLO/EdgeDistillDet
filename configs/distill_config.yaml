@@ -39,8 +39,8 @@ training:
   close_mosaic: 10
   amp: true
 output:
-  project: runs\distill
-  name: exp1
+  project: runs/distill
+  name: exp12
 wandb:
   enabled: false
   mode: online

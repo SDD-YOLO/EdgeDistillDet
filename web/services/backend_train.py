@@ -295,7 +295,6 @@ def start_training(payload: TrainStartRequest):
                 'total_epochs': 0,
                 'logs': [f"{'[RESUME] 断点续训' if mode == 'resume' else '[TRAIN] 训练'} 已启动..."],
             })
-
         thread = threading.Thread(target=_run_training_process_safe, args=(cmd,), daemon=True)
         thread.start()
         return {'status': 'ok', 'message': f"{'断点续训' if mode == 'resume' else '训练'}已启动"}
@@ -397,6 +396,22 @@ def get_training_status():
     with training_runtime.train_state_lock:
         snap = {k: (list(v) if k == 'logs' and isinstance(v, list) else v) for k, v in training_runtime.training_status.items()}
     snap['log_count'] = len(snap.get('logs') or [])
+    running = bool(snap.get("running"))
+    start_time = snap.get("start_time")
+    current_epoch = int(snap.get("current_epoch") or 0)
+    total_epochs = int(snap.get("total_epochs") or 0)
+    elapsed_sec = 0
+    expected_sec = 0
+    try:
+        if running and isinstance(start_time, (int, float)) and start_time > 0:
+            elapsed_sec = max(0, int(time.time() - float(start_time)))
+            if current_epoch > 0 and total_epochs > 0:
+                expected_sec = max(elapsed_sec, int(round((elapsed_sec / current_epoch) * total_epochs)))
+    except Exception:
+        elapsed_sec = 0
+        expected_sec = 0
+    snap["elapsed_sec"] = elapsed_sec
+    snap["expected_sec"] = expected_sec
     return {'status': 'ok', **snap}
 
 def get_resume_candidates(project: str = Query('runs/distill')):

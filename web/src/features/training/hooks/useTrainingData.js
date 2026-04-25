@@ -1,6 +1,20 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { fetchTrainLogs, fetchTrainStatus } from "../../../api/trainApi";
 import { formatTime } from "../../../utils/time";
+
+function parseStartTimeToMs(raw) {
+  if (raw == null || raw === "") return null;
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    // 兼容秒/毫秒/微秒级时间戳
+    if (asNumber > 1e14) return Math.floor(asNumber / 1000);
+    if (asNumber > 1e11) return Math.floor(asNumber);
+    if (asNumber > 0) return Math.floor(asNumber * 1000);
+    return null;
+  }
+  const parsed = Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 export function useTrainingData({
   running,
@@ -14,6 +28,28 @@ export function useTrainingData({
   logOffsetRef,
   parseMetricsFromLogLines
 }) {
+  const emaSecPerEpochRef = useRef(null);
+  const emaEpochRef = useRef(0);
+  const expectedSecRef = useRef(0);
+
+  useEffect(() => {
+    if (!running) return undefined;
+    const id = window.setInterval(() => {
+      const started = startTimestampRef.current;
+      if (!started) return;
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      setProgress((prev) => {
+        return {
+          ...prev,
+          elapsed: formatTime(elapsedSec),
+          // 本地 1s 定时器仅更新耗时，预计总耗时交给状态轮询（避免同一 epoch 内抖动）
+          expected: prev.expected
+        };
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [running, setProgress, startTimestampRef]);
+
   useEffect(() => {
     let statusTimer = null;
 
@@ -21,29 +57,60 @@ export function useTrainingData({
       try {
         const data = await fetchTrainStatus();
         const nextRunning = Boolean(data.running);
-        if (lastServerRunningRef.current && !nextRunning) {
+        const wasRunning = Boolean(lastServerRunningRef.current);
+        if (wasRunning && !nextRunning) {
           refreshResumeCandidates(resumeListProjectRef.current || "runs/distill", false);
         }
         lastServerRunningRef.current = nextRunning;
         setRunning(nextRunning);
         if (nextRunning) {
-          if (!startTimestampRef.current && data.start_time) {
-            startTimestampRef.current = Math.floor(Number(data.start_time) * 1000);
+          if (!startTimestampRef.current) {
+            const parsedStart = parseStartTimeToMs(data.start_time);
+            if (parsedStart) startTimestampRef.current = parsedStart;
           }
-          const currentEpoch = Number(data.current_epoch) || 0;
-          const totalEpoch = Number(data.total_epochs) || 0;
+          const statusCurrent = Number(data.current_epoch) || 0;
+          const statusTotal = Number(data.total_epochs) || 0;
           const now = Date.now();
           const started = startTimestampRef.current || now;
-          const elapsedSec = Math.floor((now - started) / 1000);
-          const expectedSec = currentEpoch > 0 && totalEpoch > 0 ? Math.round((elapsedSec / currentEpoch) * totalEpoch) : 0;
-          setProgress({
-            current: currentEpoch,
-            total: totalEpoch,
-            elapsed: formatTime(elapsedSec),
-            expected: expectedSec > 0 ? formatTime(expectedSec) : "--:--:--"
+          const backendElapsedSec = Number(data.elapsed_sec);
+          const elapsedSec = Number.isFinite(backendElapsedSec) && backendElapsedSec >= 0
+            ? Math.floor(backendElapsedSec)
+            : Math.max(0, Math.floor((now - started) / 1000));
+          setProgress((prev) => {
+            // 轮询状态偶发回退时，保留前端已观测到的更大 epoch，避免预计耗时“卡回 --:--:--”
+            const currentEpoch = !wasRunning ? statusCurrent : Math.max(Number(prev.current) || 0, statusCurrent);
+            const totalEpoch = !wasRunning ? statusTotal : Math.max(Number(prev.total) || 0, statusTotal);
+            let expectedSec = expectedSecRef.current > 0 ? expectedSecRef.current : 0;
+            if (currentEpoch > 0 && totalEpoch > 0) {
+              const instantSecPerEpoch = elapsedSec / currentEpoch;
+              const epochChanged = emaEpochRef.current !== currentEpoch;
+              if (emaSecPerEpochRef.current == null || epochChanged) {
+                emaSecPerEpochRef.current =
+                  emaSecPerEpochRef.current == null
+                    ? instantSecPerEpoch
+                    : emaSecPerEpochRef.current * 0.7 + instantSecPerEpoch * 0.3;
+                emaEpochRef.current = currentEpoch;
+                expectedSec = Math.round((emaSecPerEpochRef.current || instantSecPerEpoch) * totalEpoch);
+                expectedSecRef.current = expectedSec;
+              }
+            } else {
+              expectedSec = 0;
+              expectedSecRef.current = 0;
+            }
+            return {
+              ...prev,
+              current: currentEpoch,
+              total: totalEpoch,
+              elapsed: formatTime(elapsedSec),
+              expected: expectedSec > 0 ? formatTime(expectedSec) : "--:--:--"
+            };
           });
         } else if (!nextRunning) {
           startTimestampRef.current = null;
+          emaSecPerEpochRef.current = null;
+          emaEpochRef.current = 0;
+          expectedSecRef.current = 0;
+          setProgress({ current: 0, total: 0, elapsed: "--:--:--", expected: "--:--:--" });
         }
       } catch {
         // 静默处理

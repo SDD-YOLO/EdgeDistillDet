@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 title EdgeDistillDet - New User Setup
 cd /d "%~dp0"
@@ -28,14 +28,22 @@ if errorlevel 1 (
   goto :FAILED
 )
 
+set /a TOTAL_STEPS=5
+set /a STEPS_DONE=0
+call :GET_TIME_CS INSTALL_START_CS
+
 echo [1/5] Upgrading pip ...
+call :PRINT_PROGRESS
 python -m pip install --upgrade pip
 if errorlevel 1 goto :FAILED
+call :MARK_STEP_DONE
 echo.
 
 echo [2/5] Installing Python dependencies from requirements.txt ...
+call :PRINT_PROGRESS
 python -m pip install -r requirements.txt
 if errorlevel 1 goto :FAILED
+call :MARK_STEP_DONE
 echo.
 
 REM 3) Check npm / Node.js
@@ -66,8 +74,11 @@ if errorlevel 1 (
 )
 
 echo [3/5] Node / npm version:
+call :PRINT_PROGRESS
 node --version
 npm --version
+if errorlevel 1 goto :FAILED
+call :MARK_STEP_DONE
 echo.
 
 REM 4) Install frontend dependencies and build
@@ -77,15 +88,18 @@ if not exist "web\package.json" (
 )
 
 echo [4/5] Installing web dependencies (npm install) ...
+call :PRINT_PROGRESS
 pushd web
 call npm install
 if errorlevel 1 (
   popd
   goto :FAILED
 )
+call :MARK_STEP_DONE
 echo.
 
 echo [5/5] Building frontend (npm run build) ...
+call :PRINT_PROGRESS
 call npm run build
 if errorlevel 1 (
   popd
@@ -111,12 +125,19 @@ if not exist "static\dist\assets\material-symbols-outlined*.woff2" (
   popd
   goto :FAILED
 )
+call :MARK_STEP_DONE
 popd
+
+call :GET_TIME_CS INSTALL_END_CS
+set /a INSTALL_TOTAL_CS=INSTALL_END_CS-INSTALL_START_CS
+if !INSTALL_TOTAL_CS! lss 0 set /a INSTALL_TOTAL_CS+=8640000
+call :FORMAT_DURATION !INSTALL_TOTAL_CS! INSTALL_TOTAL_STR
 
 echo.
 echo ==============================================
 echo Setup completed successfully.
 echo Frontend build output: web\static\dist
+echo Total elapsed time: !INSTALL_TOTAL_STR!
 echo ==============================================
 echo.
 echo Press any key to exit...

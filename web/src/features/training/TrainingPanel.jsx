@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   checkOutputPath,
@@ -203,7 +203,7 @@ function TrainingPanel({ toast, active }) {
     }
   };
 
-  const refreshResumeCandidates = async (project, autoSelect = true) => {
+  const refreshResumeCandidates = useCallback(async (project, autoSelect = true) => {
     try {
       const result = await fetchResumeCandidates(project);
       const candidates = Array.isArray(result.candidates) ? result.candidates : [];
@@ -226,7 +226,7 @@ function TrainingPanel({ toast, active }) {
     } catch {
       setResumeCandidates([]);
     }
-  };
+  }, []);
 
   useTrainingData({
     running,
@@ -414,6 +414,7 @@ function TrainingPanel({ toast, active }) {
       startTimestampRef.current = Date.now();
       logOffsetRef.current = 0;
       setLogs([]);
+      setProgress({ current: 0, total: 0, elapsed: "00:00:00", expected: "--:--:--" });
       lastServerRunningRef.current = true;
       setRunning(true);
       toast("训练任务已启动", "success");
@@ -432,6 +433,7 @@ function TrainingPanel({ toast, active }) {
         startTimestampRef.current = Date.now();
         logOffsetRef.current = 0;
         setLogs([]);
+        setProgress({ current: 0, total: 0, elapsed: "00:00:00", expected: "--:--:--" });
         lastServerRunningRef.current = true;
         setRunning(true);
         toast("训练任务已启动（已确认覆盖）", "success");
