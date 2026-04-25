@@ -27,7 +27,8 @@ export default defineConfig(({ command }) => ({
           if (assetInfo.name && assetInfo.name.endsWith(".css")) {
             return "app.css";
           }
-          return "assets/[name][extname]";
+          // Use hashed asset filenames to avoid stale font/icon caches.
+          return "assets/[name]-[hash][extname]";
         }
       }
     }
