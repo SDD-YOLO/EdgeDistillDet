@@ -11,7 +11,6 @@ venv/
 .ruff_cache/
 *.egg-info/
 .eggs/
-dist/
 build/
 
 # Node（应在 web/ 下执行 npm ci，勿提交 node_modules）
@@ -21,6 +20,8 @@ web/node_modules/
 # 训练 / 运行
 .training.lock
 *.pt.bak
+debug-*.log
+.cursor/
 
 # IDE
 .idea/
