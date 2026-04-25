@@ -226,6 +226,45 @@ export function softenAgentBubbleText(raw, streaming) {
   let t = sanitizeBlockedCommandHints(raw);
   t = t.replace(/\r\n/g, "\n");
 
+  // 新增：提取 JSON 中的 reply 字段（处理多 JSON 拼接的情况）
+  // 尝试找到第一个有效的 JSON 对象（含 reply 字段）
+  const trimmed = t.trim();
+  
+  // 使用非贪婪匹配，找到第一个完整的 JSON 对象
+  // 匹配 { ... }，但避免跨对象匹配
+  const jsonMatches = trimmed.match(/\{[^{}]*("reply"[^{}]*)[^{}]*\}/g) || 
+                      trimmed.match(/\{[\s\S]*?"reply"[\s\S]*?\}(?=\s*\{|$)/);
+  
+  if (jsonMatches && jsonMatches[0]) {
+    try {
+      const parsed = JSON.parse(jsonMatches[0]);
+      if (parsed && typeof parsed.reply === "string") {
+        t = parsed.reply;
+      }
+    } catch (e) {
+      // 尝试处理嵌套引号问题：把字符串中的 \n 先还原
+      try {
+        const cleaned = jsonMatches[0]
+          .replace(/\\n/g, '\n')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\');
+        const parsed = JSON.parse(cleaned);
+        if (parsed && typeof parsed.reply === "string") {
+          t = parsed.reply;
+        }
+      } catch (e2) {
+        // 仍然失败，尝试提取 reply 字段的原始内容
+        const replyMatch = jsonMatches[0].match(/"reply"\s*:\s*"([\s\S]*?)"\s*,\s*"reasoning"/);
+        if (replyMatch) {
+          t = replyMatch[1]
+            .replace(/\\n/g, '\n')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\');
+        }
+      }
+    }
+  }
+
   // 去除中继标记行
   t = t.replace(/(^|\n)\s*\[tool:[^\]\n]+\]\s*/g, "$1");
   t = t.replace(/(^|\n)\s*\[(assistant|agent)\][^\n]*/gi, "$1");

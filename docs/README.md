@@ -195,7 +195,6 @@ python main.py profile --weight <model.pt> --device rk3588
 **Agent**（[`web/routers/agent.py`](web/routers/agent.py)）
 
 - `GET /api/agent/config-schema`：配置 JSON Schema
-- `POST /api/agent/patch/validate`：校验补丁
 - `POST /api/agent/patch/preview`：预览补丁
 - `POST /api/agent/patch/apply`：应用补丁
 - `GET /api/agent/run/{run_id}/history`：某次运行的配置历史

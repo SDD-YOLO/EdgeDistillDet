@@ -14,15 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.responses import StreamingResponse
+import yaml
 
-from web.agent_rag import retrieve_hybrid
 from web.agent_graph.runtime import execute_tool_graph, invoke_model_graph, invoke_model_graph_stream
 from web.core.paths import AGENT_HISTORY_DIR, AGENT_STATE_DIR, CONFIG_DIR
 from web.schemas import (
     AgentModelInvokeRequest,
     AgentPatchApplyRequest,
     AgentPatchPreviewRequest,
-    AgentPatchValidateRequest,
     AgentRunHistoryRollbackRequest,
     AgentToolExecuteRequest,
 )
@@ -469,74 +468,6 @@ def _tool_get_context(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _tool_analyze_params(args: dict[str, Any]) -> dict[str, Any]:
-    objective = str(args.get("objective") or "").strip() or "stability"
-    config = _load_distill_config()
-    distill = config.get("distillation") if isinstance(config.get("distillation"), dict) else {}
-    training = config.get("training") if isinstance(config.get("training"), dict) else {}
-    tips: list[str] = []
-    temp = distill.get("temperature")
-    if isinstance(temp, (int, float)) and temp < 1.0:
-        tips.append("temperature may be too small for smooth distillation logits.")
-    lr0 = training.get("lr0")
-    if isinstance(lr0, (int, float)) and lr0 > 0.01:
-        tips.append("lr0 is relatively high; watch for unstable loss.")
-    if not tips:
-        tips.append("current parameters are generally reasonable; try incremental tuning.")
-    return {"status": "ok", "objective": objective, "analysis": tips}
-
-
-def _tool_retrieve_context(args: dict[str, Any]) -> dict[str, Any]:
-    query = str(args.get("query") or "").strip()
-    if not query:
-        return {"status": "error", "error": "query is required"}
-    run_id = str(args.get("run_id") or "default")
-    top_k = int(args.get("top_k") or 5)
-    hits = retrieve_hybrid(query, run_id=run_id, top_k=top_k)
-    return {"status": "ok", "query": query, "run_id": run_id, "hits": hits}
-
-
-def _tool_propose_patch(args: dict[str, Any]) -> dict[str, Any]:
-    goal = str(args.get("goal") or "").strip().lower()
-    base = _load_distill_config()
-    patch: dict[str, Any] = {"distillation": {}}
-    if "稳定" in goal or "stability" in goal:
-        val = base.get("distillation", {}).get("T_max", 6.0)
-        if isinstance(val, (int, float)):
-            patch["distillation"]["T_max"] = round(float(val) + 0.2, 6)
-    else:
-        patch["distillation"]["w_kd"] = 0.6
-    if not patch["distillation"]:
-        patch = _single_leaf_epsilon_declared_patch(base, {"distillation": {"w_kd": base.get("distillation", {}).get("w_kd", 0.5)}})
-    return {
-        "status": "ok",
-        "goal": goal or "generic optimization",
-        "need_approval": True,
-        "patch": patch,
-        "result": {"goal": goal or "generic optimization", "patch": patch, "need_approval": True},
-    }
-
-
-def _tool_validate_patch(args: dict[str, Any]) -> dict[str, Any]:
-    patch = args.get("patch")
-    if not isinstance(patch, dict) or not patch:
-        return {"status": "error", "error": "patch must be a non-empty object"}
-    scalar_error = _validate_w_feat_scalar_in_patch(patch)
-    if scalar_error:
-        return {"status": "error", "error": scalar_error}
-    invalid = _validate_top_level(patch)
-    if invalid:
-        return {"status": "error", "error": f"invalid top-level keys: {invalid}", "invalid_keys": invalid}
-    deprecated = _collect_deprecated_leaf_paths(patch)
-    if deprecated:
-        return {"status": "error", "error": f"patch contains deprecated fields: {deprecated}", "deprecated_paths": deprecated}
-    base = _load_distill_config()
-    merged = _merge_distill_patch(base, patch)
-    diff = _leaf_config_diff(base, merged)
-    filtered = _filter_change_summary_to_patch_declared(diff, patch)
-    return {"status": "ok", "valid": True, "change_summary": filtered}
-
-
 def _tool_preview_patch(args: dict[str, Any]) -> dict[str, Any]:
     patch = args.get("patch")
     if not isinstance(patch, dict) or not patch:
@@ -702,10 +633,6 @@ def _execute_tool(tool: str, args: dict[str, Any], _state: dict[str, Any]) -> An
                 }
     handlers = {
         "agent.get_context": _tool_get_context,
-        "agent.retrieve_context": _tool_retrieve_context,
-        "agent.analyze_params": _tool_analyze_params,
-        "agent.propose_patch": _tool_propose_patch,
-        "agent.validate_patch": _tool_validate_patch,
         "agent.preview_patch": _tool_preview_patch,
         "agent.apply_patch_with_approval": _tool_apply_patch_with_approval,
         "agent.list_run_history": _tool_list_run_history,
@@ -728,9 +655,6 @@ def _load_tools_contract() -> dict[str, Any]:
         "version": "v1",
         "pipeline": [
             "agent.get_context",
-            "agent.analyze_params",
-            "agent.propose_patch",
-            "agent.validate_patch",
             "agent.preview_patch",
             "user_approval",
             "agent.apply_patch_with_approval",
@@ -743,6 +667,18 @@ def agent_tools_contract():
     return _load_tools_contract()
 
 
+def agent_prompts():
+    prompts_path = CONFIG_DIR / "agent_prompts.yaml"
+    if prompts_path.exists():
+        try:
+            data = yaml.safe_load(prompts_path.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
 def agent_tools_execute(payload: AgentToolExecuteRequest):
     tool = str(payload.tool or "").strip()
     args = payload.args if isinstance(payload.args, dict) else {}
@@ -752,11 +688,6 @@ def agent_tools_execute(payload: AgentToolExecuteRequest):
     if isinstance(result, dict):
         return result
     return {"status": "error", "error": "tool_graph_failed"}
-
-
-def agent_patch_validate(payload: AgentPatchValidateRequest):
-    args = {"patch": payload.patch, "strict": payload.strict}
-    return _tool_validate_patch(args)
 
 
 def agent_patch_preview(payload: AgentPatchPreviewRequest):
@@ -821,9 +752,9 @@ __all__ = [
     "agent_model_invoke_stream",
     "agent_patch_apply",
     "agent_patch_preview",
-    "agent_patch_validate",
     "agent_run_history",
     "agent_run_rollback",
+    "agent_prompts",
     "agent_tools_contract",
     "agent_tools_execute",
     "_filter_change_summary_to_patch_declared",

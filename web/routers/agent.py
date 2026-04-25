@@ -6,18 +6,12 @@ from web.schemas import (
     AgentModelInvokeRequest,
     AgentPatchApplyRequest,
     AgentPatchPreviewRequest,
-    AgentPatchValidateRequest,
     AgentRunHistoryRollbackRequest,
     AgentToolExecuteRequest,
 )
 from web.services import agent_service
 
 router = APIRouter()
-
-
-@router.post("/api/agent/patch/validate")
-def agent_patch_validate(payload: AgentPatchValidateRequest):
-    return agent_service.agent_patch_validate(payload)
 
 
 @router.post("/api/agent/patch/preview")
@@ -43,6 +37,11 @@ def agent_run_rollback(run_id: str, payload: AgentRunHistoryRollbackRequest):
 @router.get("/api/agent/tools")
 def agent_tools_contract():
     return agent_service.agent_tools_contract()
+
+
+@router.get("/api/agent/prompts")
+def agent_prompts():
+    return agent_service.agent_prompts()
 
 
 @router.post("/api/agent/tools/execute")

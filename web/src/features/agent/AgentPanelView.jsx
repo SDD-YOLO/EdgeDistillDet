@@ -7,8 +7,17 @@ import { AGENT_QUICK_PROMPTS } from "./constants/agentPrompts";
 import { sanitizeBlockedCommandHints, softenAgentBubbleText } from "./utils/agentTextUtils";
 
 function MarkdownText({ text, className = "" }) {
-  const value = String(text || "");
-  return (
+  let value = String(text || "");
+  
+  // 安全处理：将可能残留的字面量 \n 转为真正换行
+  value = value
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\\\/g, "\\");
+  
+  // Markdown 硬换行（两个空格 + 换行）
+  value = value.replace(/\n/g, "  \n");
+    return (
     <ReactMarkdown
       className={`agent-markdown ${className}`.trim()}
       remarkPlugins={[remarkGfm]}
@@ -38,20 +47,15 @@ function ChatBubbleBody({
   role,
   content,
   modelName,
-  reasoningApi,
   toolsUsed,
   streaming,
-  messageKind,
   traceRounds,
-  traceOpen,
-  relayMayMissReasoning,
   bubbleIndex,
-  isLatestAgentBubble
 }) {
   const bubbleRef = useRef(null);
   const traceListRef = useRef(null);
   const traceAutoFollowRef = useRef(true);
-  const [traceExpanded, setTraceExpanded] = useState(true);
+  const [traceExpanded, setTraceExpanded] = useState(false);
 
   const sanitizeTraceText = (value) =>
     sanitizeBlockedCommandHints(String(value || ""))
@@ -63,10 +67,7 @@ function ChatBubbleBody({
       .trim();
 
   const rawText = content ?? "";
-  const text =
-    role === "agent" && messageKind !== "config_summary"
-      ? softenAgentBubbleText(rawText, !!streaming)
-      : rawText;
+  const text = role === "agent" ? softenAgentBubbleText(rawText, !!streaming) : rawText;
   const tools = Array.isArray(toolsUsed)
     ? toolsUsed.filter(Boolean)
     : [];
@@ -98,31 +99,39 @@ function ChatBubbleBody({
   useEffect(() => {
     if (role !== "agent") return;
     if (!hasToolRounds) return;
+    // 有工具调用且正在流式输出时，自动展开
+    if (streaming) {
+      setTraceExpanded(true);
+    }
+  }, [role, streaming, hasToolRounds]);
+
+  useEffect(() => {
+    if (role !== "agent") return;
+    if (!hasToolRounds) return;
     const listEl = traceListRef.current;
     if (!listEl) return;
-    const distanceFromBottom = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
-    const isNearBottom = distanceFromBottom < 60;
-    const shouldAutoFollow = isNearBottom || traceAutoFollowRef.current;
     if (streaming) {
-      if (shouldAutoFollow) {
+      // 流式过程中：只要用户没有手动上滚，就跟到底部
+      if (traceAutoFollowRef.current) {
         listEl.scrollTop = listEl.scrollHeight;
-        traceAutoFollowRef.current = true;
       }
     } else {
+      // 完成后：强制滚到底部展示最终结果
       listEl.scrollTop = listEl.scrollHeight;
     }
-  }, [role, hasToolRounds, streaming, toolRounds.length, bubbleIndex, traceExpanded]);
+  }, [role, hasToolRounds, streaming, toolRounds.length, traceRounds, bubbleIndex, traceExpanded]);
+
+  useEffect(() => {
+    if (role !== "agent") return;
+    if (!hasToolRounds) return;
+    // streaming 结束时自动收起
+    if (!streaming) {
+      setTraceExpanded(false);
+    }
+  }, [streaming]);
 
   if (role !== "agent") {
     return <div className="chat-plain chat-pre-wrap">{text}</div>;
-  }
-
-  if (messageKind === "config_summary") {
-    return (
-      <div className="agent-bubble-config-summary chat-pre-wrap">
-        {text}
-      </div>
-    );
   }
 
   if (showStreamingPlaceholder) {
@@ -147,6 +156,14 @@ function ChatBubbleBody({
             open={traceExpanded}
             onToggle={(e) => {
               setTraceExpanded(e.currentTarget.open);
+              // 展开时立刻滚到底部，让用户看到最新一轮
+              if (e.currentTarget.open) {
+                requestAnimationFrame(() => {
+                  if (traceListRef.current) {
+                    traceListRef.current.scrollTop = traceListRef.current.scrollHeight;
+                  }
+                });
+              }
             }}
           >
             <summary className="agent-trace-summary-nested">
@@ -189,7 +206,7 @@ function ChatBubbleBody({
           {showToolStreamingPlaceholder ? (
             <div className="agent-answer-content-outer">处理中...</div>
           ) : null}
-          {!streaming && text.trim() && (
+          {text.trim() && (
             <div className="agent-answer-content-outer">
               <MarkdownText text={text} />
             </div>

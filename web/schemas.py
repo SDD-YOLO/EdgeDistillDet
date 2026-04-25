@@ -58,11 +58,6 @@ class AgentChatResponse(BaseModel):
     raw: dict = Field(default_factory=dict)
 
 
-class AgentPatchValidateRequest(BaseModel):
-    patch: dict = Field(default_factory=dict)
-    strict: bool = True
-
-
 class AgentPatchPreviewRequest(BaseModel):
     run_id: str = "default"
     patch: dict = Field(default_factory=dict)

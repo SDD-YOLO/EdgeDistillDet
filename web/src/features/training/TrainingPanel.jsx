@@ -78,7 +78,7 @@ function TrainingPanel({ toast, active }) {
   const [resumeCandidates, setResumeCandidates] = useState([]);
   const [selectedResumeIndex, setSelectedResumeIndex] = useState(0);
   const [runHint, setRunHint] = useState("将根据项目目录自动推荐可用运行名称。");
-  const [outputCheckInfo, setOutputCheckInfo] = useState({ project: "runs/distill", existingNames: [], suggested: "exp1" });
+  const [outputCheckInfo, setOutputCheckInfo] = useState({ project: "runs", existingNames: [], suggested: "exp1" });
   const [progress, setProgress] = useState({ current: 0, total: 0, elapsed: "--:--:--", expected: "--:--:--" });
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -86,7 +86,7 @@ function TrainingPanel({ toast, active }) {
   const startTimestampRef = useRef(null);
   /** 上一轮 /status 的 running，用于检测服务端 true→false（不依赖 React state 与 effect 时序） */
   const lastServerRunningRef = useRef(false);
-  const resumeListProjectRef = useRef("runs/distill");
+  const resumeListProjectRef = useRef("runs");
   const prevActiveTabRef = useRef(null);
   const logContainerRef = useRef(null);
   const overlapAlertShownRef = useRef("");
@@ -219,7 +219,7 @@ function TrainingPanel({ toast, active }) {
           const nm = String(c.name || "").trim() || "exp";
           return {
             ...prev,
-            output: { ...prev.output, project: c.project || prev.output?.project || "runs/distill", name: nm }
+            output: { ...prev.output, project: c.project || prev.output?.project || "runs", name: nm }
           };
         });
       }
@@ -242,14 +242,14 @@ function TrainingPanel({ toast, active }) {
   });
 
   useEffect(() => {
-    resumeListProjectRef.current = form.output.project || "runs/distill";
+    resumeListProjectRef.current = form.output.project || "runs";
   }, [form.output.project]);
 
   useEffect(() => {
     const prev = prevActiveTabRef.current;
     prevActiveTabRef.current = active;
     if (active && prev === false) {
-      refreshResumeCandidates(resumeListProjectRef.current || "runs/distill", false);
+      refreshResumeCandidates(resumeListProjectRef.current || "runs", false);
     }
   }, [active]);
 
@@ -278,7 +278,7 @@ function TrainingPanel({ toast, active }) {
       return;
     }
     setForm((prev) => {
-      const nextProject = selected.project || prev.output?.project || "runs/distill";
+      const nextProject = selected.project || prev.output?.project || "runs";
       const nextName = String(selected.name || "").trim() || "exp";
       if (prev.output?.project === nextProject && prev.output?.name === nextName) return prev;
       return {
@@ -297,7 +297,7 @@ function TrainingPanel({ toast, active }) {
     });
   }, [logs, autoScroll]);
 
-  const currentOutputProject = outputCheckInfo.project || form.output.project || "runs/distill";
+  const currentOutputProject = outputCheckInfo.project || form.output.project || "runs";
   const currentOutputName = (form.output.name || "").trim();
   const isOutputPathOverlap = !isResumeMode && Boolean(currentOutputName && outputCheckInfo.existingNames.includes(currentOutputName));
   const renderedHint = isResumeMode
@@ -352,7 +352,7 @@ function TrainingPanel({ toast, active }) {
 
   const switchToDistillMode = () => {
     if (mode === "distill") return;
-    const defaultProject = DEFAULT_FORM.output.project || "runs/distill";
+    const defaultProject = DEFAULT_FORM.output.project || "runs";
     overlapAlertShownRef.current = "";
     pendingOverlapAlertRef.current = false;
     setForm((prev) => ({
@@ -372,7 +372,7 @@ function TrainingPanel({ toast, active }) {
   const switchToResumeMode = () => {
     if (mode === "resume") return;
     setMode("resume");
-    refreshResumeCandidates(form.output?.project || DEFAULT_FORM.output?.project || "runs/distill", false);
+    refreshResumeCandidates(form.output?.project || DEFAULT_FORM.output?.project || "runs", false);
   };
 
   const startTraining = async () => {
@@ -421,7 +421,7 @@ function TrainingPanel({ toast, active }) {
     } catch (error) {
       const requiresConfirmation = Boolean(error?.status === 409 && error?.payload?.requires_confirmation);
       if (requiresConfirmation) {
-        const project = error.payload?.project || form.output?.project || "runs/distill";
+        const project = error.payload?.project || form.output?.project || "runs";
         const name = error.payload?.name || form.output?.name || "exp";
         const confirmed = window.confirm(`输出目录 ${project}/${name} 已存在，是否继续覆盖？`);
         if (!confirmed) return;
@@ -570,8 +570,8 @@ function TrainingPanel({ toast, active }) {
                   onChange={(project) => {
                     if (isResumeMode) return;
                     setNested("output", "project", project);
-                    refreshRunNameSuggestion(project || "runs/distill", form.output.name, true);
-                    refreshResumeCandidates(project || "runs/distill", false);
+                    refreshRunNameSuggestion(project || "runs", form.output.name, true);
+                    refreshResumeCandidates(project || "runs", false);
                   }}
                   onBrowse={async () => {
                     if (isResumeMode) return;
@@ -579,12 +579,12 @@ function TrainingPanel({ toast, active }) {
                       const selected = await pickLocalPath({
                         kind: "directory",
                         title: "选择训练输出项目目录",
-                        initialPath: form.output.project || "runs/distill"
+                        initialPath: form.output.project || "runs"
                       });
                       if (!selected) return;
                       setNested("output", "project", selected);
-                      refreshRunNameSuggestion(selected || "runs/distill", form.output.name, true);
-                      refreshResumeCandidates(selected || "runs/distill", false);
+                      refreshRunNameSuggestion(selected || "runs", form.output.name, true);
+                      refreshResumeCandidates(selected || "runs", false);
                     } catch (error) {
                       toast(error.message, "error");
                     }

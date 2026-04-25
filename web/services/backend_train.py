@@ -34,8 +34,8 @@ from web.services.backend_train_runtime import (
     _wait_for_gpu_free,
 )
 
-def output_check(project: str = Query('runs/distill')):
-    project = project or 'runs/distill'
+def output_check(project: str = Query('runs')):
+    project = project or 'runs'
     try:
         project_path = _resolve_project_path(project, allow_external=Path(project).is_absolute())
     except ValueError as e:
@@ -235,7 +235,7 @@ def start_training(payload: TrainStartRequest):
             return {'status': 'ok', 'message': '云训练任务已提交', 'remote': True, 'job_id': job_id}
         allow_external_project = compute_provider in {'autodl', 'colab'}
         output_cfg = dict(cfg.get('output', {}) or {})
-        target_project = str(output_cfg.get('project', 'runs/distill') or 'runs/distill')
+        target_project = str(output_cfg.get('project', 'runs') or 'runs')
         target_name = str(output_cfg.get('name', 'exp') or 'exp').strip()
         try:
             project_path = _resolve_project_path(target_project, allow_external=allow_external_project)
@@ -414,8 +414,8 @@ def get_training_status():
     snap["expected_sec"] = expected_sec
     return {'status': 'ok', **snap}
 
-def get_resume_candidates(project: str = Query('runs/distill')):
-    project = project or 'runs/distill'
+def get_resume_candidates(project: str = Query('runs')):
+    project = project or 'runs'
     try:
         project_path = _resolve_project_path(project, allow_external=Path(project).is_absolute())
     except ValueError as e:

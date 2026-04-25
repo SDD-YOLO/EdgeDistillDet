@@ -4,10 +4,6 @@
   "philosophy": "agentic rag with server-side react loop, retrieval/tool autonomy, explicit approval gate, replay-safe apply",
   "pipeline": [
     "agent.get_context",
-    "agent.retrieve_context",
-    "agent.analyze_params",
-    "agent.propose_patch",
-    "agent.validate_patch",
     "agent.preview_patch",
     "user_approval",
     "agent.apply_patch_with_approval"
@@ -26,55 +22,6 @@
           "runs_root": { "type": "string", "default": "runs", "description": "可选，扫描根目录" }
         },
         "required": ["run_id"]
-      }
-    },
-    {
-      "name": "agent.retrieve_context",
-      "description": "从项目语料和训练产物执行混合检索，返回可引用片段",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "query": { "type": "string" },
-          "run_id": { "type": "string", "default": "default" },
-          "top_k": { "type": "integer", "default": 5 }
-        },
-        "required": ["query"]
-      }
-    },
-    {
-      "name": "agent.analyze_params",
-      "description": "分析微调/蒸馏参数并给出可执行建议",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "run_id": { "type": "string" },
-          "objective": { "type": "string" },
-          "config_name": { "type": "string", "default": "distill_config.yaml" }
-        },
-        "required": ["run_id", "objective"]
-      }
-    },
-    {
-      "name": "agent.propose_patch",
-      "description": "输出候选 patch，不写入配置",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "goal": { "type": "string" },
-          "constraints": { "type": "object" }
-        }
-      }
-    },
-    {
-      "name": "agent.validate_patch",
-      "description": "校验 patch 的字段、类型与风险",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "patch": { "type": "object" },
-          "strict": { "type": "boolean", "default": true }
-        },
-        "required": ["patch"]
       }
     },
     {

@@ -41,5 +41,5 @@ training:
     dataset_name: "your_dataset_alias"
 
 output:
-  project: runs/distill
+  project: runs
   name: remote_api_exp1

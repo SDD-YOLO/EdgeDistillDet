@@ -44,8 +44,8 @@ export const DEFAULT_FORM = {
     amp: true
   },
   output: {
-    project: "runs/distill",
-    name: "adaptive_kd_v1"
+    project: "runs",
+    name: "exp1"
   },
   wandb: {
     enabled: false,
@@ -63,15 +63,15 @@ export const DEFAULT_FORM = {
 export const COMPUTE_PRESETS = {
   local: {
     device: "0",
-    outputProject: "runs/distill"
+    outputProject: "runs"
   },
   autodl: {
     device: "0",
-    outputProject: "/root/autodl-tmp/runs/distill"
+    outputProject: "/root/autodl-tmp/runs"
   },
   colab: {
     device: "0",
-    outputProject: "/content/runs/distill"
+    outputProject: "/content/runs"
   }
 };
 

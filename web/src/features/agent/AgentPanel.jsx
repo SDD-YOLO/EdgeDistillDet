@@ -1,18 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { executeAgentTool, fetchAgentTools, previewAgentPatch } from "../../api/agentApi";
+import { executeAgentTool, fetchAgentPrompts, fetchAgentTools, previewAgentPatch } from "../../api/agentApi";
 import { fetchDistillConfig } from "../../api/configApi";
 import { broadcastDistillConfigUpdate } from "../../constants/distillConfigSync";
 import AgentPanelView from "./AgentPanelView";
 import { buildDisplayReplyAndReasoning, extractReplyAndReasoningFromPayload } from "../../utils/agentPayload";
 import {
   extractPatchFromResult,
-  formatChangeSummaryForChat,
   hasConfigMutationAfter,
   summarizeToolResultForTrace
 } from "../../utils/patchHelpers";
 import { extractToolCallFromText } from "../../utils/toolHelpers";
 import { requestAgentWithFallback } from "./agentRuntime";
 import { sanitizeBlockedCommandHints } from "./utils/agentTextUtils";
+
 
 const resolveModelName = (apiModel) => {
   const value = String(apiModel || "").trim();
@@ -79,11 +79,6 @@ const normalizeToolExecutionResult = (result) => {
     return result.result;
   }
   return result;
-};
-
-const isExperimentStructureIntent = (text) => {
-  const raw = String(text || "").toLowerCase();
-  return /(目录|结构|文件|子目录|用途|权重|日志|曲线|配置快照|核心结果|实验输出|results\.csv|best\.pt|last\.pt)/i.test(raw);
 };
 
 function loadStoredAgentMessages() {
@@ -296,87 +291,31 @@ function AgentPanel({ toast, active }) {
     toast("Agent API 配置已保存", "success");
   };
 
-  const buildAgentSystemPrompt = async (userText = "") => {
+  const buildAgentSystemPrompt = async (_userText = "") => {
     let contract = null;
+    let prompts = null;
     try {
-      contract = await fetchAgentTools();
+      [contract, prompts] = await Promise.all([fetchAgentTools(), fetchAgentPrompts()]);
     } catch {
-      contract = null;
+      try {
+        contract = await fetchAgentTools();
+      } catch {
+        contract = null;
+      }
+      prompts = null;
     }
     const toolList = Array.isArray(contract?.tools)
       ? contract.tools.map((t) => `- ${t.name}: input=${JSON.stringify(t.input || {})}, output=${t.output || ""}`).join("\n")
-      : "- agent.get_context\n- agent.analyze_params\n- agent.propose_patch\n- agent.validate_patch\n- agent.preview_patch\n- agent.apply_patch_with_approval\n- agent.list_run_history\n- agent.rollback_run_config";
-    const structureIntent = isExperimentStructureIntent(userText);
-    if (structureIntent) {
-      return [
-        "你是实验结果解读 Agent，当前任务是说明实验输出目录与关键产物用途。",
-        "优先回答目录结构、关键文件作用、最快定位核心结果的方法。",
-        "若需要事实，可调用只读工具（如 agent.get_context / agent.list_run_history / agent.retrieve_context）。",
-        "禁止主动给出调参方案、禁止生成 patch、禁止进入审批流程。",
-        "",
-        "## 可用工具",
-        toolList,
-        "",
-        "输出要求：",
-        "- 先概览目录层级",
-        "- 再解释关键文件用途（权重、日志、曲线、配置快照）",
-        "- 最后给“最快定位核心结果”的实操步骤",
-      ].join("\n");
+      : "- agent.get_context\n- agent.preview_patch\n- agent.apply_patch_with_approval\n- agent.list_run_history\n- agent.rollback_run_config";
+    const yamlPrompt = typeof prompts?.chat_system_prompt === "string" ? prompts.chat_system_prompt : "";
+    if (yamlPrompt.trim()) {
+      return yamlPrompt.replaceAll("{{tool_list}}", toolList);
     }
     return [
-        "你是训练参数优化 Agent，专注于 YOLO 蒸馏训练场景。",
-        "你可以且应该先用工具获取事实（配置 + 训练指标），再基于数据给出结论，不得凭空猜测。",
-        "",
-        "## 可用工具",
-        toolList,
-        "",
-        "## 工具调用格式",
-        "需要调用工具时，只输出一个 JSON 对象，不附带其他文本：",
-        '{"tool":"agent.get_context","args":{"run_id":"default"}}',
-        "工具结果在下一轮以 tool 消息回传。",
-        "",
-        "## 分析流程（必须遵守）",
-        "**第一步：获取事实**",
-        "- 用 `agent.get_context` 读取当前 distill_config + training_results（必须，不可跳过）",
-        "  - 优先传 run_id（与 config 中 output.name 一致，如 'exp1'）",
-        "  - 若不确定 run_id，可仅传 run_id=default，让工具按配置和 runs 目录自动定位",
-        "",
-        "**第二步：解读指标（基于 get_context.training_results 返回值）**",
-        "关注以下字段：",
-        "- `latest`：当前最新 epoch 的各项指标值",
-        "- `trend[指标名].improving`：该指标是否仍在改善（false = 已停止收益或退步）",
-        "- `trend[指标名].delta_from_best`：当前值与历史最优的差距（负值 = 已回退）",
-        "- `epoch_count`：已训练轮数（结合 config 中 epochs 判断训练进度）",
-        "",
-        "**第三步：给出调参方案（必须包含以下结构）**",
-        "每条建议格式：",
-        "- **参数名**（如 `distillation.T_max`）",
-        "  - 当前值 → 建议值",
-        "  - 依据：引用具体指标数值（如「mAP50 在第 N epoch 达到最优后连续 M epoch 未改善」）",
-        "  - 预期收益",
-        "  - 潜在风险",
-        "",
-        "**第四步（需写入/审批时必做）**",
-        "若用户要修改配置、或你在答复中引用了具体「建议值」并引导用户到「批准修改训练配置」/审批区：",
-        "你必须在本轮 ReAct 中于 `action=final` 之前，先以 `action=tool` 调用 `agent.preview_patch`（`run_id` + 合法 `patch`），使服务端签发 `approval_token`；**禁止**在从未调用过 `agent.preview_patch` 的情况下，仅在 final 正文中写「去批准/审批/请批准」等字样。",
-        "patch 只包含你实际建议修改的字段，禁止附带未讨论的参数。",
-        "",
-        "## 禁止行为",
-        "- 禁止在未读取 `agent.get_context.training_results` 的情况下，声称某指标「波动」「未达标」「过拟合」等（无数据支撑）",
-        "- 禁止在最终答复里用「是否需要我执行/是否生成补丁」向用户索要确认（直接给方案）",
-        "- 禁止输出「执行命令（需审批）」提示模板",
-        "- 禁止建议 `python distill.py --config ...`（仓库无此入口）",
-        "- 禁止在未成功调用 `agent.preview_patch` 时提示用户到审批区或「批准修改训练配置」",
-        "- 审批/写入完成后，未经用户要求禁止再次提出新的修改建议",
-        "",
-        "## patch 一致性要求",
-        "- patch 必须与答复中描述的字段和数值严格一致",
-        "- 只包含 distillation / training / output 中实际要改的字段",
-        "- 每个建议值都必须在答复的自然语言部分有明确说明",
-        "",
-        "当不再需要工具、输出最终答复时：",
-        "用自然语言说明变更理由与风险；**仅当**本回合已成功调用 `agent.preview_patch` 时，可提示用户到「批准修改训练配置」中批准。",
-      ].join("\n");
+      "你是训练参数优化 Agent，专注于 YOLO 蒸馏训练场景。",
+      "## 可用工具",
+      toolList
+    ].join("\n");
   };
 
   const runAgentWithTools = async ({
@@ -453,6 +392,10 @@ function AgentPanel({ toast, active }) {
             const row = upsertRound(step);
             row.tool = { name: String(payload.tool || ""), args: payload.args || {} };
             row.toolResultSummary = summarizeToolResultForTrace(payload.tool, payload.result);
+            toolLogs.push({
+              call: { tool: String(payload.tool || ""), args: payload.args || {} },
+              result: normalizeToolExecutionResult(payload.result)
+            });
           } else if (event?.event_type === "retrieval_hit") {
             const step = event.step || 1;
             const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
@@ -544,17 +487,6 @@ function AgentPanel({ toast, active }) {
       throw error;
     }
 
-    const events = Array.isArray(payload?.events) ? payload.events : [];
-    for (const ev of events) {
-      if (!ev || typeof ev !== "object") continue;
-      if (ev.event_type === "tool_end") {
-        const p = ev.payload && typeof ev.payload === "object" ? ev.payload : {};
-        toolLogs.push({
-          call: { tool: String(p.tool || ""), args: p.args || {} },
-          result: normalizeToolExecutionResult(p.result)
-        });
-      }
-    }
     const finalTraceRounds = Array.from(roundMap.values()).sort((a, b) => a.round - b.round);
     const toolNames = toolLogs.map((t) => t.call.tool).filter(Boolean);
 
@@ -615,16 +547,10 @@ function AgentPanel({ toast, active }) {
     setApprovalRunId(String(preview.run_id || "default"));
     setApprovalRequestHash(String(preview.request_hash || ""));
     setApprovalOpen(true);
-    setMessages((prev) => [
-      ...prev,
-      { _messageId: nextMessageId(), role: "agent", content: formatChangeSummaryForChat(cs), kind: "config_summary" }
-    ]);
     toast(
       source === "tool"
         ? "已通过工具触发审批预览，可在对话区「批准修改训练配置」中采纳。"
-        : source === "propose"
-          ? "已从 propose_patch 生成审批预览，可在对话区「批准修改训练配置」中采纳。"
-          : "已生成配置 patch 预览，可在对话区「批准修改训练配置」中采纳或让 Agent 执行。",
+        : "已生成配置 patch 预览，可在对话区「批准修改训练配置」中采纳或让 Agent 执行。",
       "success"
     );
   };
@@ -643,42 +569,6 @@ function AgentPanel({ toast, active }) {
       if (result.status && result.status !== "ok") continue;
       applyPreviewResponseToUi(result, "tool");
       return true;
-    }
-    return false;
-  };
-
-  /**
-   * agent.propose_patch 只返回建议 patch，不签发审批令牌；此处代为调用 /api/agent/patch/preview。
-   * 工具响应形态：{ status, tool, result: { goal, patch, need_approval } }
-   */
-  const syncProposePatchViaPreview = async (toolLogs) => {
-    if (!Array.isArray(toolLogs) || !toolLogs.length) return false;
-    for (let i = toolLogs.length - 1; i >= 0; i -= 1) {
-      const { call, result } = toolLogs[i];
-      if (call?.tool !== "agent.propose_patch" || !result) continue;
-      if (hasConfigMutationAfter(toolLogs, i)) continue;
-      // 与 preview_patch 不同，部分中继响应可能省略 status；仅在明确失败时跳过
-      if (result.status && result.status !== "ok") {
-        continue;
-      }
-      const inner = result.result && typeof result.result === "object" ? result.result : result;
-      const patch = inner && typeof inner === "object" && !Array.isArray(inner) ? inner.patch : null;
-      if (!patch || typeof patch !== "object" || Array.isArray(patch) || !Object.keys(patch).length) {
-        continue;
-      }
-      try {
-        const preview = await previewAgentPatch({
-          patch,
-          run_id: (call.args && call.args.run_id) || "default",
-          operator: "agent",
-          reason: "agent.propose_patch"
-        });
-        applyPreviewResponseToUi(preview, "propose");
-        return true;
-      } catch (error) {
-        toast(`无法从 propose_patch 生成审批预览: ${error.message}`, "error");
-        return false;
-      }
     }
     return false;
   };
@@ -777,7 +667,7 @@ function AgentPanel({ toast, active }) {
         if (!allowMutationForThisTurn) {
           const hasPatchLikeOutput = !!extractPatchFromResult(data, reply);
           const hasMutationToolInLogs = toolLogs.some((t) =>
-            ["agent.propose_patch", "agent.preview_patch", "agent.apply_patch_with_approval", "agent.rollback_run_config"].includes(
+            ["agent.preview_patch", "agent.apply_patch_with_approval", "agent.rollback_run_config"].includes(
               String(t.call?.tool || "")
             )
           );
@@ -792,31 +682,14 @@ function AgentPanel({ toast, active }) {
             ]);
           }
         } else if (!syncApprovalFromToolLogs(toolLogs)) {
-          if (!(await syncProposePatchViaPreview(toolLogs))) {
-            await maybeHandlePatch(data, reply);
-          }
+          await maybeHandlePatch(data, reply);
         }
-        if (!configMutationDone && allowMutationForThisTurn && !isExperimentStructureIntent(String(text || ""))) {
+        if (!configMutationDone && allowMutationForThisTurn) {
           const replyText = String(reply || "");
           const approvalCta = /批准修改训练配置|在对话区[「"']*批准|审批区|让\s*agent\s*执行|去审批|请.*批准|核对以下变更/.test(replyText);
           const hasPreviewInLogs = toolLogs.some((t) => t.call?.tool === "agent.preview_patch");
-          const alreadyProposed = toolLogs.some((t) => t.call?.tool === "agent.propose_patch");
-          if (approvalCta && !hasPreviewInLogs && !alreadyProposed) {
-            try {
-              const pr = await executeAgentTool({
-                tool: "agent.propose_patch",
-                args: {
-                  goal: `根据上条助手答复中已给出的可落地参数与数值，生成可写入的 distill 配置 patch（仅讨论过的 distillation/training/output 叶子）。用户输入：${String(text).trim().slice(0, 500)}`,
-                  constraints: { source: "approval_cta_repair" }
-                }
-              });
-              const norm = normalizeToolExecutionResult(pr);
-              const followUpToolLogs = [
-                { call: { tool: "agent.propose_patch", args: { run_id: "default" } }, result: norm },
-                ...toolLogs
-              ];
-              await syncProposePatchViaPreview(followUpToolLogs);
-            } catch {}
+          if (approvalCta && !hasPreviewInLogs) {
+            await maybeHandlePatch(data, reply);
           }
         }
       }

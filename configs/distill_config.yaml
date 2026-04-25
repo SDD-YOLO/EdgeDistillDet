@@ -2,12 +2,12 @@ distillation:
   student_weight: models/yolov8n.pt
   teacher_weight: models/yolov8m.pt
   alpha_init: 0.5
-  T_max: 5.2
+  T_max: 3
   T_min: 1.5
-  warm_epochs: 20
+  warm_epochs: 10
   w_kd: 0.6
   w_focal: 0.55
-  w_feat: 0.5
+  w_feat: 0.6
   scale_boost: 1.5
   focal_gamma: 2
 training:
@@ -32,15 +32,15 @@ training:
   imgsz: 640
   batch: 16
   lr0: 0.001
-  lrf: 0.05
+  lrf: 0.07
   warmup_epochs: 20
-  mosaic: 0.8
+  mosaic: 0.81
   mixup: 0.45
   close_mosaic: 10
   amp: true
 output:
-  project: runs/distill
-  name: exp12
+  project: runs
+  name: exp2
 wandb:
   enabled: false
   mode: online

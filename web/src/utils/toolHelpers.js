@@ -16,9 +16,6 @@
 
 const CANONICAL_TOOL_NAMES = [
   "agent.get_context",
-  "agent.analyze_params",
-  "agent.propose_patch",
-  "agent.validate_patch",
   "agent.preview_patch",
   "agent.apply_patch_with_approval",
   "agent.list_run_history",
@@ -141,8 +138,8 @@ export function extractToolCallFromText(text) {
  *   0  — 未找到任何工具调用
  *
  * 调用方按置信度决策：
- *   只读工具（get_context / analyze_params）：允许 confidence >= 1
- *   变更工具（propose / preview / apply）：    要求 confidence >= 2
+ *   只读工具（get_context）：允许 confidence >= 1
+ *   变更工具（preview / apply）：             要求 confidence >= 2
  *
  * @param {string} text
  * @returns {{ confidence: 0|1|2|3; toolCall: { tool: string; args: object } | null }}

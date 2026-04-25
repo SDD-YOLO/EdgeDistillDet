@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.3] - 2026-04-25
+
+### Changed
+
+- 优化agentprompt，强制agent在提出参数修改的时候调用preview工具触发审核
+- 优化agent对于复杂任务的工具链拆解
+- 去除agent.propose_patch，agent.validate_patch等工具冗余
+- 修复start_web没有构建前端的bug
+- 修复训练产物的路径问题
+- 修复agent输出的气泡中json代码未被清洗的bug
+
 ## [1.0.2] - 2026-04-25
 
 ### Changed

@@ -359,8 +359,13 @@ def _extract_class_performance(rows, columns, class_labels=None, run_dir=None):
         return None
 
     if run_dir is not None:
-        cache_path = Path(run_dir) / 'per_class_metrics.json'
-        if cache_path.exists():
+        candidate_paths = [
+            Path(run_dir) / 'val' / 'per_class_metrics.json',
+            Path(run_dir) / 'per_class_metrics.json',
+        ]
+        for cache_path in candidate_paths:
+            if not cache_path.exists():
+                continue
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     cached = json.load(f)
@@ -434,13 +439,14 @@ def _load_distill_log_json(run_dir):
     if not run_dir or not isinstance(run_dir, (str, Path)):
         return []
     try:
-        log_path = Path(run_dir) / 'distill_log.json'
-        if not log_path.exists():
-            parent_log = Path(run_dir).parent / 'distill_log.json'
-            if parent_log.exists():
-                log_path = parent_log
-            else:
-                return []
+        candidate_paths = [
+            Path(run_dir) / 'distill' / 'distill_log.json',
+            Path(run_dir) / 'distill_log.json',
+            Path(run_dir).parent / 'distill_log.json',
+        ]
+        log_path = next((p for p in candidate_paths if p.exists()), None)
+        if not log_path:
+            return []
         with open(log_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, list):

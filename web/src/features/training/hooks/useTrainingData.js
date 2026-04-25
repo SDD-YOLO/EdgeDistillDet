@@ -59,7 +59,7 @@ export function useTrainingData({
         const nextRunning = Boolean(data.running);
         const wasRunning = Boolean(lastServerRunningRef.current);
         if (wasRunning && !nextRunning) {
-          refreshResumeCandidates(resumeListProjectRef.current || "runs/distill", false);
+          refreshResumeCandidates(resumeListProjectRef.current || "runs", false);
         }
         lastServerRunningRef.current = nextRunning;
         setRunning(nextRunning);
@@ -133,7 +133,7 @@ export function useTrainingData({
     const onVisibilityForStatus = () => {
       if (!document.hidden) {
         pollTrainStatus();
-        refreshResumeCandidates(resumeListProjectRef.current || "runs/distill", false);
+        refreshResumeCandidates(resumeListProjectRef.current || "runs", false);
       }
       scheduleStatus();
     };
@@ -148,7 +148,7 @@ export function useTrainingData({
 
   useEffect(() => {
     if (!running) return undefined;
-    const project = () => resumeListProjectRef.current || "runs/distill";
+    const project = () => resumeListProjectRef.current || "runs";
     const tick = () => {
       if (document.hidden) return;
       refreshResumeCandidates(project(), false);

@@ -121,10 +121,3 @@ def test_preview_rejects_deprecated_fields(monkeypatch, tmp_path):
     assert "training.workers" in out["deprecated_paths"]
 
 
-def test_propose_patch_stability_uses_tmax(monkeypatch, tmp_path):
-    _prepare_agent_tmp(monkeypatch, tmp_path)
-    out = backend_agent._tool_propose_patch({"goal": "stability"})
-    patch = out.get("patch", {})
-    assert "distillation" in patch
-    assert "T_max" in patch["distillation"]
-    assert "temperature" not in patch["distillation"]

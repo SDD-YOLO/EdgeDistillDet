@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 @router.get("/api/output/check")
-def output_check(project: str = Query("runs/distill")):
+def output_check(project: str = Query("runs")):
     return train_service.output_check(project=project)
 
 
@@ -29,7 +29,7 @@ def get_training_status():
 
 
 @router.get("/api/train/resume_candidates")
-def get_resume_candidates(project: str = Query("runs/distill")):
+def get_resume_candidates(project: str = Query("runs")):
     return train_service.get_resume_candidates(project=project)
 
 

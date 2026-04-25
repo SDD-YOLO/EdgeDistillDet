@@ -222,7 +222,7 @@ def _build_train_args(
         "mixup": float(train_cfg.get("mixup", 0.1)),
         "close_mosaic": int(train_cfg.get("close_mosaic", 1)),
         "amp": bool(train_cfg.get("amp", True)),
-        "project": output_cfg.get("project", "runs/distill"),
+        "project": output_cfg.get("project", "runs"),
         "name": output_cfg.get("name", "exp"),
         "exist_ok": bool(allow_overwrite),
         "verbose": True,
@@ -330,7 +330,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     if resume_flag:
         if resume_flag.lower() == "auto":
             resume_path = _find_auto_resume(
-                str(output_cfg.get("project", "runs/distill")),
+                str(output_cfg.get("project", "runs")),
                 str(output_cfg.get("name", "exp")),
                 root,
             )
@@ -373,8 +373,10 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
         except Exception:
             pass
 
-    train_args = _build_train_args(train_cfg, output_cfg, resume_path, allow_overwrite=allow_overwrite)
-
+    project_raw = output_cfg.get("project", "runs")
+    project_abs = str((root / project_raw).resolve())
+    output_cfg_resolved = {**output_cfg, "project": project_abs}
+    train_args = _build_train_args(train_cfg, output_cfg_resolved, resume_path, allow_overwrite=allow_overwrite)
     os.environ.setdefault("ULTRALYTICS_VERBOSE", "True")
     os.environ.setdefault("DATAMODULE_WORKERS", "0")
     os.environ.setdefault("NUM_WORKERS", "0")
@@ -402,7 +404,9 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
             if not run_dir or not run_dir.exists():
                 run_dir = Path(train_args["project"]) / train_args["name"]
             run_dir.mkdir(parents=True, exist_ok=True)
-            with open(run_dir / "distill_log.json", "w", encoding="utf-8") as f:
+            distill_dir = run_dir / "distill"
+            distill_dir.mkdir(parents=True, exist_ok=True)
+            with open(distill_dir / "distill_log.json", "w", encoding="utf-8") as f:
                 json.dump(log_data, f, indent=2, ensure_ascii=False)
 
     _maybe_auto_eval(root, train_cfg, output_cfg, train_args)
@@ -417,8 +421,7 @@ def _maybe_auto_eval(
 ) -> None:
     if not output_cfg.get("auto_eval", True):
         return
-    proj = Path(train_args["project"])
-    run_dir = (proj / train_args["name"]).resolve() if proj.is_absolute() else (root / proj / train_args["name"]).resolve()
+    run_dir = (Path(train_args["project"]) / train_args["name"]).resolve()    
     best_pt = run_dir / "weights" / "best.pt"
     last_pt = run_dir / "weights" / "last.pt"
     model_to_eval = best_pt if best_pt.exists() else (last_pt if last_pt.exists() else None)
@@ -436,6 +439,9 @@ def _maybe_auto_eval(
                 imgsz=int(train_cfg.get("imgsz", 640)),
                 batch=int(train_cfg.get("batch", 16)),
                 verbose=False,
+                project=str(run_dir),   # ← 指向 runs/distill/exp1/
+                name="val",             # ← 子目录名
+                exist_ok=True,
             )
         if hasattr(eval_results, "box") and eval_results.box is not None:
             class_names = getattr(eval_results, "names", {}) or {}
@@ -474,13 +480,17 @@ def _maybe_auto_eval(
             }
             if per_class_data:
                 eval_data["per_class"] = per_class_data
-                with open(run_dir / "per_class_metrics.json", "w", encoding="utf-8") as pf:
+                val_dir = run_dir / "val"
+                val_dir.mkdir(parents=True, exist_ok=True)
+                with open(val_dir / "per_class_metrics.json", "w", encoding="utf-8") as pf:
                     from datetime import datetime as _dt
 
                     per_class_data["generated_at"] = _dt.now().isoformat()
                     per_class_data["epoch"] = int(train_args.get("epochs", 0))
                     json.dump(per_class_data, pf, indent=2, ensure_ascii=False)
-            with open(run_dir / "eval_result.json", "w", encoding="utf-8") as ef:
+            val_dir = run_dir / "val"
+            val_dir.mkdir(parents=True, exist_ok=True)
+            with open(val_dir / "eval_result.json", "w", encoding="utf-8") as ef:
                 json.dump(eval_data, ef, indent=2, ensure_ascii=False)
         del m
         _pre_cuda_gc()

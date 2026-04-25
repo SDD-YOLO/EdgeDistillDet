@@ -6,15 +6,10 @@ from web.schemas import (
     AgentModelInvokeRequest,
     AgentPatchApplyRequest,
     AgentPatchPreviewRequest,
-    AgentPatchValidateRequest,
     AgentRunHistoryRollbackRequest,
     AgentToolExecuteRequest,
 )
 from web.services import backend_logic
-
-
-def agent_patch_validate(payload: AgentPatchValidateRequest):
-    return backend_logic.agent_patch_validate(payload)
 
 
 def agent_patch_preview(payload: AgentPatchPreviewRequest):
@@ -35,6 +30,10 @@ def agent_run_rollback(run_id: str, payload: AgentRunHistoryRollbackRequest):
 
 def agent_tools_contract():
     return backend_logic.agent_tools_contract()
+
+
+def agent_prompts():
+    return backend_logic.agent_prompts()
 
 
 def agent_tools_execute(payload: AgentToolExecuteRequest):

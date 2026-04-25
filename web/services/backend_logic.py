@@ -7,7 +7,7 @@ from web.services.backend_agent import (
     agent_model_invoke_stream,
     agent_patch_apply,
     agent_patch_preview,
-    agent_patch_validate,
+    agent_prompts,
     agent_run_history,
     agent_run_rollback,
     agent_tools_contract,
@@ -36,7 +36,7 @@ from web.services.backend_ui import favicon, index
 
 __all__ = [
     'agent_model_invoke', 'agent_model_invoke_stream', 'agent_patch_apply',
-    'agent_patch_preview', 'agent_patch_validate', 'agent_run_history', 'agent_run_rollback',
+    'agent_patch_preview', 'agent_prompts', 'agent_run_history', 'agent_run_rollback',
     'agent_tools_contract', 'agent_tools_execute', 'download_training_logs', 'favicon', 'get_config',
     'get_configs', 'get_metrics', 'get_recent_config', 'get_resume_candidates', 'get_training_logs',
     'get_training_status', 'index', 'output_check', 'pick_path_dialog', 'save_config', 'start_training',

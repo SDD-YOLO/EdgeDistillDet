@@ -4,6 +4,10 @@ export function fetchAgentTools() {
   return apiRequest("/api/agent/tools");
 }
 
+export function fetchAgentPrompts() {
+  return apiRequest("/api/agent/prompts");
+}
+
 export function executeAgentTool({ tool, args = {} }) {
   return apiRequest("/api/agent/tools/execute", {
     method: "POST",

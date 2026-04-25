@@ -71,7 +71,7 @@ def _build_agentic_system_prompt(base_prompt: str | None) -> str:
         '{"action":"retrieve","query":"...","top_k":5}\n'
         '{"action":"tool","tool":"agent.get_context","args":{"run_id":"default"}}\n'
         '{"action":"final","reply":"给用户的最终答复","reasoning":"可选"}\n'
-        "若你引导用户到「批准修改训练配置」或需写入配置，须先以 action=tool 调用 agent.preview_patch（或 propose_patch 后 preview）拿到 approval；禁止在从未调用过 preview 时仅在 final 中写去批准。\n"
+        "若你引导用户到「批准修改训练配置」或需写入配置，须先以 action=tool 调用 agent.preview_patch 拿到 approval；禁止在从未调用过 preview 时仅在 final 中写去批准。\n"
         "当你修改 distillation.w_feat 时，必须使用数值标量（int/float），禁止输出数组/列表。\n"
         "如果工具返回需要审批（approval_token），不要自动执行 apply，改为告知用户在审批区执行。"
     )
@@ -191,6 +191,30 @@ def invoke_model_graph(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return {"status": "error", "error": str(exc), "reply": ""}
 
+def _build_continuation_hint(called_tools: list[str], tool_result: dict) -> str:
+    called = set(called_tools)
+
+    if "agent.get_context" in called and "agent.get_training_results" not in called:
+        # get_context 已完成，强制下一步读指标
+        # get_context 现在已合并指标，跳过这步直接给分析指令
+        pass
+
+    if "agent.get_context" in called and "agent.preview_patch" not in called:
+        return (
+            "你已获取配置与训练指标数据。"
+            "现在必须：1) 用自然语言输出完整的调参分析与建议值；"
+            "2) 紧接着以 action=tool 调用 agent.preview_patch 将建议打包进审批流程。"
+            "禁止直接输出 action=final 而不调用 preview_patch。"
+        )
+
+    if "agent.preview_patch" in called:
+        return (
+            "配置预览已完成，审批票据已签发。"
+            "请以 action=final 输出简短确认，提示用户在审批区点击「让 agent 执行」。"
+            "禁止再次调用任何工具。"
+        )
+
+    return "请继续。若需工具则输出 action=tool；若已有足够信息则输出 action=final。"
 
 def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, None]:
     reply_full = ""
@@ -250,7 +274,11 @@ def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, N
                     yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
                 observe_text = json.dumps({"query": q, "hits": hits}, ensure_ascii=False)
                 state_messages = _append_observation_message(state_messages, "assistant", step_reply)
-                state_messages = _append_observation_message(state_messages, "user", f"[retrieval_observation]\n{observe_text}")
+                state_messages = _append_observation_message(
+                    state_messages,
+                    "user",
+                    f"[retrieval_observation]\n{observe_text}",
+                )
                 continue
 
             if action == "tool":
@@ -279,6 +307,19 @@ def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, N
                     "user",
                     f"[tool_observation:{tool}]\n{json.dumps(tool_result, ensure_ascii=False)}",
                 )
+                # ← 加这段：注入续行指令
+                called_so_far = [
+                    ev["payload"]["tool"]
+                    for ev in trace
+                    if ev.get("event_type") == "tool_end"
+                ]
+                hint = _build_continuation_hint(called_so_far, tool_result)
+                state_messages = _append_observation_message(
+                    state_messages,
+                    "user",
+                    f"[system_hint]\n{hint}",
+                )
+
                 continue
 
             break
