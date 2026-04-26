@@ -1,13 +1,13 @@
 distillation:
   student_weight: models/yolov8n.pt
   teacher_weight: models/yolov8m.pt
-  alpha_init: 0.5
-  T_max: 3
-  T_min: 1.5
+  alpha_init: 0.45
+  T_max: 3.5
+  T_min: 1.05
   warm_epochs: 10
-  w_kd: 0.6
+  w_kd: 0.7
   w_focal: 0.55
-  w_feat: 0.6
+  w_feat: 0.9
   scale_boost: 1.5
   focal_gamma: 2
 training:
@@ -28,11 +28,11 @@ training:
     dataset_name: ''
   data_yaml: coco128.yaml
   device: '0'
-  epochs: 120
+  epochs: 150
   imgsz: 640
   batch: 16
   lr0: 0.001
-  lrf: 0.07
+  lrf: 0.02
   warmup_epochs: 20
   mosaic: 0.81
   mixup: 0.45
@@ -40,7 +40,7 @@ training:
   amp: true
 output:
   project: runs
-  name: exp2
+  name: exp1
 wandb:
   enabled: false
   mode: online
