@@ -5,8 +5,9 @@ from fastapi import APIRouter, Query
 from web.schemas import TrainStartRequest
 from web.services import train_service
 
-router = APIRouter()
+from utils.device_detect import list_all_devices
 
+router = APIRouter()
 
 @router.get("/api/output/check")
 def output_check(project: str = Query("runs")):

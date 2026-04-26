@@ -27,7 +27,7 @@ training:
     token: ''
     dataset_name: ''
   data_yaml: coco128.yaml
-  device: '0'
+  device: cpu
   epochs: 150
   imgsz: 640
   batch: 16
@@ -40,7 +40,7 @@ training:
   amp: true
 output:
   project: runs
-  name: exp1
+  name: exp2
 wandb:
   enabled: false
   mode: online

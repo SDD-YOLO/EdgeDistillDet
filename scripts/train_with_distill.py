@@ -29,6 +29,7 @@ from ultralytics import YOLO
 from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer, _scatter_pr_from_ultralytics_box
 from core.distillation.common import w_feat_to_scalar
 from utils import expand_env_vars
+from utils.device_detect import detect_best_device, setup_device_for_trainer
 
 # 训练期 DataLoader 始终 0 workers，避免多进程复制数据集与「像两个训练同时跑」的内存形态
 _TRAIN_LOADER_WORKERS = 0
@@ -319,6 +320,10 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     train_cfg = dict(cfg.get("training", {}) or {})
     output_cfg = dict(cfg.get("output", {}) or {})
     wandb_cfg = dict(cfg.get("wandb", {}) or {})
+
+    # ========== 自动设备检测与修复（必须在 train_cfg 创建之后）==========
+    train_cfg = setup_device_for_trainer(train_cfg)
+    # ================================================================
 
     student_weight = str(_resolve_under_root(str(distill_cfg.get("student_weight", "yolov8n.pt")), root))
     if not Path(student_weight).exists():
