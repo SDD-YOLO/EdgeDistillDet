@@ -916,7 +916,7 @@ function TrainingPanel({ toast, active, view = "training" }) {
     const exportModelValue = form.export_model?.[param.key];
     const value =
       scope === "export_model"
-        ? exportModelValue !== undefined && String(exportModelValue).trim() !== ""
+        ? exportModelValue !== undefined
           ? exportModelValue
           : legacyValue ?? ""
         : form.advanced?.[scope]?.[param.key] ?? "";

@@ -141,7 +141,7 @@ training:
   workers: 0
 output:
   project: runs
-  name: exp1
+  name: exp2
 wandb:
   enabled: false
   mode: online
@@ -170,7 +170,6 @@ export_model:
   save: true
   save_period: -1
   cache: false
-  workers: 0
   exist_ok: false
   pretrained: true
   optimizer: auto
@@ -182,37 +181,8 @@ export_model:
   cos_lr: false
   fraction: 1
   profile: false
-  freeze: ''
   multi_scale: false
   compile: false
-  val: false
-  split: ''
-  save_json: false
-  conf: 0
-  iou: 0
-  max_det: 0
-  half: false
-  dnn: false
-  plots: false
-  end2end: false
-  source: ''
-  vid_stride: 1
-  stream_buffer: false
-  visualize: false
-  augment: false
-  agnostic_nms: false
-  classes: ''
-  retina_masks: false
-  embed: ''
-  show: false
-  save_frames: false
-  save_txt: false
-  save_conf: false
-  save_crop: false
-  show_labels: true
-  show_conf: true
-  show_boxes: true
-  line_width: 2
   momentum: 0.937
   weight_decay: 0.0005
   warmup_momentum: 0.8
@@ -238,15 +208,35 @@ export_model:
   bgr: 0
   cutmix: 0
   copy_paste: 0
-  copy_paste_mode: mixup
-  auto_augment: ''
   erasing: 0.4
-  cfg: ''
-  tracker: ''
-  save_dir: ''
   overlap_mask: true
   mask_ratio: 4
   dropout: 0
+  copy_paste_mode: mixup
+  vid_stride: 1
+  stream_buffer: false
+  visualize: false
+  augment: false
+  agnostic_nms: false
+  retina_masks: false
+  show: false
+  save_frames: false
+  save_txt: false
+  save_conf: false
+  save_crop: false
+  show_labels: true
+  show_conf: true
+  show_boxes: true
+  line_width: 2
+  workers: 0
+  freeze: ''
+  auto_augment: ''
+  cfg: ''
+  tracker: ''
+  save_dir: ''
+  source: ''
+  classes: ''
+  embed: ''
 advanced:
   training:
     task: detect
@@ -256,7 +246,6 @@ advanced:
     save: true
     save_period: -1
     cache: false
-    workers: 0
     exist_ok: false
     pretrained: true
     optimizer: auto
@@ -268,37 +257,8 @@ advanced:
     cos_lr: false
     fraction: 1
     profile: false
-    freeze: ''
     multi_scale: false
     compile: false
-    val: false
-    split: ''
-    save_json: false
-    conf: 0
-    iou: 0
-    max_det: 0
-    half: false
-    dnn: false
-    plots: false
-    end2end: false
-    source: ''
-    vid_stride: 1
-    stream_buffer: false
-    visualize: false
-    augment: false
-    agnostic_nms: false
-    classes: ''
-    retina_masks: false
-    embed: ''
-    show: false
-    save_frames: false
-    save_txt: false
-    save_conf: false
-    save_crop: false
-    show_labels: true
-    show_conf: true
-    show_boxes: true
-    line_width: 2
     momentum: 0.937
     weight_decay: 0.0005
     warmup_momentum: 0.8
@@ -324,20 +284,37 @@ advanced:
     bgr: 0
     cutmix: 0
     copy_paste: 0
-    copy_paste_mode: mixup
-    auto_augment: ''
     erasing: 0.4
-    cfg: ''
-    tracker: ''
-    save_dir: ''
     overlap_mask: true
     mask_ratio: 4
     dropout: 0
+    copy_paste_mode: mixup
+    vid_stride: 1
+    stream_buffer: false
+    visualize: false
+    augment: false
+    agnostic_nms: false
+    retina_masks: false
+    show: false
+    save_frames: false
+    save_txt: false
+    save_conf: false
+    save_crop: false
+    show_labels: true
+    show_conf: true
+    show_boxes: true
+    line_width: 2
+    workers: 0
+    freeze: ''
+    auto_augment: ''
+    cfg: ''
+    tracker: ''
+    save_dir: ''
+    source: ''
+    classes: ''
+    embed: ''
   distillation:
-    teacher_cfg: ''
     distill_mode: adaptive
-    temperature: 0
-    alpha: 0
     beta: 0
     gamma: 0
     cls_distill_weight: 0.5
@@ -345,11 +322,14 @@ advanced:
     obj_distill_weight: 0.5
     distill_loss_type: kl
     freeze_teacher: false
-    teacher_device: ''
     distill_start_epoch: 0
     distill_end_epoch: 150
     dynamic_alpha: false
     dynamic_temperature: false
-    feature_layers: ''
     lambda_kd: 0.5
     use_adaptive_loss: false
+    teacher_cfg: ''
+    temperature: 0
+    alpha: 0
+    teacher_device: ''
+    feature_layers: ''
