@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
-__version__ = "1.0.3"
+__version__ = "1.1.0"
 
 BANNER = rf"""
  _____    _           ______ _     _   _ _ _______     _   

@@ -18,6 +18,7 @@ from pathlib import Path
 from web.core.paths import BASE_DIR, CONFIG_DIR
 from web.services import training_runtime
 from web.services.backend_common import _candidate_output_roots, _error, _list_resume_candidates, _load_yaml_file, _normalize_compute_provider, _resolve_project_path
+from utils.gpu_runtime import cleanup_gpu_resources
 
 _TRAIN_LOCK_FILE = BASE_DIR / '.training.lock'
 
@@ -673,22 +674,7 @@ def _check_and_enforce_memory_limit(pid: int, max_bytes: int, threshold: int) ->
 
 def _cleanup_gpu_resources():
     """清理残留 GPU 显存资源"""
-    try:
-        import gc as _gc2
-        import torch as _torch2
-        _gc2.collect()
-        if _torch2.cuda.is_available():
-            _torch2.cuda.empty_cache()
-            _torch2.cuda.reset_peak_memory_stats()
-            if hasattr(_torch2.cuda, 'synchronize'):
-                try:
-                    _torch2.cuda.synchronize()
-                except Exception:
-                    pass
-    except ImportError:
-        pass
-    except Exception:
-        pass
+    cleanup_gpu_resources()
 
 def _wait_for_gpu_free(timeout_sec: float = 15.0) -> bool:
     """

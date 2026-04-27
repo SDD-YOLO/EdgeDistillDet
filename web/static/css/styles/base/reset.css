@@ -83,7 +83,14 @@ html, body {
 .sidebar-brand {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
+}
+
+.sidebar-brand img {
+    width: 42px;
+    height: 42px;
+    object-fit: contain;
+    border-radius: 10px;
 }
 
 .brand-text {
@@ -442,6 +449,10 @@ html, body {
     box-shadow: var(--shadow-1);
 }
 
+.train-launcher.launcher-column {
+    flex-direction: column;
+}
+
 .launcher-left,
 .launcher-side {
     flex: 1 1 0;
@@ -495,6 +506,19 @@ html, body {
 
 .launcher-side-card .card-header {
     margin-bottom: 8px;
+}
+
+.launcher-side-card .card-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.launcher-side-card .log-container {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
 }
 
 .launcher-side-card .form-row {
@@ -726,9 +750,19 @@ html, body {
     align-items: stretch;
 }
 
+.panel-grid > .train-launcher {
+    grid-column: 1 / -1;
+}
+
 .panel-grid > .config-section,
 .panel-grid > .log-section {
     height: 100%;
+}
+
+.advanced-params-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
 }
 
 .panel-grid > .log-section {
@@ -793,8 +827,37 @@ html, body {
     gap: 12px;
 }
 
+.launcher-side-card .card-body > .form-grid.training-form-grid > .config-card.config-card-compact {
+    grid-column: 1 / -1;
+    width: 100%;
+}
+
 .config-card-compact {
     padding: 14px;
+}
+
+.display-preview-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 360px;
+}
+
+.display-preview-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 280px;
+    border: 1px dashed var(--md-outline-variant);
+    border-radius: var(--radius-sm);
+    background: var(--md-surface);
+    padding: 16px;
+}
+
+.display-preview-placeholder {
+    color: var(--md-on-surface-variant);
+    font-size: 14px;
+    text-align: center;
 }
 
 .form-row {

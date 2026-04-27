@@ -27,6 +27,7 @@ dependencies = [
   "torch>=2.0.0,<3",
   "torchvision>=0.15.0",
   "ultralytics>=8.2.0,<9",
+  "onnx>=1.12.0,<2.0.0",
   "opencv-python>=4.8.0,<5",
   "numpy>=1.24.0,<3",
   "pandas>=2.0.0,<3",

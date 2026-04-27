@@ -13,7 +13,6 @@ EdgeDistillDet — 蒸馏训练唯一入口（CLI + Web 共用）
 from __future__ import annotations
 
 import argparse
-import gc
 import json
 import os
 import re
@@ -30,9 +29,11 @@ from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer, _scatter_pr
 from core.distillation.common import w_feat_to_scalar
 from utils import expand_env_vars
 from utils.device_detect import detect_best_device, setup_device_for_trainer
+from utils.gpu_runtime import cleanup_gpu_resources
 
 # 训练期 DataLoader 始终 0 workers，避免多进程复制数据集与「像两个训练同时跑」的内存形态
 _TRAIN_LOADER_WORKERS = 0
+_TRAINING_STRUCTURAL_KEYS = {"compute_provider", "cloud_api", "dataset_api", "data_yaml"}
 
 
 def _flush_stdio():
@@ -146,7 +147,15 @@ def _resolve_under_root(path_str: str, root: Path) -> Path:
     if p.is_absolute():
         return p
     cand = (root / p).resolve()
-    return cand if cand.exists() else p
+    if cand.exists():
+        return cand
+    # Common local mapping: prefer repo-local configs/dataset_coco128.yaml when
+    # user provided the bare `coco128.yaml` name.
+    if p.name == "coco128.yaml":
+        alt = (root / "configs" / "dataset_coco128.yaml").resolve()
+        if alt.exists():
+            return alt
+    return p
 
 
 def _run_dir_from_checkpoint(ckpt: Path) -> Path:
@@ -187,30 +196,21 @@ def _find_auto_resume(project: str, name: str, root: Path) -> Optional[Path]:
 
 
 def _pre_cuda_gc():
-    gc.collect()
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
-            if hasattr(torch.cuda, "synchronize"):
-                try:
-                    torch.cuda.synchronize()
-                except Exception:
-                    pass
-    except ImportError:
-        pass
+    cleanup_gpu_resources()
 
 
 def _build_train_args(
     train_cfg: Dict[str, Any],
     output_cfg: Dict[str, Any],
     resume_path: Optional[Path],
+    root: Path,
     allow_overwrite: bool = False,
 ) -> Dict[str, Any]:
-    return {
-        "data": train_cfg.get("data_yaml", "coco128.yaml"),
+    # Resolve data YAML under project root when possible so Ultralytics sees the correct file
+    data_yaml = str(_resolve_under_root(train_cfg.get("data_yaml", "coco128.yaml"), root))
+
+    train_args = {
+        "data": data_yaml,  # ← 恢复为字符串，不要传字典
         "epochs": int(train_cfg.get("epochs", 10)),
         "imgsz": int(train_cfg.get("imgsz", 640)),
         "batch": int(train_cfg.get("batch", 16)),
@@ -230,6 +230,14 @@ def _build_train_args(
         "plots": False,
         **({"resume": str(resume_path)} if resume_path is not None else {}),
     }
+    invalid_yolo_args = {"cls_pw"}
+    for key, value in (train_cfg or {}).items():
+        if key in _TRAINING_STRUCTURAL_KEYS or key in invalid_yolo_args:
+            continue
+        if value is None:
+            continue
+        train_args[key] = value
+    return train_args
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -357,6 +365,8 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     if teacher_weight and not Path(teacher_weight).exists():
         raise FileNotFoundError(f"教师权重不存在: {teacher_weight}")
 
+    known_kd_keys = {"teacher_weight", "alpha_init", "T_max", "T_min", "warm_epochs", "w_kd", "w_focal", "w_feat", "scale_boost", "focal_gamma"}
+    extra_kd_params = {k: v for k, v in distill_cfg.items() if k not in known_kd_keys and v is not None}
     AdaptiveKDTrainer.set_kd_params(
         teacher_path=teacher_weight,
         alpha_init=float(distill_cfg.get("alpha_init", 0.5)),
@@ -368,6 +378,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
         w_feat=w_feat_to_scalar(distill_cfg.get("w_feat", 0.0)),
         scale_boost=float(distill_cfg.get("scale_boost", 2.0)),
         focal_gamma=float(distill_cfg.get("focal_gamma", 2.0)),
+        **extra_kd_params,
     )
 
     # 始终用「架构权重」构造 YOLO；真正的断点由 train(resume=...) 内部单次加载
@@ -381,7 +392,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     project_raw = output_cfg.get("project", "runs")
     project_abs = str((root / project_raw).resolve())
     output_cfg_resolved = {**output_cfg, "project": project_abs}
-    train_args = _build_train_args(train_cfg, output_cfg_resolved, resume_path, allow_overwrite=allow_overwrite)
+    train_args = _build_train_args(train_cfg, output_cfg_resolved, resume_path, root, allow_overwrite=allow_overwrite)
     os.environ.setdefault("ULTRALYTICS_VERBOSE", "True")
     os.environ.setdefault("DATAMODULE_WORKERS", "0")
     os.environ.setdefault("NUM_WORKERS", "0")
@@ -439,8 +450,9 @@ def _maybe_auto_eval(
         buf = io.StringIO()
         with redirect_stdout(buf), redirect_stderr(buf):
             m = YOLO(str(model_to_eval), verbose=False)
+            eval_data_yaml = str(_resolve_under_root(train_cfg.get("data_yaml", "coco128.yaml"), root))
             eval_results = m.val(
-                data=train_cfg.get("data_yaml", "coco128.yaml"),
+                data=eval_data_yaml,
                 imgsz=int(train_cfg.get("imgsz", 640)),
                 batch=int(train_cfg.get("batch", 16)),
                 verbose=False,

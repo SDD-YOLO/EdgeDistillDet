@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -15,7 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from web.core.paths import BASE_DIR, CONFIG_DIR
 from web.schemas import TrainStartRequest
 from web.services import training_runtime
-from web.services.backend_common import _candidate_output_roots, _error, _list_resume_candidates, _load_yaml_file, _normalize_compute_provider, _resolve_project_path
+from web.services.backend_common import _candidate_output_roots, _error, _list_export_weight_candidates, _list_resume_candidates, _load_yaml_file, _normalize_compute_provider, _resolve_project_path
 from web.services.backend_train_runtime import (
     _TRAIN_LOCK_FILE,
     _acquire_training_lock,
@@ -33,6 +34,56 @@ from web.services.backend_train_runtime import (
     _update_status_line,
     _wait_for_gpu_free,
 )
+
+_RESUME_LOCKED_TRAINING_KEYS = ("device", "data_yaml", "imgsz", "batch")
+
+
+def _resume_run_dir_from_checkpoint(checkpoint: str) -> Path | None:
+    if not checkpoint:
+        return None
+    ckpt = Path(checkpoint)
+    if not ckpt.is_absolute():
+        ckpt = (BASE_DIR / ckpt).resolve()
+    if not ckpt.exists():
+        return None
+    if ckpt.parent.name.lower() == "weights":
+        return ckpt.parent.parent
+    return ckpt.parent
+
+
+def _validate_resume_locked_fields(cfg: dict, checkpoint: str | None):
+    """断点续训时阻止关键参数切换设备/配置，避免写坏历史运行。"""
+    run_dir = _resume_run_dir_from_checkpoint(str(checkpoint or ""))
+    if run_dir is None:
+        return
+    args_path = run_dir / "args.yaml"
+    if not args_path.exists():
+        return
+    try:
+        args_cfg = _load_yaml_file(args_path) or {}
+    except Exception:
+        return
+
+    train_cfg = dict(cfg.get("training", {}) or {})
+    mismatches = []
+    for key in _RESUME_LOCKED_TRAINING_KEYS:
+        expected = args_cfg.get("data") if key == "data_yaml" else args_cfg.get(key)
+        current = train_cfg.get(key)
+        if expected in (None, "", []) or current in (None, "", []):
+            continue
+        if str(expected).strip() != str(current).strip():
+            mismatches.append(f"{key}: 期望 {expected}, 当前 {current}")
+    expected_project = args_cfg.get("project")
+    expected_name = args_cfg.get("name")
+    output_cfg = dict(cfg.get("output", {}) or {})
+    current_project = output_cfg.get("project")
+    current_name = output_cfg.get("name")
+    if expected_project and current_project and str(expected_project).strip() != str(current_project).strip():
+        mismatches.append(f"output.project: 期望 {expected_project}, 当前 {current_project}")
+    if expected_name and current_name and str(expected_name).strip() != str(current_name).strip():
+        mismatches.append(f"output.name: 期望 {expected_name}, 当前 {current_name}")
+    if mismatches:
+        raise ValueError("断点续训禁止切换关键配置，请保持与历史运行一致: " + "; ".join(mismatches))
 
 def output_check(project: str = Query('runs')):
     project = project or 'runs'
@@ -54,11 +105,9 @@ def output_check(project: str = Query('runs')):
 
     exp_numbers = []
     for name in existing_names:
-        if name.startswith('exp'):
-            try:
-                exp_numbers.append(int(name[3:] or 0))
-            except ValueError:
-                pass
+        match = re.fullmatch(r'exp(\d+)', name)
+        if match:
+            exp_numbers.append(int(match.group(1)))
     next_exp = f'exp{max(exp_numbers) + 1}' if exp_numbers else 'exp1'
     return {
         'status': 'ok',
@@ -66,6 +115,21 @@ def output_check(project: str = Query('runs')):
         'existing_names': existing_names,
         'next_exp_name': next_exp,
     }
+
+
+def export_weight_candidates(project: str = Query('runs')):
+    project = project or 'runs'
+    try:
+        project_path = _resolve_project_path(project, allow_external=Path(project).is_absolute())
+    except ValueError as e:
+        return _error(str(e), 400)
+
+    candidates = _list_export_weight_candidates(project_path)
+    return {
+        'status': 'ok',
+        'candidates': candidates,
+    }
+
 
 def start_training(payload: TrainStartRequest):
     """
@@ -163,6 +227,12 @@ def start_training(payload: TrainStartRequest):
             return _error(f'配置文件不存在: {config_name}', 404)
 
         cfg = _load_yaml_file(config_path) or {}
+        if mode == 'resume' and checkpoint:
+            try:
+                _validate_resume_locked_fields(cfg, checkpoint)
+            except ValueError as e:
+                _release_training_lock()
+                return _error(str(e), 400)
         train_cfg = dict(cfg.get('training', {}) or {})
         compute_provider = _normalize_compute_provider(train_cfg.get('compute_provider'))
         if compute_provider == 'remote_api':

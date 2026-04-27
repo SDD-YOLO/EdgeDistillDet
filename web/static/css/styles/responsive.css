@@ -107,7 +107,8 @@
 
     .charts-grid,
     .form-grid,
-    .form-row {
+    .form-row,
+    .advanced-params-grid {
         grid-template-columns: 1fr;
     }
 

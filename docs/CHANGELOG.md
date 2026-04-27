@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.1.0] - 2026-04-27
+
+### Added
+
+- 新增前端推理与模型导出控制台模块，支持日志查看、导出路径和格式选择。
+- 新增 `DisplayLauncherPanel` 与 `ExportLauncherPanel` 前端组件，将训练面板渲染逻辑拆分为独立模块。
+
+### Changed
+
+- 重构 `web/src/features/training/TrainingPanel.jsx`，简化视图切换逻辑并抽离显示/导出面板。
+- 调整 `train-launcher` 样式，使推理与导出控制台横跨整个面板并优化日志面板高度填充。
+
+## [1.0.6] - 2026-04-27
+
+### Changed
+
+- 新增训练页“高级参数配置”，支持训练与蒸馏扩展参数的前后端映射与序列化。
+- 断点续训新增关键配置锁定：前端锁定编辑，后端按历史 `args.yaml` 二次校验。
+- 更换应用 Logo，并新增主题联动资源与 `favicon.svg` 回退逻辑。
+- `installer.bat` 增强为自动安装/升级 Python 3.10+，并按设备匹配 PyTorch CUDA 通道。
+- 统一 GPU 资源清理实现，减少训练脚本与 Web 运行时重复代码。
+- CI 新增 Python 测试任务，默认执行 `pytest`。
+- 文档新增参数映射矩阵：`docs/PARAMETER_MAPPING.md`。
+
 ## [1.0.5] - 2026-04-26
 
 ### Changed

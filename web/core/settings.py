@@ -39,11 +39,13 @@ def get_cors_middleware_kwargs() -> dict:
     if raw:
         origins = [x.strip() for x in raw.split(",") if x.strip()]
     else:
+        backend_port = os.environ.get("EDGE_BACKEND_PORT", os.environ.get("EDGE_FLASK_PORT", "5000")).strip() or "5000"
+        frontend_port = os.environ.get("EDGE_FRONTEND_DEV_PORT", "5173").strip() or "5173"
         origins = [
-            "http://127.0.0.1:5000",
-            "http://localhost:5000",
-            "http://127.0.0.1:5173",
-            "http://localhost:5173",
+            f"http://127.0.0.1:{backend_port}",
+            f"http://localhost:{backend_port}",
+            f"http://127.0.0.1:{frontend_port}",
+            f"http://localhost:{frontend_port}",
         ]
     return {
         "allow_origins": origins,

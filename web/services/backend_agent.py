@@ -28,7 +28,7 @@ from web.schemas import (
 from web.services import backend_state, config_service
 from web.services.backend_common import _error
 
-_ALLOWED_TOP_LEVEL = ("distillation", "training", "output")
+_ALLOWED_TOP_LEVEL = ("distillation", "training", "output", "advanced")
 _DEPRECATED_LEAF_PATHS = {
     "distillation.temperature",
     "distillation.schedule_type",

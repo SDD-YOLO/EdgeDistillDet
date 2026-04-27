@@ -104,6 +104,41 @@ class AgentModelInvokeRequest(BaseModel):
     max_steps: int = 4
 
 
+class DisplayStartRequest(BaseModel):
+    config: str = "distill_config.yaml"
+    source: str | None = None
+    weight: str | None = None
+    device: str | None = None
+    imgsz: int | None = None
+    conf: float | None = None
+    iou: float | None = None
+    visualize: bool | None = None
+    show: bool | None = None
+    save_txt: bool | None = None
+    save_conf: bool | None = None
+    save_crop: bool | None = None
+    show_labels: bool | None = None
+    show_conf: bool | None = None
+    show_boxes: bool | None = None
+    line_width: int | None = None
+    output_dir: str | None = None
+
+
+class ExportStartRequest(BaseModel):
+    config: str = "distill_config.yaml"
+    weight: str | None = None
+    export_path: str | None = Field(default=None, min_length=1)
+    format: str = "onnx"
+    keras: bool = False
+    optimize: bool = False
+    int8: bool = False
+    dynamic: bool = False
+    simplify: bool = False
+    opset: int | None = None
+    workspace: int | None = None
+    nms: bool = False
+
+
 class TrainStartRequest(BaseModel):
     config: str = "distill_config.yaml"
     mode: str = "distill"

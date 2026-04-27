@@ -24,6 +24,7 @@ from web.services.backend_config import (
 from web.services.backend_metrics import get_metrics
 from web.services.backend_train import (
     download_training_logs,
+    export_weight_candidates,
     get_resume_candidates,
     get_training_logs,
     get_training_status,
@@ -38,7 +39,7 @@ __all__ = [
     'agent_model_invoke', 'agent_model_invoke_stream', 'agent_patch_apply',
     'agent_patch_preview', 'agent_prompts', 'agent_run_history', 'agent_run_rollback',
     'agent_tools_contract', 'agent_tools_execute', 'download_training_logs', 'favicon', 'get_config',
-    'get_configs', 'get_metrics', 'get_recent_config', 'get_resume_candidates', 'get_training_logs',
+    'get_configs', 'get_metrics', 'get_recent_config', 'get_resume_candidates', 'export_weight_candidates', 'get_training_logs',
     'get_training_status', 'index', 'output_check', 'pick_path_dialog', 'save_config', 'start_training',
     'stop_training', 'stream_training_logs', 'upload_config',
 ]

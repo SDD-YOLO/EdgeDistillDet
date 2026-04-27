@@ -5,7 +5,10 @@ export function M3Select({ value, onChange, options, disabled, className = "", a
   const rootRef = useRef(null);
   const normalizedValue = value == null ? "" : String(value);
   const normalizedOptions = Array.isArray(options) ? options.map((opt) => ({ ...opt, value: String(opt.value) })) : [];
-  const selected = normalizedOptions.find((opt) => opt.value === normalizedValue) || normalizedOptions[0];
+  const selected =
+    normalizedValue === ""
+      ? undefined
+      : normalizedOptions.find((opt) => opt.value === normalizedValue) || normalizedOptions[0];
 
   useEffect(() => {
     if (!open) return undefined;

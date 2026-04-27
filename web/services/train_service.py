@@ -26,6 +26,10 @@ def get_resume_candidates(project: str):
     return backend_logic.get_resume_candidates(project=project)
 
 
+def fetch_export_weight_candidates(project: str):
+    return backend_logic.export_weight_candidates(project=project)
+
+
 def get_training_logs(offset: int, limit: int):
     return backend_logic.get_training_logs(offset=offset, limit=limit)
 

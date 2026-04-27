@@ -9,14 +9,16 @@ from web.services.backend_common import _error
 
 
 def favicon():
-    # 优先使用新的 png 图标，兼容浏览器默认请求 /favicon.ico
-    favicon_path = STATIC_DIR / 'favicon.png'
-    media_type = 'image/png'
-    if not favicon_path.exists():
-        favicon_path = STATIC_DIR / 'favicon.ico'
-        media_type = 'image/x-icon'
-    if not favicon_path.exists():
+    # 优先 png，其次 ico，最后回退到 svg
+    candidates = [
+        (STATIC_DIR / 'favicon.png', 'image/png'),
+        (STATIC_DIR / 'favicon.ico', 'image/x-icon'),
+        (STATIC_DIR / 'favicon.svg', 'image/svg+xml'),
+    ]
+    chosen = next(((path, mt) for path, mt in candidates if path.exists()), None)
+    if chosen is None:
         return _error('favicon 不存在', 404)
+    favicon_path, media_type = chosen
     return FileResponse(str(favicon_path), media_type=media_type)
 
 def index():

@@ -8,16 +8,45 @@ import {
   saveDistillConfig,
   uploadConfigFile
 } from "../../api/configApi";
-import { downloadTrainLogsBlob, fetchResumeCandidates, startTrain, stopTrain } from "../../api/trainApi";
-import { M3Select } from "../../components/forms/M3Select";
+import {
+  downloadTrainLogsBlob,
+  fetchResumeCandidates,
+  fetchExportWeightCandidates,
+  startTrain,
+  stopTrain,
+  startDisplay,
+  stopDisplay,
+  startExportModel,
+  stopExportModel,
+  fetchExportStatus,
+  fetchExportLogs,
+} from "../../api/trainApi";
 import { NumberField } from "../../components/forms/NumberField";
-import { PathField } from "../../components/forms/PathField";
 import { SelectField } from "../../components/forms/SelectField";
 import { TextField } from "../../components/forms/TextField";
+import { PathField } from "../../components/forms/PathField";
 import { Button } from "../../components/ui/button";
 import { DISTILL_CONFIG_UPDATED_EVENT } from "../../constants/distillConfigSync";
 import { DEFAULT_FORM, COMPUTE_PRESETS, inferComputeProviderFromConfig } from "../../constants/trainingDefaults";
-import { TrainingModeSelector } from "./components/TrainingModeSelector";
+import {
+  BASIC_DISTILLATION_KEYS,
+  BASIC_TRAINING_KEYS,
+  DISTILLATION_ADVANCED_SECTIONS,
+  DISPLAY_ADVANCED_SECTIONS,
+  EXPORT_ADVANCED_SECTIONS,
+  TRAINING_ADVANCED_SECTIONS
+} from "../../constants/advancedParameterCatalog";
+import { TrainingLauncher } from "./components/TrainingLauncher";
+import { OutputConfigCard } from "./components/OutputConfigCard";
+import { ResumeHistoryCard } from "./components/ResumeHistoryCard";
+import { DisplayLauncherPanel } from "./components/DisplayLauncherPanel";
+import { ExportLauncherPanel } from "./components/ExportLauncherPanel";
+import { TrainingWeightsSection } from "./components/TrainingWeightsSection";
+import { DistillationCoreParamsCard } from "./components/DistillationCoreParamsCard";
+import { TrainingHyperparamsSection } from "./components/TrainingHyperparamsSection";
+import { WandbConfigCard } from "./components/WandbConfigCard";
+import { TrainingLogsPanel } from "./components/TrainingLogsPanel";
+import { AdvancedCardsColumn } from "./components/AdvancedCardsColumn";
 import { useTrainingData } from "./hooks/useTrainingData";
 import { detectLogLevel } from "../../utils/logging";
 
@@ -40,6 +69,65 @@ function omitKeys(source, keys) {
   return out;
 }
 
+function normalizeAdvancedValueForUi(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractAdvancedValues(sectionConfig, basicKeys, sections) {
+  const config = sectionConfig && typeof sectionConfig === "object" ? sectionConfig : {};
+  const supportedKeys = new Set();
+  sections.forEach((section) => {
+    (section?.params || []).forEach((param) => supportedKeys.add(param.key));
+  });
+  const out = {};
+  Object.entries(config).forEach(([key, value]) => {
+    if (basicKeys.has(key)) return;
+    if (!supportedKeys.has(key)) return;
+    out[key] = normalizeAdvancedValueForUi(value);
+  });
+  return out;
+}
+
+function parseAdvancedValue(raw) {
+  if (raw === null || raw === undefined) return undefined;
+  if (typeof raw === "boolean" || typeof raw === "number") return raw;
+  const text = String(raw).trim();
+  if (!text) return undefined;
+  const lower = text.toLowerCase();
+  if (lower === "true") return true;
+  if (lower === "false") return false;
+  if (lower === "null" || lower === "none") return null;
+  if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text);
+  if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]")) || (text.startsWith("\"") && text.endsWith("\""))) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+function applyAdvancedOverrides(target, advanced) {
+  const merged = { ...(target || {}) };
+  Object.entries(advanced || {}).forEach(([key, rawValue]) => {
+    const parsed = parseAdvancedValue(rawValue);
+    if (parsed === undefined) {
+      delete merged[key];
+      return;
+    }
+    merged[key] = parsed;
+  });
+  return merged;
+}
+
 /** 将服务端/Agent 返回的 distill 配置片段合并进表单 state（与 mergeConfig 行为一致） */
 function mergeDistillConfigIntoForm(prev, config) {
   if (!config || typeof config !== "object") return prev;
@@ -47,6 +135,18 @@ function mergeDistillConfigIntoForm(prev, config) {
   const incomingDistillation = omitKeys(config?.distillation, LEGACY_DISTILLATION_KEYS);
   const incomingTraining = omitKeys(config?.training, LEGACY_TRAINING_KEYS);
   const incomingOutput = omitKeys(config?.output, LEGACY_OUTPUT_KEYS);
+  const incomingAdvancedTraining = {
+    ...extractAdvancedValues(incomingTraining, BASIC_TRAINING_KEYS, TRAINING_ADVANCED_SECTIONS),
+    ...extractAdvancedValues(incomingTraining, BASIC_TRAINING_KEYS, DISPLAY_ADVANCED_SECTIONS),
+    ...extractAdvancedValues(incomingTraining, BASIC_TRAINING_KEYS, EXPORT_ADVANCED_SECTIONS),
+    ...extractAdvancedValues(config?.advanced?.training, BASIC_TRAINING_KEYS, TRAINING_ADVANCED_SECTIONS),
+    ...extractAdvancedValues(config?.advanced?.training, BASIC_TRAINING_KEYS, DISPLAY_ADVANCED_SECTIONS),
+    ...extractAdvancedValues(config?.advanced?.training, BASIC_TRAINING_KEYS, EXPORT_ADVANCED_SECTIONS)
+  };
+  const incomingAdvancedDistillation = {
+    ...extractAdvancedValues(incomingDistillation, BASIC_DISTILLATION_KEYS, DISTILLATION_ADVANCED_SECTIONS),
+    ...extractAdvancedValues(config?.advanced?.distillation, BASIC_DISTILLATION_KEYS, DISTILLATION_ADVANCED_SECTIONS)
+  };
   // Backward compatibility: older UI may have written training.warm_epochs by mistake.
   if (
     Object.prototype.hasOwnProperty.call(incomingTraining, "warm_epochs") &&
@@ -66,13 +166,21 @@ function mergeDistillConfigIntoForm(prev, config) {
       compute_provider: inferredProvider
     },
     output: { ...prev.output, ...incomingOutput },
-    wandb: { ...prev.wandb, ...normalizeWandbForUi(config?.wandb) }
+    wandb: { ...prev.wandb, ...normalizeWandbForUi(config?.wandb) },
+    advanced: {
+      training: { ...(prev.advanced?.training || {}), ...incomingAdvancedTraining },
+      distillation: { ...(prev.advanced?.distillation || {}), ...incomingAdvancedDistillation }
+    }
   };
 }
 
-function TrainingPanel({ toast, active }) {
+function TrainingPanel({ toast, active, view = "training" }) {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [mode, setMode] = useState("distill");
+  const isAdvancedView = view === "advanced";
+  const isDisplayView = view === "display";
+  const isExportView = view === "export";
+  const isTrainingView = view === "training";
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [resumeCandidates, setResumeCandidates] = useState([]);
@@ -81,9 +189,18 @@ function TrainingPanel({ toast, active }) {
   const [outputCheckInfo, setOutputCheckInfo] = useState({ project: "runs", existingNames: [], suggested: "exp1" });
   const [progress, setProgress] = useState({ current: 0, total: 0, elapsed: "--:--:--", expected: "--:--:--" });
   const [autoScroll, setAutoScroll] = useState(true);
+  const [inferRunning, setInferRunning] = useState(false);
+  const [exportRunning, setExportRunning] = useState(false);
+  const [exportAutoScroll, setExportAutoScroll] = useState(true);
+  const [exportLogs, setExportLogs] = useState([]);
+  const [exportStatus, setExportStatus] = useState({ running: false, pid: null, output_path: null });
+  const [exportWeightCandidates, setExportWeightCandidates] = useState([]);
+  const [selectedExportWeightIndex, setSelectedExportWeightIndex] = useState(0);
 
   const logOffsetRef = useRef(0);
+  const exportLogOffsetRef = useRef(0);
   const startTimestampRef = useRef(null);
+  const exportLogContainerRef = useRef(null);
   /** 上一轮 /status 的 running，用于检测服务端 true→false（不依赖 React state 与 effect 时序） */
   const lastServerRunningRef = useRef(false);
   const resumeListProjectRef = useRef("runs");
@@ -98,6 +215,17 @@ function TrainingPanel({ toast, active }) {
   const datasetSource = form.training?.dataset_api?.source || (form.training?.dataset_api?.enabled ? "api" : "path");
   const useDatasetApi = isRemoteApi && datasetSource === "api";
   const isResumeMode = mode === "resume";
+  const selectedResumeCandidate = resumeCandidates[selectedResumeIndex];
+  const isResumeLocked = isResumeMode && Boolean(selectedResumeCandidate);
+  const isResumeConfigLocked = isResumeMode;
+  const advancedSectionCards = [
+    ...TRAINING_ADVANCED_SECTIONS.map((section) => ({ scope: "training", section })),
+    ...DISTILLATION_ADVANCED_SECTIONS.map((section) => ({ scope: "distillation", section }))
+  ];
+  const displaySectionCards = DISPLAY_ADVANCED_SECTIONS.map((section) => ({ scope: "training", section }));
+  const exportSectionCards = EXPORT_ADVANCED_SECTIONS.map((section) => ({ scope: "training", section }));
+  const advancedCardsLeft = advancedSectionCards.filter((_, index) => index % 2 === 0);
+  const advancedCardsRight = advancedSectionCards.filter((_, index) => index % 2 === 1);
 
   const setNested = (scope, key, value) => {
     setForm((prev) => ({
@@ -112,6 +240,19 @@ function TrainingPanel({ toast, active }) {
       training: {
         ...prev.training,
         [section]: { ...prev.training?.[section], ...patch }
+      }
+    }));
+  };
+
+  const setAdvancedValue = (scope, key, value) => {
+    setForm((prev) => ({
+      ...prev,
+      advanced: {
+        ...(prev.advanced || {}),
+        [scope]: {
+          ...(prev.advanced?.[scope] || {}),
+          [key]: value
+        }
       }
     }));
   };
@@ -135,6 +276,12 @@ function TrainingPanel({ toast, active }) {
       wandb.tags = [];
     }
     payload.wandb = wandb;
+    payload.training = applyAdvancedOverrides(payload.training, cloned?.advanced?.training || {});
+    payload.distillation = applyAdvancedOverrides(payload.distillation, cloned?.advanced?.distillation || {});
+    payload.advanced = {
+      training: cloned?.advanced?.training || {},
+      distillation: cloned?.advanced?.distillation || {}
+    };
     return payload;
   };
 
@@ -228,6 +375,21 @@ function TrainingPanel({ toast, active }) {
     }
   }, []);
 
+  const refreshExportWeightCandidates = useCallback(async (project) => {
+    try {
+      const result = await fetchExportWeightCandidates(project);
+      const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+      setExportWeightCandidates(candidates);
+      setSelectedExportWeightIndex((idx) => {
+        if (!candidates.length) return 0;
+        return Math.min(Math.max(0, idx), candidates.length - 1);
+      });
+    } catch {
+      setExportWeightCandidates([]);
+      setSelectedExportWeightIndex(0);
+    }
+  }, []);
+
   useTrainingData({
     running,
     setRunning,
@@ -240,6 +402,51 @@ function TrainingPanel({ toast, active }) {
     logOffsetRef,
     parseMetricsFromLogLines
   });
+
+  useEffect(() => {
+    let intervalId = null;
+    let isMounted = true;
+
+    async function pollExportStatusAndLogs() {
+      try {
+        const status = await fetchExportStatus();
+        if (!isMounted) return;
+        setExportStatus(status || { running: false, pid: null, output_path: null });
+        setExportRunning(Boolean(status?.running));
+      } catch {
+        // ignore transient errors during polling
+      }
+
+      if (!exportRunning) return;
+
+      try {
+        const result = await fetchExportLogs({ offset: exportLogOffsetRef.current, limit: 120 });
+        if (!isMounted || !result || !Array.isArray(result.logs)) return;
+        if (result.logs.length > 0) {
+          exportLogOffsetRef.current = result.offset + result.logs.length;
+          setExportLogs((prev) => {
+            const next = [...prev, ...result.logs];
+            return next.slice(-800);
+          });
+        }
+      } catch {
+        // ignore transient polling failures
+      }
+    }
+
+    if (exportRunning) {
+      exportLogOffsetRef.current = exportLogOffsetRef.current || 0;
+      pollExportStatusAndLogs();
+      intervalId = window.setInterval(pollExportStatusAndLogs, 1500);
+    }
+
+    return () => {
+      isMounted = false;
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [exportRunning]);
 
   useEffect(() => {
     resumeListProjectRef.current = form.output.project || "runs";
@@ -257,8 +464,13 @@ function TrainingPanel({ toast, active }) {
     fetchDefaultConfig().then(() => {
       refreshRunNameSuggestion(DEFAULT_FORM.output.project, DEFAULT_FORM.output.name, true);
       refreshResumeCandidates(DEFAULT_FORM.output.project, false);
+      refreshExportWeightCandidates(DEFAULT_FORM.output.project);
     });
   }, []);
+
+  useEffect(() => {
+    refreshExportWeightCandidates(form.output.project || "runs");
+  }, [form.output.project, refreshExportWeightCandidates]);
 
   useEffect(() => {
     if (!isResumeMode) return;
@@ -297,8 +509,130 @@ function TrainingPanel({ toast, active }) {
     });
   }, [logs, autoScroll]);
 
+  useEffect(() => {
+    const el = exportLogContainerRef.current;
+    if (!el) return;
+    if (!exportAutoScroll) return;
+    window.requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [exportLogs, exportAutoScroll]);
+
   const currentOutputProject = outputCheckInfo.project || form.output.project || "runs";
   const currentOutputName = (form.output.name || "").trim();
+
+  const startInference = async () => {
+    if (inferRunning) return;
+    try {
+      await startDisplay({
+        config: form.config || "distill_config.yaml",
+        source: form.advanced?.training?.source,
+        weight: form.distillation?.student_weight,
+        device: form.training?.device,
+        imgsz: form.training?.imgsz,
+        conf: form.training?.conf,
+        iou: form.training?.iou,
+        visualize: form.advanced?.training?.visualize,
+        save_txt: form.advanced?.training?.save_txt,
+        save_conf: form.advanced?.training?.save_conf,
+        save_crop: form.advanced?.training?.save_crop,
+        show: form.advanced?.training?.show,
+        show_labels: form.advanced?.training?.show_labels,
+        show_conf: form.advanced?.training?.show_conf,
+        show_boxes: form.advanced?.training?.show_boxes,
+        line_width: form.advanced?.training?.line_width,
+        output_dir: form.advanced?.training?.output_dir,
+      });
+      setInferRunning(true);
+      toast("推理已开始", "success");
+    } catch (error) {
+      setInferRunning(false);
+      toast(error?.message || "启动可视化推理失败", "error");
+    }
+  };
+
+  const stopInference = async () => {
+    if (!inferRunning) return;
+    try {
+      await stopDisplay();
+      setInferRunning(false);
+      toast("推理已停止", "info");
+    } catch (error) {
+      toast(error?.message || "停止可视化推理失败", "error");
+    }
+  };
+
+  const exportPath = String(form.advanced?.training?.export_path || "").trim();
+  const exportFormat = String(form.advanced?.training?.format || "").toLowerCase();
+  const exportWeight = String(form.distillation?.student_weight || "").trim();
+  const supportedExportFormats = new Set(["onnx", "torchscript", "tflite", "saved_model", "coreml"]);
+  const isExportReady = Boolean(exportPath && exportWeight) && supportedExportFormats.has(exportFormat);
+
+  const startExport = async () => {
+    if (exportRunning) return;
+    if (!exportPath) {
+      toast("请先填写导出路径", "warning");
+      return;
+    }
+    if (!supportedExportFormats.has(exportFormat)) {
+      toast("请选择有效的导出格式", "warning");
+      return;
+    }
+
+    try {
+      exportLogOffsetRef.current = 0;
+      setExportLogs([]);
+      const res = await startExportModel({
+        config: form.config || "distill_config.yaml",
+        weight: form.distillation?.student_weight,
+        export_path: exportPath,
+        format: exportFormat,
+        keras: form.advanced?.training?.keras,
+        optimize: form.advanced?.training?.optimize,
+        int8: form.advanced?.training?.int8,
+        dynamic: form.advanced?.training?.dynamic,
+        simplify: form.advanced?.training?.simplify,
+        opset: form.advanced?.training?.opset,
+        workspace: form.advanced?.training?.workspace,
+        nms: form.advanced?.training?.nms,
+      });
+      setExportRunning(true);
+      setExportLogs((prev) => [...prev, `导出任务已启动，PID=${res.pid || "unknown"}`]);
+      toast("模型导出已开始", "success");
+    } catch (error) {
+      toast(error?.message || "启动模型导出失败", "error");
+    }
+  };
+
+  const stopExport = async () => {
+    if (!exportRunning) return;
+    try {
+      await stopExportModel();
+      setExportRunning(false);
+      setExportLogs((prev) => [...prev, "模型导出已停止。"]);
+      toast("模型导出已停止", "info");
+    } catch (error) {
+      toast(error?.message || "停止模型导出失败", "error");
+    }
+  };
+
+  const clearExportLogs = () => {
+    setExportLogs([]);
+  };
+
+  const downloadExportLogs = () => {
+    const blob = new Blob([exportLogs.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `export_logs_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    toast("导出日志已下载", "success");
+  };
+
   const isOutputPathOverlap = !isResumeMode && Boolean(currentOutputName && outputCheckInfo.existingNames.includes(currentOutputName));
   const renderedHint = isResumeMode
     ? `断点续练输出目录跟随历史记录: ${currentOutputProject}${currentOutputName ? `/${currentOutputName}` : " — 暂无可用历史运行"}`
@@ -512,466 +846,193 @@ function TrainingPanel({ toast, active }) {
 
   const progressPercent = progress.total > 0 ? Math.min(100, (progress.current / progress.total) * 100) : 0;
   const isResumeStartDisabled = mode === "resume" && resumeCandidates.length === 0;
+  const renderAdvancedField = (scope, param) => {
+    const value = form.advanced?.[scope]?.[param.key] ?? "";
+    const disabled = running || isResumeConfigLocked;
+    if (param.type === "enum") {
+      return (
+        <SelectField
+          label={param.label}
+          value={value === undefined || value === null ? "" : String(value)}
+          onChange={(next) => setAdvancedValue(scope, param.key, next)}
+          options={param.options || []}
+          disabled={disabled}
+        />
+      );
+    }
+    if (param.type === "number") {
+      return (
+        <NumberField
+          label={param.label}
+          value={value === "" ? null : value}
+          step="any"
+          onChange={(next) => setAdvancedValue(scope, param.key, next === null ? "" : next)}
+          disabled={disabled}
+        />
+      );
+    }
+    if (param.type === "path") {
+      return (
+        <PathField
+          label={param.label}
+          value={String(value || "")}
+          onChange={(next) => setAdvancedValue(scope, param.key, next)}
+          onBrowse={async () => {
+            const next = await pickLocalPath({ kind: "directory", title: "选择导出路径", initialPath: String(value || "") });
+            if (next) setAdvancedValue(scope, param.key, next);
+          }}
+          disabled={disabled}
+        />
+      );
+    }
+    return <TextField label={param.label} value={String(value || "")} onChange={(next) => setAdvancedValue(scope, param.key, next)} disabled={disabled} />;
+  };
 
   return (
     <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-training" aria-hidden={!active}>
-      <section className="train-launcher">
-        <div className="launcher-left">
-          <div className="launch-info">
-            <div className="launch-header">
-              <h2><span className="material-icons">rocket_launch</span> 训练控制台</h2>
-              <span className={`badge ${running ? "running" : "idle"}`}>{running ? "训练中" : "就绪"}</span>
-            </div>
-            <p className="launch-desc">配置参数后选择训练模式并启动训练任务</p>
-          </div>
-
-          <TrainingModeSelector
+      {isTrainingView ? (
+        <section className="train-launcher">
+          <TrainingLauncher
             mode={mode}
             running={running}
             onSwitchToDistillMode={switchToDistillMode}
             onSwitchToResumeMode={switchToResumeMode}
+            onStartTraining={startTraining}
+            onStopTraining={stopTraining}
+            onLoadConfigFromFile={loadConfigFromFile}
+            onSaveConfig={() => saveConfig().then(() => toast("配置已保存", "success")).catch((e) => toast(e.message, "error"))}
+            onResetForm={resetForm}
+            isResumeStartDisabled={isResumeStartDisabled}
           />
 
-          <div className="launch-actions">
-            <Button
-              id="btn-start-training"
-              className="btn-start"
-              variant="default"
-              onClick={startTraining}
-              disabled={running || isResumeStartDisabled}
-              title={isResumeStartDisabled ? "当前没有可用断点，无法开始断点续训" : ""}
-            >
-              <span className="material-icons">play_arrow</span>开始训练
-            </Button>
-            <Button id="btn-stop-training" className="btn-stop" variant="destructive" onClick={stopTraining} disabled={!running}>
-              <span className="material-icons">stop</span>停止训练
-            </Button>
-            <Button component="label" variant="secondary" className="cursor-pointer">
-              <span className="material-icons">file_open</span>加载配置
-              <input type="file" accept=".yaml,.yml" style={{ display: "none" }} onChange={loadConfigFromFile} />
-            </Button>
-            <Button variant="outline" onClick={() => saveConfig().then(() => toast("配置已保存", "success")).catch((e) => toast(e.message, "error"))}>
-              <span className="material-icons">save</span>保存配置
-            </Button>
-            <Button variant="ghost" onClick={resetForm}>
-              <span className="material-icons">refresh</span>重置表单
-            </Button>
-          </div>
-        </div>
-
-        <div className="launcher-side">
-          <div className="config-card launcher-side-card">
-            <h3 className="card-header">输出配置</h3>
-            <div className="form-row stacked-row">
-              <div className="form-group">
-                <PathField
-                  label="项目目录"
-                  value={form.output.project || ""}
-                  onChange={(project) => {
-                    if (isResumeMode) return;
-                    setNested("output", "project", project);
-                    refreshRunNameSuggestion(project || "runs", form.output.name, true);
-                    refreshResumeCandidates(project || "runs", false);
-                  }}
-                  onBrowse={async () => {
-                    if (isResumeMode) return;
-                    try {
-                      const selected = await pickLocalPath({
-                        kind: "directory",
-                        title: "选择训练输出项目目录",
-                        initialPath: form.output.project || "runs"
-                      });
-                      if (!selected) return;
-                      setNested("output", "project", selected);
-                      refreshRunNameSuggestion(selected || "runs", form.output.name, true);
-                      refreshResumeCandidates(selected || "runs", false);
-                    } catch (error) {
-                      toast(error.message, "error");
-                    }
-                  }}
-                  disabled={running || isResumeMode}
-                />
-              </div>
-              <div className="form-group">
-                <div className={`md-field ${(form.output.name || "").trim() ? "has-value" : ""}`}>
-                  <input
-                    ref={outputNameInputRef}
-                    className="md-input"
-                    placeholder=" "
-                    value={form.output.name || ""}
-                    onChange={(e) => {
-                      const nextName = e.target.value;
-                      setNested("output", "name", nextName);
-                    }}
-                    onBlur={() => {
-                      if (isResumeMode) return;
-                      const overlapKey = `${currentOutputProject}/${(form.output.name || "").trim()}`;
-                      const shouldAlertOnBlur = Boolean(
-                        isOutputPathOverlap &&
-                        (pendingOverlapAlertRef.current || overlapAlertShownRef.current !== overlapKey)
-                      );
-                      if (shouldAlertOnBlur) {
-                        pendingOverlapAlertRef.current = false;
-                        overlapAlertShownRef.current = overlapKey;
-                        window.alert(`路径重合：${overlapKey}`);
-                        toast(`路径重合：${overlapKey}`, "warning");
-                      }
-                    }}
-                    disabled={running || isResumeMode}
-                  />
-                  <label className="md-field-label">运行名称</label>
-                </div>
-                <small className={`hint ${isOutputPathOverlap ? "warning" : ""}`}>{renderedHint || runHint}</small>
-              </div>
-            </div>
-          </div>
-          <div className={`config-card launcher-side-card ${mode !== "resume" ? "disabled-panel" : ""}`}>
-            <h3 className="card-header">续训历史</h3>
-            <div className="form-group">
-              <label>请选择历史运行</label>
-              <M3Select
-                value={String(selectedResumeIndex)}
-                onChange={(nextValue) => {
-                  const idx = Number(nextValue) || 0;
-                  setSelectedResumeIndex(idx);
-                  const c = resumeCandidates[idx];
-                  if (c) {
-                    setForm((prev) => ({
-                      ...prev,
-                      output: { ...prev.output, project: c.project, name: c.name }
-                    }));
-                  }
-                }}
-                options={
-                  resumeCandidates.length === 0
-                    ? [{ value: "0", label: "暂无可用候选" }]
-                    : resumeCandidates.map((item, idx) => ({ value: String(idx), label: item.display_name }))
+          <div className="launcher-side">
+            <OutputConfigCard
+              form={form}
+              isResumeMode={isResumeMode}
+              running={running}
+              setNested={setNested}
+              refreshRunNameSuggestion={refreshRunNameSuggestion}
+              refreshResumeCandidates={refreshResumeCandidates}
+              pickLocalPath={pickLocalPath}
+              toast={toast}
+              currentOutputProject={currentOutputProject}
+              renderedHint={renderedHint}
+              runHint={runHint}
+              isOutputPathOverlap={isOutputPathOverlap}
+              outputNameInputRef={outputNameInputRef}
+              pendingOverlapAlertRef={pendingOverlapAlertRef}
+              overlapAlertShownRef={overlapAlertShownRef}
+            />
+            <ResumeHistoryCard
+              mode={mode}
+              running={running}
+              resumeCandidates={resumeCandidates}
+              selectedResumeIndex={selectedResumeIndex}
+              setSelectedResumeIndex={setSelectedResumeIndex}
+              onSelectCandidate={(idx) => {
+                const c = resumeCandidates[idx];
+                if (c) {
+                  setForm((prev) => ({
+                    ...prev,
+                    output: { ...prev.output, project: c.project, name: c.name }
+                  }));
                 }
-                disabled={mode !== "resume" || running || resumeCandidates.length === 0}
-                ariaLabel="请选择历史运行"
-              />
-            </div>
+              }}
+            />
           </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       <div className="panel-grid">
-        <div className="config-section">
-          <div className="config-card config-card-compact">
-            <h3 className="card-header">模型权重</h3>
-            <div className="form-row">
-              <div className="form-group flex-2">
-                <PathField
-                  label="学生模型权重"
-                  value={form.distillation.student_weight || ""}
-                  onChange={(v) => setNested("distillation", "student_weight", v)}
-                  onBrowse={async () => {
-                    try {
-                      const selected = await pickLocalPath({
-                        kind: "file",
-                        title: "选择学生模型权重文件",
-                        initialPath: form.distillation.student_weight || "",
-                        filters: [
-                          { name: "PyTorch Weights", patterns: ["*.pt", "*.pth"] },
-                          { name: "All Files", patterns: ["*.*"] }
-                        ]
-                      });
-                      if (selected) setNested("distillation", "student_weight", selected);
-                    } catch (error) {
-                      toast(error.message, "error");
-                    }
-                  }}
-                  disabled={running}
-                />
-              </div>
-              <div className="form-group flex-2">
-                <PathField
-                  label="教师模型权重"
-                  value={form.distillation.teacher_weight || ""}
-                  onChange={(v) => setNested("distillation", "teacher_weight", v)}
-                  onBrowse={async () => {
-                    try {
-                      const selected = await pickLocalPath({
-                        kind: "file",
-                        title: "选择教师模型权重文件",
-                        initialPath: form.distillation.teacher_weight || "",
-                        filters: [
-                          { name: "PyTorch Weights", patterns: ["*.pt", "*.pth"] },
-                          { name: "All Files", patterns: ["*.*"] }
-                        ]
-                      });
-                      if (selected) setNested("distillation", "teacher_weight", selected);
-                    } catch (error) {
-                      toast(error.message, "error");
-                    }
-                  }}
-                  disabled={running}
-                />
-              </div>
+        {isTrainingView ? (
+          <>
+            <div className="config-section">
+              <TrainingWeightsSection form={form} setNested={setNested} pickLocalPath={pickLocalPath} toast={toast} running={running} isResumeConfigLocked={isResumeConfigLocked} />
+              <DistillationCoreParamsCard form={form} setNested={setNested} running={running} isResumeConfigLocked={isResumeConfigLocked} />
+              <TrainingHyperparamsSection
+                form={form}
+                setNested={setNested}
+                updateTrainingNested={updateTrainingNested}
+                applyComputePreset={applyComputePreset}
+                running={running}
+                isResumeConfigLocked={isResumeConfigLocked}
+                useDatasetApi={useDatasetApi}
+                isRemoteApi={isRemoteApi}
+                toast={toast}
+                pickLocalPath={pickLocalPath}
+              />
+              <WandbConfigCard form={form} setNested={setNested} running={running} />
             </div>
-          </div>
-
-          <div className="config-card config-card-compact">
-            <h3 className="card-header">蒸馏核心参数</h3>
-            <div className="form-grid training-form-grid">
-              <NumberField label="初始 Alpha 权重" value={form.distillation.alpha_init} step="0.01" onChange={(v) => setNested("distillation", "alpha_init", v)} disabled={running} />
-              <NumberField label="温度上限 T_max" value={form.distillation.T_max} step="0.1" onChange={(v) => setNested("distillation", "T_max", v)} disabled={running} />
-              <NumberField label="温度下限 T_min" value={form.distillation.T_min} step="0.1" onChange={(v) => setNested("distillation", "T_min", v)} disabled={running} />
-              <NumberField label="训练预热轮数" value={form.distillation.warm_epochs} step="1" onChange={(v) => setNested("distillation", "warm_epochs", v)} disabled={running} />
-              <NumberField label="KD 损失权重 w_kd" value={form.distillation.w_kd} step="0.01" onChange={(v) => setNested("distillation", "w_kd", v)} disabled={running} />
-              <NumberField label="Focal KD 权重 w_focal" value={form.distillation.w_focal} step="0.01" onChange={(v) => setNested("distillation", "w_focal", v)} disabled={running} />
-              <NumberField label="特征对齐权重 w_feat" value={form.distillation.w_feat} step="0.01" onChange={(v) => setNested("distillation", "w_feat", v)} disabled={running} />
-              <NumberField label="小目标增强系数" value={form.distillation.scale_boost} step="0.1" onChange={(v) => setNested("distillation", "scale_boost", v)} disabled={running} />
-              <NumberField label="Focal Gamma 参数" value={form.distillation.focal_gamma} step="0.1" onChange={(v) => setNested("distillation", "focal_gamma", v)} disabled={running} />
-            </div>
-          </div>
-
-          <div className="config-card config-card-compact">
-            <h3 className="card-header">训练超参数</h3>
-            <div className="form-grid training-form-grid">
-              <PathField
-                label="数据集配置文件"
-                value={form.training.data_yaml}
-                onChange={(v) => setNested("training", "data_yaml", v)}
-                onBrowse={async () => {
-                  try {
-                    const selected = await pickLocalPath({
-                      kind: "file",
-                      title: "选择数据集配置文件",
-                      initialPath: form.training.data_yaml || "",
-                      filters: [
-                        { name: "YAML Files", patterns: ["*.yaml", "*.yml"] },
-                        { name: "All Files", patterns: ["*.*"] }
-                      ]
-                    });
-                    if (selected) setNested("training", "data_yaml", selected);
-                  } catch (error) {
-                    toast(error.message, "error");
-                  }
-                }}
-                disabled={running || useDatasetApi}
-              />
-              <SelectField
-                label="云算力配置"
-                value={form.training.compute_provider || "local"}
-                onChange={(v) => applyComputePreset(v)}
-                options={[
-                  { value: "local", label: "本地" },
-                  { value: "autodl", label: "autoDL 云算力" },
-                  { value: "colab", label: "Google Colab 云算力" },
-                  { value: "remote_api", label: "远程云算力 API" }
-                ]}
-                disabled={running}
-              />
-              {isRemoteApi ? (
-                <>
-                  <SelectField
-                    label="数据集来源"
-                    value={datasetSource}
-                    onChange={(v) => updateTrainingNested("dataset_api", { source: v, enabled: v === "api" })}
-                    options={[
-                      { value: "path", label: "本地/YAML 路径" },
-                      { value: "api", label: "数据集 API" }
-                    ]}
-                    disabled={running}
-                  />
-                  <TextField
-                    label="云训练 API Base URL"
-                    value={form.training?.cloud_api?.base_url || ""}
-                    onChange={(v) => updateTrainingNested("cloud_api", { base_url: v })}
-                    disabled={running}
-                  />
-                  <TextField
-                    label="云训练 API Token (可选)"
-                    value={form.training?.cloud_api?.token || ""}
-                    onChange={(v) => updateTrainingNested("cloud_api", { token: v })}
-                    disabled={running}
-                  />
-                  {useDatasetApi ? (
-                    <>
-                      <TextField
-                        label="数据集 API URL"
-                        value={form.training?.dataset_api?.resolve_url || ""}
-                        onChange={(v) => updateTrainingNested("dataset_api", { resolve_url: v })}
-                        disabled={running}
-                      />
-                      <TextField
-                        label="数据集 API Token (可选，默认复用云训练 Token)"
-                        value={form.training?.dataset_api?.token || ""}
-                        onChange={(v) => updateTrainingNested("dataset_api", { token: v })}
-                        disabled={running}
-                      />
-                      <TextField
-                        label="数据集名称/别名 (可选)"
-                        value={form.training?.dataset_api?.dataset_name || ""}
-                        onChange={(v) => updateTrainingNested("dataset_api", { dataset_name: v })}
-                        disabled={running}
-                      />
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-              {form.training.compute_provider === "local" ? (
-                <SelectField
-                  label="设备"
-                  value={form.training.device}
-                  onChange={(v) => setNested("training", "device", v)}
-                  options={[
-                    { value: "0", label: "GPU 0" },
-                    { value: "1", label: "GPU 1" },
-                    { value: "cpu", label: "CPU" }
-                  ]}
-                  disabled={running}
-                />
-              ) : null}
-              <NumberField label="训练轮数 Epochs" value={form.training.epochs} step="1" onChange={(v) => setNested("training", "epochs", v)} disabled={running} />
-              <SelectField
-                label="图像尺寸 imgsz"
-                value={form.training.imgsz}
-                onChange={(v) => setNested("training", "imgsz", Number(v))}
-                options={[
-                  { value: "320", label: "320" },
-                  { value: "416", label: "416" },
-                  { value: "512", label: "512" },
-                  { value: "640", label: "640" },
-                  { value: "768", label: "768" },
-                  { value: "960", label: "960" },
-                  { value: "1024", label: "1024" },
-                  { value: "1280", label: "1280" }
-                ]}
-                disabled={running}
-              />
-              <NumberField label="Batch Size" value={form.training.batch} step="1" onChange={(v) => setNested("training", "batch", v)} disabled={running} />
-              <NumberField label="初始学习率 lr0" value={form.training.lr0} step="0.001" onChange={(v) => setNested("training", "lr0", v)} disabled={running} />
-              <NumberField label="最终学习率因子 lrf" value={form.training.lrf} step="0.01" onChange={(v) => setNested("training", "lrf", v)} disabled={running} />
-              <NumberField label="学习率预热轮数" value={form.training.warmup_epochs} step="0.5" onChange={(v) => setNested("training", "warmup_epochs", v)} disabled={running} />
-              <NumberField label="Mosaic 增强概率" value={form.training.mosaic} step="0.01" onChange={(v) => setNested("training", "mosaic", v)} disabled={running} />
-              <NumberField label="Mixup 增强概率" value={form.training.mixup} step="0.01" onChange={(v) => setNested("training", "mixup", v)} disabled={running} />
-              <NumberField label="关闭 Mosaic 的 epoch" value={form.training.close_mosaic} step="1" onChange={(v) => setNested("training", "close_mosaic", v)} disabled={running} />
-              <div className="form-group switch-group">
-                <label>AMP 混合精度训练</label>
-                <label className="md-switch">
-                  <input type="checkbox" checked={Boolean(form.training.amp)} onChange={(e) => setNested("training", "amp", e.target.checked)} disabled={running} />
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div className="config-card config-card-compact">
-            <h3 className="card-header">W&B 配置</h3>
-            <div className="form-grid training-form-grid">
-              <div className="form-group switch-group">
-                <label>启用 Weights & Biases</label>
-                <label className="md-switch">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form.wandb?.enabled)}
-                    onChange={(e) => setNested("wandb", "enabled", e.target.checked)}
-                    disabled={running}
-                  />
-                </label>
-              </div>
-              <SelectField
-                label="运行模式"
-                value={form.wandb?.mode || "online"}
-                onChange={(v) => setNested("wandb", "mode", v)}
-                options={[
-                  { value: "online", label: "online" },
-                  { value: "offline", label: "offline" },
-                  { value: "disabled", label: "disabled" }
-                ]}
-                disabled={running || !form.wandb?.enabled}
-              />
-              <TextField
-                label="Project"
-                value={form.wandb?.project || ""}
-                onChange={(v) => setNested("wandb", "project", v)}
-                disabled={running || !form.wandb?.enabled}
-              />
-              <TextField
-                label="Entity (可选)"
-                value={form.wandb?.entity || ""}
-                onChange={(v) => setNested("wandb", "entity", v)}
-                disabled={running || !form.wandb?.enabled}
-              />
-              <TextField
-                label="Run Name (可选)"
-                value={form.wandb?.name || ""}
-                onChange={(v) => setNested("wandb", "name", v)}
-                disabled={running || !form.wandb?.enabled}
-              />
-              <TextField
-                label="Group (可选)"
-                value={form.wandb?.group || ""}
-                onChange={(v) => setNested("wandb", "group", v)}
-                disabled={running || !form.wandb?.enabled}
-              />
-              <TextField
-                label="Job Type (可选)"
-                value={form.wandb?.job_type || ""}
-                onChange={(v) => setNested("wandb", "job_type", v)}
-                disabled={running || !form.wandb?.enabled}
-              />
-              <TextField
-                label="Tags (逗号分隔，可选)"
-                value={form.wandb?.tags || ""}
-                onChange={(v) => setNested("wandb", "tags", v)}
-                disabled={running || !form.wandb?.enabled}
-              />
-              <TextField
-                label="Notes (可选)"
-                value={form.wandb?.notes || ""}
-                onChange={(v) => setNested("wandb", "notes", v)}
-                disabled={running || !form.wandb?.enabled}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="log-section">
-          <div className="log-card">
-            <div className="log-header">
-              <h3><span className="material-icons">terminal</span>训练日志</h3>
-              <div className="log-controls">
-                <span className={`badge ${running ? "running" : "idle"}`}>{running ? "训练中" : "空闲"}</span>
-                <Button size="icon" variant="outline" className="btn-icon-sm" onClick={clearLogs} title="清空日志"><span className="material-icons">delete_outline</span></Button>
-                <Button size="icon" variant="outline" className="btn-icon-sm" onClick={downloadLogs} title="下载日志"><span className="material-icons">download</span></Button>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  className={`btn-icon-sm ${!autoScroll ? "is-disabled" : ""}`}
-                  onClick={() => setAutoScroll((prev) => !prev)}
-                  title="自动滚动"
-                >
-                  <span className="material-icons">vertical_align_bottom</span>
-                </Button>
-              </div>
-            </div>
-
-            <div className="progress-container" style={{ display: running ? "block" : "none" }}>
-              <div className="progress-bar-wrapper">
-                <div className="progress-bar" style={{ width: `${progressPercent.toFixed(1)}%` }} />
-              </div>
-              <div className="progress-info">
-                <span>{`Epoch: ${progress.current} / ${progress.total || "-"}`}</span>
-                <span>{`耗时: ${progress.elapsed}`}</span>
-                <span>{`预计总耗时: ${progress.expected}`}</span>
-              </div>
-            </div>
-
-            <div ref={logContainerRef} className="log-container">
-              {logs.length === 0 ? <div className="log-line info log-empty-placeholder">暂无日志输出</div> : null}
-              {logs.map((line, index) => {
-                const level = detectLogLevel(line);
-                return (
-                  <div key={`${index}-${String(line).slice(0, 18)}`} className={`log-line ${level}`}>
-                    {String(line)}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+            <TrainingLogsPanel
+              running={running}
+              logs={logs}
+              progress={progress}
+              progressPercent={progressPercent}
+              autoScroll={autoScroll}
+              setAutoScroll={setAutoScroll}
+              clearLogs={clearLogs}
+              downloadLogs={downloadLogs}
+              detectLogLevel={detectLogLevel}
+              logContainerRef={logContainerRef}
+            />
+          </>
+        ) : isDisplayView ? (
+          <DisplayLauncherPanel
+            inferRunning={inferRunning}
+            startInference={startInference}
+            stopInference={stopInference}
+            displaySectionCards={displaySectionCards}
+            renderAdvancedField={renderAdvancedField}
+          />
+        ) : isExportView ? (
+          <ExportLauncherPanel
+            exportRunning={exportRunning}
+            exportReady={isExportReady}
+            startExport={startExport}
+            stopExport={stopExport}
+            exportAutoScroll={exportAutoScroll}
+            setExportAutoScroll={setExportAutoScroll}
+            clearExportLogs={clearExportLogs}
+            downloadExportLogs={downloadExportLogs}
+            exportLogs={exportLogs}
+            exportLogContainerRef={exportLogContainerRef}
+            exportSectionCards={exportSectionCards}
+            renderAdvancedField={renderAdvancedField}
+            exportWeight={exportWeight}
+            onExportWeightChange={(next) => setNested('distillation', 'student_weight', next)}
+            onExportWeightBrowse={async () => {
+              try {
+                const selected = await pickLocalPath({
+                  kind: 'file',
+                  title: '选择导出权重文件',
+                  initialPath: form.distillation?.student_weight || '',
+                  filters: [
+                    { name: 'PyTorch Weights', patterns: ['*.pt', '*.pth'] },
+                    { name: 'All Files', patterns: ['*.*'] }
+                  ]
+                });
+                if (selected) setNested('distillation', 'student_weight', selected);
+              } catch (error) {
+                toast(error.message, 'error');
+              }
+            }}
+            exportWeightCandidates={exportWeightCandidates}
+            selectedExportWeightIndex={selectedExportWeightIndex}
+            onSelectExportWeightCandidate={(nextValue) => {
+              const idx = Number(nextValue) || 0;
+              setSelectedExportWeightIndex(idx);
+              const c = exportWeightCandidates[idx];
+              if (c && c.checkpoint) {
+                setNested('distillation', 'student_weight', c.checkpoint);
+              }
+            }}
+          />
+        ) : (
+          <>
+            <AdvancedCardsColumn cards={advancedCardsLeft} renderAdvancedField={renderAdvancedField} />
+            <AdvancedCardsColumn cards={advancedCardsRight} renderAdvancedField={renderAdvancedField} />
+          </>
+        )}
       </div>
     </div>
   );

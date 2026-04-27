@@ -36,7 +36,10 @@
 # 1. 克隆仓库
 cd EdgeDistillDet
 
-# 2. 安装 Python 依赖（包含可编辑安装本项目）
+# 2. Windows 推荐一键安装（自动安装/升级 Python 3.10+，并匹配 CUDA 通道）
+installer.bat
+
+# 3. 手动安装（跨平台）
 pip install -r requirements.txt
 
 # 验证安装
@@ -111,6 +114,7 @@ EdgeDistillDet/
 |------|------|
 | `configs/distill_config.yaml` | 教师/学生模型、蒸馏参数、训练超参、输出目录 |
 | `configs/eval_config.yaml` | 待评估权重列表、数据集、设备 batch 大小 |
+| `docs/PARAMETER_MAPPING.md` | 前后端参数映射矩阵（含高级参数与续训锁定字段） |
 
 ---
 

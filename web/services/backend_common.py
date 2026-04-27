@@ -150,6 +150,108 @@ def _list_resume_candidates(project_path: Path):
     candidates.sort(key=lambda c: c['modified_time'], reverse=True)
     return candidates
 
+
+def _list_export_weight_candidates(project_path: Path):
+    candidates = []
+    if not project_path.exists() or not project_path.is_dir():
+        for prefix in ['runs/detect', 'detect/runs', 'detect']:
+            fallback = (BASE_DIR / prefix).resolve()
+            if fallback.exists() and fallback.is_dir():
+                candidates.extend(_scan_run_dirs_for_export_checkpoints(fallback, project_path))
+        if not candidates:
+            runs_dir = BASE_DIR / 'runs'
+            if runs_dir.exists() and runs_dir.is_dir():
+                candidates.extend(_scan_run_dirs_for_export_checkpoints(runs_dir, project_path))
+        candidates.sort(key=lambda c: c['modified_time'], reverse=True)
+        return candidates
+
+    candidates.extend(_scan_run_dirs_for_export_checkpoints(project_path, project_path))
+    for prefix in ['runs/detect', 'detect/runs', 'detect']:
+        detect_project = (BASE_DIR / prefix / project_path.relative_to(BASE_DIR)).resolve()
+        if detect_project != project_path and detect_project.exists() and detect_project.is_dir():
+            existing_paths = {c['checkpoint'] for c in candidates}
+            new_candidates = _scan_run_dirs_for_export_checkpoints(detect_project, project_path)
+            for nc in new_candidates:
+                if nc['checkpoint'] not in existing_paths:
+                    candidates.append(nc)
+    candidates.sort(key=lambda c: c['modified_time'], reverse=True)
+    return candidates
+
+
+def _scan_run_dirs_for_export_checkpoints(search_path: Path, logical_project: Path):
+    candidates = []
+    if not search_path.exists() or not search_path.is_dir():
+        return candidates
+
+    ckpt_rel = [
+        ('last.pt', 'last.pt'),
+        ('best.pt', 'best.pt'),
+        ('weights/last.pt', 'weights/last.pt'),
+        ('weights/best.pt', 'weights/best.pt'),
+    ]
+
+    def checkpoint_files(run_root: Path):
+        found = []
+        for rel_path, label in ckpt_rel:
+            candidate = run_root / rel_path
+            if candidate.exists():
+                found.append((candidate, label))
+        return found
+
+    def append_candidate(run_root: Path, checkpoint_path: Path, checkpoint_label: str):
+        try:
+            ck_mtime = checkpoint_path.stat().st_mtime
+        except OSError:
+            ck_mtime = 0.0
+        try:
+            dir_mtime = run_root.stat().st_mtime
+        except OSError:
+            dir_mtime = 0.0
+        eff_mtime = max(ck_mtime, dir_mtime)
+        candidates.append({
+            'name': run_root.name,
+            'project': str(logical_project.relative_to(BASE_DIR)),
+            'dir': str(run_root.relative_to(BASE_DIR)),
+            'display_name': f"{run_root.name} — {checkpoint_label} — {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(eff_mtime))}",
+            'checkpoint': str(checkpoint_path.resolve()).replace('\\', '/'),
+            'checkpoint_name': checkpoint_label,
+            'modified_time': eff_mtime,
+        })
+
+    try:
+        items = sorted(search_path.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    except PermissionError:
+        return candidates
+
+    sibling_exp_dirs = [
+        p for p in items
+        if p.is_dir()
+        and not p.name.startswith('.')
+        and p.name not in _CHECKPOINT_SCAN_SKIP_SUBDIRS
+    ]
+
+    root_files = checkpoint_files(search_path)
+    if root_files and not sibling_exp_dirs:
+        for checkpoint_path, checkpoint_label in root_files:
+            append_candidate(search_path, checkpoint_path, checkpoint_label)
+        return candidates
+
+    for run_dir in items:
+        if not run_dir.is_dir():
+            continue
+        if run_dir.name.startswith('.') or run_dir.name in _CHECKPOINT_SCAN_SKIP_SUBDIRS:
+            continue
+        found_files = checkpoint_files(run_dir)
+        if found_files:
+            for checkpoint_path, checkpoint_label in found_files:
+                append_candidate(run_dir, checkpoint_path, checkpoint_label)
+            continue
+        sub_candidates = _scan_run_dirs_for_export_checkpoints(run_dir, logical_project)
+        candidates.extend(sub_candidates)
+
+    return candidates
+
+
 def _scan_run_dirs_for_checkpoints(search_path: Path, logical_project: Path):
     candidates = []
     if not search_path.exists() or not search_path.is_dir():

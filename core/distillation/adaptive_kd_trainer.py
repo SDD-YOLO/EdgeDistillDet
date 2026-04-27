@@ -218,12 +218,14 @@ class AdaptiveKDTrainer(DetectionTrainer):
     @classmethod
     def set_kd_params(cls, teacher_path="", alpha_init=0.5, T_max=6.0, T_min=1.5,
                       warm_epochs=5, w_kd=0.5, w_focal=0.3, w_feat=0.0,
-                      scale_boost=2.0, focal_gamma=2.0):
+                      scale_boost=2.0, focal_gamma=2.0, **extra_kwargs):
         cls._kd_class_params = {
             "teacher_path": teacher_path, "alpha_init": alpha_init, "T_max": T_max,
             "T_min": T_min, "warm_epochs": warm_epochs, "w_kd": w_kd, "w_focal": w_focal,
             "w_feat": w_feat, "scale_boost": scale_boost, "focal_gamma": focal_gamma,
         }
+        if extra_kwargs:
+            cls._kd_class_params.update(extra_kwargs)
     
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
         super().__init__(cfg, overrides, _callbacks)

@@ -1,10 +1,13 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title EdgeDistillDet - Local UI
+set "PROJECT_VERSION=unknown"
+for /f "delims=" %%V in ('python -c "import main; print(main.__version__)" 2^>nul') do set "PROJECT_VERSION=%%V"
+title EdgeDistillDet - Local UI v%PROJECT_VERSION%
 pushd "%~dp0"
 
 echo Starting EdgeDistillDet local UI...
+echo EdgeDistillDet version: %PROJECT_VERSION%
 echo Open the URL printed below in your browser. Press Ctrl+C to stop.
 echo.
 
@@ -57,7 +60,61 @@ if "%NEED_BUILD%%NEED_NPM_INSTALL%" NEQ "00" (
   echo.
 )
 
-python "web\app.py"
+set "PYTHON_CMD=python"
+set "PYTHON_EXE="
+where %PYTHON_CMD% >nul 2>nul
+if not errorlevel 1 (
+  for /f "delims=" %%P in ('where %PYTHON_CMD% 2^>nul') do (
+    set "PYTHON_EXE=%%P"
+    goto :FOUND_PYTHON
+  )
+)
+if not defined PYTHON_EXE (
+  where py >nul 2>nul
+  if not errorlevel 1 (
+    set "PYTHON_EXE=py -3"
+    goto :FOUND_PYTHON
+  )
+)
+:FOUND_PYTHON
+if not defined PYTHON_EXE (
+  echo [ERROR] Python executable not found in PATH.
+  echo Please install Python 3 and ensure "python" or "py" is available in PATH.
+  set "EXIT_CODE=1"
+  goto :END
+)
+echo [INFO] Using Python executable: %PYTHON_EXE%
+set "PYTHON_OK=1"
+if "%PYTHON_EXE%"=="py -3" (
+  py -3 -m pip show fastapi >nul 2>nul || set "PYTHON_OK=0"
+  if "%PYTHON_OK%"=="1" py -3 -m pip show uvicorn >nul 2>nul || set "PYTHON_OK=0"
+) else (
+  "%PYTHON_EXE%" -m pip show fastapi >nul 2>nul || set "PYTHON_OK=0"
+  if "%PYTHON_OK%"=="1" "%PYTHON_EXE%" -m pip show uvicorn >nul 2>nul || set "PYTHON_OK=0"
+)
+if "%PYTHON_OK%"=="0" (
+  if not "%PYTHON_EXE%"=="py -3" (
+    where py >nul 2>nul
+    if not errorlevel 1 (
+      py -3 -m pip show fastapi >nul 2>nul && py -3 -m pip show uvicorn >nul 2>nul
+      if not errorlevel 1 (
+        set "PYTHON_EXE=py -3"
+        echo [INFO] FastAPI and Uvicorn found with %PYTHON_EXE%, switching interpreter.
+        goto :RUN_PYTHON
+      )
+    )
+  )
+  echo [ERROR] FastAPI and/or Uvicorn are not installed for %PYTHON_EXE%.
+  echo Install them with: "%PYTHON_EXE%" -m pip install -r requirements.txt
+  set "EXIT_CODE=1"
+  goto :END
+)
+:RUN_PYTHON
+if "%PYTHON_EXE%"=="py -3" (
+  py -3 "web\app.py"
+) else (
+  "%PYTHON_EXE%" "web\app.py"
+)
 set "EXIT_CODE=%ERRORLEVEL%"
 :END
 echo.

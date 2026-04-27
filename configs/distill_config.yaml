@@ -10,6 +10,22 @@ distillation:
   w_feat: 0.9
   scale_boost: 1.5
   focal_gamma: 2
+  distill_mode: adaptive
+  beta: 0
+  gamma: 0
+  cls_distill_weight: 0.5
+  box_distill_weight: 0.5
+  obj_distill_weight: 0.5
+  distill_loss_type: kl
+  freeze_teacher: false
+  distill_start_epoch: 0
+  distill_end_epoch: 150
+  dynamic_alpha: false
+  dynamic_temperature: false
+  lambda_kd: 0.5
+  use_adaptive_loss: false
+  temperature: 3
+  alpha: 0.5
 training:
   compute_provider: local
   cloud_api:
@@ -26,7 +42,7 @@ training:
     resolve_url: ''
     token: ''
     dataset_name: ''
-  data_yaml: coco128.yaml
+  data_yaml: configs/dataset_coco128.yaml
   device: cpu
   epochs: 150
   imgsz: 640
@@ -38,6 +54,90 @@ training:
   mixup: 0.45
   close_mosaic: 10
   amp: true
+  task: detect
+  mode: train
+  time: 0
+  patience: 100
+  save: true
+  save_period: -1
+  cache: false
+  exist_ok: false
+  pretrained: true
+  optimizer: auto
+  verbose: true
+  seed: 0
+  deterministic: false
+  single_cls: false
+  rect: false
+  cos_lr: false
+  fraction: 1
+  profile: false
+  multi_scale: false
+  compile: false
+  val: false
+  save_json: false
+  conf: 0
+  iou: 0
+  max_det: 0
+  half: false
+  dnn: false
+  plots: false
+  end2end: false
+  vid_stride: 1
+  stream_buffer: false
+  visualize: false
+  augment: false
+  agnostic_nms: false
+  retina_masks: false
+  show: false
+  save_frames: false
+  save_txt: false
+  save_conf: false
+  save_crop: false
+  show_labels: true
+  show_conf: true
+  show_boxes: true
+  line_width: 2
+  keras: false
+  optimize: false
+  int8: false
+  dynamic: false
+  simplify: false
+  opset: 17
+  workspace: 4
+  nms: false
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+  box: 7.5
+  cls: 0.5
+  dfl: 1.5
+  pose: 12
+  kobj: 1
+  rle: 1
+  angle: 0.5
+  nbs: 64
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 0
+  translate: 0.1
+  scale: 0.5
+  shear: 0
+  perspective: 0
+  flipud: 0
+  fliplr: 0.5
+  bgr: 0
+  cutmix: 0
+  copy_paste: 0
+  erasing: 0.4
+  overlap_mask: true
+  mask_ratio: 4
+  dropout: 0
+  format: onnx
+  workers: 8
+  export_path: D:/Personal_Files/Projects/Github/EdgeDistillDet
 output:
   project: runs
   name: exp2
@@ -51,3 +151,119 @@ wandb:
   job_type: distill-train
   tags: []
   notes: ''
+advanced:
+  training:
+    task: detect
+    mode: train
+    time: 0
+    patience: 100
+    save: true
+    save_period: -1
+    cache: false
+    workers: 8
+    exist_ok: false
+    pretrained: true
+    optimizer: auto
+    verbose: true
+    seed: 0
+    deterministic: false
+    single_cls: false
+    rect: false
+    cos_lr: false
+    fraction: 1
+    profile: false
+    freeze: ''
+    multi_scale: false
+    compile: false
+    val: false
+    split: ''
+    save_json: false
+    conf: 0
+    iou: 0
+    max_det: 0
+    half: false
+    dnn: false
+    plots: false
+    end2end: false
+    source: ''
+    vid_stride: 1
+    stream_buffer: false
+    visualize: false
+    augment: false
+    agnostic_nms: false
+    classes: ''
+    retina_masks: false
+    embed: ''
+    show: false
+    save_frames: false
+    save_txt: false
+    save_conf: false
+    save_crop: false
+    show_labels: true
+    show_conf: true
+    show_boxes: true
+    line_width: 2
+    export_path: D:/Personal_Files/Projects/Github/EdgeDistillDet
+    format: onnx
+    keras: false
+    optimize: false
+    int8: false
+    dynamic: false
+    simplify: false
+    opset: 17
+    workspace: 4
+    nms: false
+    momentum: 0.937
+    weight_decay: 0.0005
+    warmup_momentum: 0.8
+    warmup_bias_lr: 0.1
+    box: 7.5
+    cls: 0.5
+    dfl: 1.5
+    pose: 12
+    kobj: 1
+    rle: 1
+    angle: 0.5
+    nbs: 64
+    hsv_h: 0.015
+    hsv_s: 0.7
+    hsv_v: 0.4
+    degrees: 0
+    translate: 0.1
+    scale: 0.5
+    shear: 0
+    perspective: 0
+    flipud: 0
+    fliplr: 0.5
+    bgr: 0
+    cutmix: 0
+    copy_paste: 0
+    copy_paste_mode: ''
+    auto_augment: ''
+    erasing: 0.4
+    cfg: ''
+    tracker: ''
+    save_dir: ''
+    overlap_mask: true
+    mask_ratio: 4
+    dropout: 0
+  distillation:
+    teacher_cfg: ''
+    distill_mode: adaptive
+    temperature: 3
+    alpha: 0.5
+    beta: 0
+    gamma: 0
+    cls_distill_weight: 0.5
+    box_distill_weight: 0.5
+    obj_distill_weight: 0.5
+    distill_loss_type: kl
+    freeze_teacher: false
+    teacher_device: ''
+    distill_start_epoch: 0
+    distill_end_epoch: 150
+    dynamic_alpha: false
+    dynamic_temperature: false
+    feature_layers: ''
+    lambda_kd: 0.5
+    use_adaptive_loss: false
