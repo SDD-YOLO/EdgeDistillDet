@@ -158,6 +158,26 @@ def _resolve_under_root(path_str: str, root: Path) -> Path:
     return p
 
 
+def _get_nested(cfg: Dict[str, Any], keys: list[str], default=None):
+    node = cfg
+    for key in keys:
+        if not isinstance(node, dict):
+            return default
+        node = node.get(key, default)
+        if node is default:
+            return default
+    return node
+
+
+def _merge_advanced_training(train_cfg: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
+    advanced_training = _get_nested(cfg, ["advanced", "training"]) or {}
+    merged = dict(train_cfg or {})
+    for key, value in advanced_training.items():
+        if value is not None:
+            merged[key] = value
+    return merged
+
+
 def _run_dir_from_checkpoint(ckpt: Path) -> Path:
     """.../weights/last.pt -> .../run_dir ; .../last.pt -> parent"""
     ckpt = ckpt.resolve()
@@ -230,7 +250,7 @@ def _build_train_args(
         "plots": False,
         **({"resume": str(resume_path)} if resume_path is not None else {}),
     }
-    invalid_yolo_args = {"cls_pw"}
+    invalid_yolo_args = {"cls_pw", "export_path", "format", "source", "output_dir", "save_dir"}
     for key, value in (train_cfg or {}).items():
         if key in _TRAINING_STRUCTURAL_KEYS or key in invalid_yolo_args:
             continue
@@ -325,7 +345,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     cfg = _load_config(config_path)
 
     distill_cfg = cfg.get("distillation", {}) or {}
-    train_cfg = dict(cfg.get("training", {}) or {})
+    train_cfg = _merge_advanced_training(dict(cfg.get("training", {}) or {}), cfg)
     output_cfg = dict(cfg.get("output", {}) or {})
     wandb_cfg = dict(cfg.get("wandb", {}) or {})
 

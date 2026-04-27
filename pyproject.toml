@@ -22,35 +22,55 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# 与根目录 requirements.txt 中列出的包一致；CUDA 版 PyTorch 可先单独安装再装本项目
 dependencies = [
+  # === 核心依赖 ===
   "torch>=2.0.0,<3",
   "torchvision>=0.15.0",
   "ultralytics>=8.2.0,<9",
   "onnx>=1.12.0,<2.0.0",
+  "onnxruntime>=1.17.0,<2.0.0",
+  "onnxslim>=0.1.71",
   "opencv-python>=4.8.0,<5",
-  "numpy>=1.24.0,<3",
+  "numpy>=1.24.0,<2",  # TF 2.16 需要 numpy<2
   "pandas>=2.0.0,<3",
   "matplotlib>=3.7.0,<4",
   "pyyaml>=6.0,<7",
   "tqdm>=4.65.0,<5",
-  "wandb>=0.17.0,<1",
   "fastapi==0.115.6",
   "pydantic>=2,<3",
   "uvicorn[standard]==0.32.1",
   "requests>=2.31.0,<3",
   "psutil>=5.9.8,<7",
+  
+  # === 日志 / LLM ===
+  "wandb>=0.17.0,<1",
   "langgraph>=0.2.0,<1",
   "langchain-core>=0.3.0,<1",
+  
+  # === TensorFlow（Python 3.12 需要 >=2.16）===
+  "tensorflow>=2.16.0,<2.17",  # 限制 2.16.x，避免与 TFJS 冲突
+  
+  # === 模型导出工具 ===
+  "coremltools>=8.0.0",
+  "scikit-learn>=1.3.0,<2.0.0",
+  "openvino>=2024.0.0",
+  "nncf>=2.19.0,<3.0.0",  # 2.14 有 Python 3.12 bug
+  "x2paddle>=1.4.0",  # 0.0.0 不存在
+  "MNN>=3.0.0",  # 2.9.6 不存在
+  "ncnn",
+  "pnnx",
 ]
 
 [project.optional-dependencies]
+# tensorflowjs 与 packaging>=23.2 冲突，单独分组
+tfjs = [
+  "tensorflowjs>=4.7.0,<5.0.0",  # 安装时可能失败，需手动处理
+]
 dev = [
   "pytest==8.3.4",
 ]
 
 [project.scripts]
-# 等价于: python main.py ...
 edgedistilldet = "main:main"
 
 [tool.setuptools]

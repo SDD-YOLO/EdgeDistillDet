@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -13,8 +14,17 @@ from fastapi.responses import JSONResponse
 from web.core.paths import BASE_DIR
 from web.services.backend_common import _error
 from web.services.backend_train_runtime import _kill_process_tree
+import logging
+import traceback
 
-SUPPORTED_EXPORT_FORMATS = {"onnx", "torchscript", "tflite", "saved_model", "coreml"}
+# 配置日志写入文件
+logging.basicConfig(
+    filename='backend_export.log',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+SUPPORTED_EXPORT_FORMATS = {"onnx", "torchscript"}
 
 _export_process = None
 _export_lock = threading.RLock()
@@ -53,8 +63,13 @@ def _validate_export_payload(payload: dict) -> str | None:
         return f'导出路径无效: {export_path}'
 
     parent_dir = export_target.parent if export_target.suffix else export_target
-    if not parent_dir.exists() or not parent_dir.is_dir():
-        return f'导出路径不存在: {parent_dir}'
+    if not parent_dir.exists():
+        try:
+            parent_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            return f'导出路径不可创建: {parent_dir} ({exc})'
+    if not parent_dir.is_dir():
+        return f'导出路径不是目录: {parent_dir}'
 
     fmt = str(payload.get('format') or '').lower()
     if fmt and fmt not in SUPPORTED_EXPORT_FORMATS:
@@ -88,13 +103,46 @@ def _append_log(line: str) -> None:
 
 
 def _read_process_output(proc: subprocess.Popen) -> None:
+    buffer = ""
     try:
         if proc.stdout is None:
+            _append_log('WARNING: 未能捕获导出子进程输出')
             return
-        for raw_line in proc.stdout:
-            if raw_line is None:
+        while True:
+            char = proc.stdout.read(1)
+            if char == "":
                 break
-            _append_log(raw_line)
+            buffer += char
+            if char in {"\n", "\r"}:
+                line = buffer.rstrip("\r\n")
+                buffer = ""
+                if line:
+                    logging.debug('export stdout line: %r', line)
+                    _append_log(line)
+                    clean_line = _strip_ansi(line).strip()
+                    if clean_line.startswith('INFO: 导出完成:'):
+                        try:
+                            completed_path = clean_line[len('INFO: 导出完成:'):].strip()
+                            if completed_path:
+                                with _export_lock:
+                                    _export_status['output_path'] = completed_path
+                        except Exception:
+                            pass
+                    elif clean_line.startswith('INFO: 已移动导出文件到'):
+                        try:
+                            moved_path = clean_line[len('INFO: 已移动导出文件到'):].strip()
+                            if moved_path:
+                                with _export_lock:
+                                    _export_status['output_path'] = moved_path
+                        except Exception:
+                            pass
+        if buffer:
+            line = buffer
+            logging.debug('export stdout final partial: %r', line)
+            _append_log(line)
+    except Exception as exc:
+        _append_log(f'WARNING: 读取导出子进程输出时出错: {exc}')
+        logging.exception('读取导出子进程输出时异常')
     finally:
         with _export_lock:
             _export_status['running'] = False
@@ -103,15 +151,30 @@ def _read_process_output(proc: subprocess.Popen) -> None:
             _export_status['pid'] = None
             global _export_process
             _export_process = None
-
+            _append_log(f'INFO: 导出子进程已退出，exit_code={proc.returncode}')
+            logging.debug('export process exited, returncode=%s', proc.returncode)
+            
+            # 清理临时文件
+            try:
+                for arg in proc.args:
+                    if isinstance(arg, str) and arg.endswith('.json') and 'tmp' in arg.lower():
+                        os.unlink(arg)
+            except Exception:
+                logging.exception('清理临时文件时异常')
 
 def _build_command(payload: dict) -> list[str]:
     script = BASE_DIR / 'scripts' / 'export_model.py'
-    return [sys.executable, '-u', str(script)]
-
-
-def _serialize_payload(payload: dict) -> str:
-    return json.dumps(payload, ensure_ascii=False)
+    # 写入临时 JSON 文件，用 --config-file 传递
+    tmp = tempfile.NamedTemporaryFile(
+        mode='w', 
+        suffix='.json', 
+        delete=False, 
+        encoding='utf-8',
+        dir=str(BASE_DIR)  # 放在项目目录，避免权限问题
+    )
+    json.dump(payload, tmp, ensure_ascii=False)
+    tmp.close()
+    return [sys.executable, '-u', str(script), '--config-file', tmp.name]
 
 
 def start_export(payload: dict):
@@ -127,13 +190,19 @@ def start_export(payload: dict):
         _export_status['exit_code'] = None
         _export_status['finish_time'] = None
         _export_status['start_time'] = time.time()
-        _export_status['output_path'] = payload.get('export_path')
+        resolved_path = None
+        if payload.get('export_path'):
+            try:
+                resolved_target = _resolve_path(str(payload.get('export_path')))
+                resolved_path = str(resolved_target) if resolved_target is not None else str(payload.get('export_path'))
+            except Exception:
+                resolved_path = str(payload.get('export_path'))
+        _export_status['output_path'] = resolved_path
 
         command = _build_command(payload)
         try:
             proc = subprocess.Popen(
                 command,
-                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -145,22 +214,16 @@ def start_export(payload: dict):
         except Exception as exc:
             return _error(f'启动模型导出失败: {exc}', 500)
 
-        if proc.stdin is not None:
-            try:
-                proc.stdin.write(_serialize_payload(payload))
-            except Exception:
-                pass
-            finally:
-                proc.stdin.close()
-
+        # 删除 stdin 写入代码，改用 --config-file
+        
         _export_status['running'] = True
         _export_status['pid'] = proc.pid
         _export_process = proc
+        _append_log(f'INFO: 导出子进程已启动，PID={proc.pid}')
         thread = threading.Thread(target=_read_process_output, args=(proc,), daemon=True)
         thread.start()
 
     return {'status': 'ok', 'message': '模型导出已启动', 'pid': proc.pid}
-
 
 def stop_export():
     global _export_process

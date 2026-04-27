@@ -3,23 +3,54 @@
 # 开发依赖（pytest 等）：pip install -e ".[dev]"
 # CUDA 版 PyTorch：可先按官方说明安装 torch/torchvision，再执行本文件。
 
-torch>=2.0.0,<3
-torchvision>=0.15.0
-ultralytics>=8.2.0,<9
-onnx>=1.12.0,<2.0.0
-opencv-python>=4.8.0,<5
-numpy>=1.24.0,<3
-pandas>=2.0.0,<3
-matplotlib>=3.7.0,<4
-pyyaml>=6.0,<7
-tqdm>=4.65.0,<5
-wandb>=0.17.0,<1
+# === 核心依赖（必须）===
+torch==2.5.1
+torchvision==0.20.1
+ultralytics==8.3.75
+onnx==1.17.0
+onnxruntime==1.20.1
+onnxslim==0.1.91
+opencv-python==4.11.0.86
+numpy==1.26.4
+pandas==2.2.3
+matplotlib==3.10.0
+pyyaml==6.0.2
+tqdm==4.67.1
 fastapi==0.115.6
-pydantic>=2,<3
+pydantic==2.10.6
 uvicorn[standard]==0.32.1
-requests>=2.31.0,<3
-psutil>=5.9.8,<7
-langgraph>=0.2.0,<1
-langchain-core>=0.3.0,<1
+requests==2.32.3
+psutil==6.1.1
+
+# === 可选：日志 / 监控 ===
+wandb==0.19.8
+
+# === 可选：LLM ===
+langgraph==0.2.76
+langchain-core==0.3.33
+
+# === 可选：模型导出 ===
+tensorflow==2.16.1
+# tensorflowjs>=4.7.0,<5.0.0  # 与 packaging>=23.2 冲突，暂移除
+
+# CoreML
+coremltools==8.2
+
+# OpenVINO / NNCF
+openvino==2024.6.0
+nncf==2.19.0
+
+# 其他转换工具
+scikit-learn==1.6.1
+x2paddle==1.6.0
+MNN==3.5.0
+ncnn
+pnnx==20260409
 
 -e .
+
+
+
+
+# Optional model conversion dependencies for ONNX/CoreML/TFLite/SavedModel and other Ultralytics export targets
+# Install with: pip install -r requirements-export.txt

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 
 from web.schemas import DisplayStartRequest, ExportStartRequest, TrainStartRequest
 from web.services import display_service, export_service, train_service
@@ -74,9 +75,27 @@ def start_export(payload: ExportStartRequest):
     return export_service.start_export(payload)
 
 
+@router.get("/api/export/start")
+def start_export_help():
+    return JSONResponse(
+        status_code=405,
+        content={
+            "detail": "Use POST to /api/export/start with JSON body. Example: {'format':'onnx','export_path':'./test.onnx','weight':'models/yolov8n.pt'}"
+        },
+    )
+
+
 @router.post("/api/export/stop")
 def stop_export():
     return export_service.stop_export()
+
+
+@router.get("/api/export/stop")
+def stop_export_help():
+    return JSONResponse(
+        status_code=405,
+        content={"detail": "Use POST to /api/export/stop to stop the running export task."},
+    )
 
 
 @router.get("/api/export/status")

@@ -1,0 +1,1 @@
+{"format": "onnx", "export_path": "./", "weight": "models/yolov8n.pt"}

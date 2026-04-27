@@ -37,10 +37,7 @@ const boolOptions = [
 
 const exportFormatOptions = [
   { value: "onnx", label: "ONNX" },
-  { value: "torchscript", label: "TorchScript" },
-  { value: "tflite", label: "TFLite" },
-  { value: "saved_model", label: "SavedModel" },
-  { value: "coreml", label: "CoreML" }
+  { value: "torchscript", label: "TorchScript" }
 ];
 
 export const TRAINING_ADVANCED_SECTIONS = [

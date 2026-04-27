@@ -143,6 +143,10 @@ function mergeDistillConfigIntoForm(prev, config) {
     ...extractAdvancedValues(config?.advanced?.training, BASIC_TRAINING_KEYS, DISPLAY_ADVANCED_SECTIONS),
     ...extractAdvancedValues(config?.advanced?.training, BASIC_TRAINING_KEYS, EXPORT_ADVANCED_SECTIONS)
   };
+  const incomingExportModel = {
+    ...extractAdvancedValues(config?.export_model, BASIC_TRAINING_KEYS, EXPORT_ADVANCED_SECTIONS),
+    ...extractAdvancedValues(config?.advanced?.training, BASIC_TRAINING_KEYS, EXPORT_ADVANCED_SECTIONS)
+  };
   const incomingAdvancedDistillation = {
     ...extractAdvancedValues(incomingDistillation, BASIC_DISTILLATION_KEYS, DISTILLATION_ADVANCED_SECTIONS),
     ...extractAdvancedValues(config?.advanced?.distillation, BASIC_DISTILLATION_KEYS, DISTILLATION_ADVANCED_SECTIONS)
@@ -166,6 +170,7 @@ function mergeDistillConfigIntoForm(prev, config) {
       compute_provider: inferredProvider
     },
     output: { ...prev.output, ...incomingOutput },
+    export_model: { ...(prev.export_model || {}), ...incomingExportModel },
     wandb: { ...prev.wandb, ...normalizeWandbForUi(config?.wandb) },
     advanced: {
       training: { ...(prev.advanced?.training || {}), ...incomingAdvancedTraining },
@@ -205,6 +210,7 @@ function TrainingPanel({ toast, active, view = "training" }) {
   const lastServerRunningRef = useRef(false);
   const resumeListProjectRef = useRef("runs");
   const prevActiveTabRef = useRef(null);
+  const prevExportRunningRef = useRef(false);
   const logContainerRef = useRef(null);
   const overlapAlertShownRef = useRef("");
   const outputNameInputRef = useRef(null);
@@ -223,7 +229,7 @@ function TrainingPanel({ toast, active, view = "training" }) {
     ...DISTILLATION_ADVANCED_SECTIONS.map((section) => ({ scope: "distillation", section }))
   ];
   const displaySectionCards = DISPLAY_ADVANCED_SECTIONS.map((section) => ({ scope: "training", section }));
-  const exportSectionCards = EXPORT_ADVANCED_SECTIONS.map((section) => ({ scope: "training", section }));
+  const exportSectionCards = EXPORT_ADVANCED_SECTIONS.map((section) => ({ scope: "export_model", section }));
   const advancedCardsLeft = advancedSectionCards.filter((_, index) => index % 2 === 0);
   const advancedCardsRight = advancedSectionCards.filter((_, index) => index % 2 === 1);
 
@@ -257,6 +263,16 @@ function TrainingPanel({ toast, active, view = "training" }) {
     }));
   };
 
+  const setExportModelValue = (key, value) => {
+    setForm((prev) => ({
+      ...prev,
+      export_model: {
+        ...(prev.export_model || {}),
+        [key]: value
+      }
+    }));
+  };
+
   const buildConfigPayload = (sourceForm) => {
     const cloned = JSON.parse(JSON.stringify(sourceForm || {}));
     const payload = {
@@ -276,10 +292,24 @@ function TrainingPanel({ toast, active, view = "training" }) {
       wandb.tags = [];
     }
     payload.wandb = wandb;
-    payload.training = applyAdvancedOverrides(payload.training, cloned?.advanced?.training || {});
+    const exportAdvancedKeys = new Set(EXPORT_ADVANCED_SECTIONS.flatMap((section) => (section.params || []).map((param) => param.key)));
+    const advancedTraining = { ...(cloned?.advanced?.training || {}) };
+    const explicitExportModel = { ...(cloned?.export_model || {}) };
+    Object.entries(advancedTraining).forEach(([key, value]) => {
+      const explicitValue = explicitExportModel[key];
+      if (explicitValue === undefined || explicitValue === "" || exportAdvancedKeys.has(key)) {
+        if (value !== undefined) {
+          explicitExportModel[key] = value;
+        }
+      }
+    });
+    exportAdvancedKeys.forEach((key) => delete advancedTraining[key]);
+
+    payload.export_model = explicitExportModel;
+    payload.training = applyAdvancedOverrides(payload.training, advancedTraining);
     payload.distillation = applyAdvancedOverrides(payload.distillation, cloned?.advanced?.distillation || {});
     payload.advanced = {
-      training: cloned?.advanced?.training || {},
+      training: advancedTraining,
       distillation: cloned?.advanced?.distillation || {}
     };
     return payload;
@@ -403,41 +433,49 @@ function TrainingPanel({ toast, active, view = "training" }) {
     parseMetricsFromLogLines
   });
 
+  const pollExportStatusAndLogs = useCallback(async () => {
+    let status = null;
+    try {
+      status = await fetchExportStatus();
+      setExportStatus(status || { running: false, pid: null, output_path: null });
+      setExportRunning(Boolean(status?.running));
+    } catch {
+      // ignore transient errors during polling
+    }
+
+    try {
+      const result = await fetchExportLogs({ offset: exportLogOffsetRef.current, limit: 120 });
+      let logs = [];
+      let offset = exportLogOffsetRef.current;
+      if (Array.isArray(result)) {
+        logs = result;
+      } else if (result && Array.isArray(result.logs)) {
+        logs = result.logs;
+        offset = typeof result.offset === "number" ? result.offset : offset;
+      }
+      if (logs.length > 0) {
+        exportLogOffsetRef.current = offset + logs.length;
+        setExportLogs((prev) => {
+          const next = [...prev, ...logs];
+          return next.slice(-800);
+        });
+      }
+    } catch {
+      // ignore transient polling failures
+    }
+  }, []);
+
   useEffect(() => {
     let intervalId = null;
     let isMounted = true;
 
-    async function pollExportStatusAndLogs() {
-      try {
-        const status = await fetchExportStatus();
-        if (!isMounted) return;
-        setExportStatus(status || { running: false, pid: null, output_path: null });
-        setExportRunning(Boolean(status?.running));
-      } catch {
-        // ignore transient errors during polling
-      }
-
-      if (!exportRunning) return;
-
-      try {
-        const result = await fetchExportLogs({ offset: exportLogOffsetRef.current, limit: 120 });
-        if (!isMounted || !result || !Array.isArray(result.logs)) return;
-        if (result.logs.length > 0) {
-          exportLogOffsetRef.current = result.offset + result.logs.length;
-          setExportLogs((prev) => {
-            const next = [...prev, ...result.logs];
-            return next.slice(-800);
-          });
-        }
-      } catch {
-        // ignore transient polling failures
-      }
-    }
-
     if (exportRunning) {
       exportLogOffsetRef.current = exportLogOffsetRef.current || 0;
       pollExportStatusAndLogs();
-      intervalId = window.setInterval(pollExportStatusAndLogs, 1500);
+      intervalId = window.setInterval(() => {
+        if (!isMounted) return;
+        pollExportStatusAndLogs();
+      }, 1500);
     }
 
     return () => {
@@ -446,7 +484,19 @@ function TrainingPanel({ toast, active, view = "training" }) {
         window.clearInterval(intervalId);
       }
     };
-  }, [exportRunning]);
+  }, [exportRunning, pollExportStatusAndLogs]);
+
+  useEffect(() => {
+    const prev = prevExportRunningRef.current;
+    prevExportRunningRef.current = exportRunning;
+    if (prev && !exportRunning) {
+      const timerId = window.setTimeout(() => {
+        pollExportStatusAndLogs();
+      }, 1000);
+      return () => window.clearTimeout(timerId);
+    }
+    return undefined;
+  }, [exportRunning, pollExportStatusAndLogs]);
 
   useEffect(() => {
     resumeListProjectRef.current = form.output.project || "runs";
@@ -500,22 +550,30 @@ function TrainingPanel({ toast, active, view = "training" }) {
     });
   }, [isResumeMode, resumeCandidates, selectedResumeIndex]);
 
+  const scrollLogsToBottom = (el) => {
+    if (!el) return;
+    const lastLine = el.lastElementChild;
+    window.requestAnimationFrame(() => {
+      if (lastLine) {
+        lastLine.scrollIntoView({ block: "end", inline: "nearest" });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+  };
+
   useEffect(() => {
     const el = logContainerRef.current;
     if (!el) return;
     if (!autoScroll) return;
-    window.requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-    });
+    scrollLogsToBottom(el);
   }, [logs, autoScroll]);
 
   useEffect(() => {
     const el = exportLogContainerRef.current;
     if (!el) return;
     if (!exportAutoScroll) return;
-    window.requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-    });
+    scrollLogsToBottom(el);
   }, [exportLogs, exportAutoScroll]);
 
   const currentOutputProject = outputCheckInfo.project || form.output.project || "runs";
@@ -562,10 +620,16 @@ function TrainingPanel({ toast, active, view = "training" }) {
     }
   };
 
-  const exportPath = String(form.advanced?.training?.export_path || "").trim();
-  const exportFormat = String(form.advanced?.training?.format || "").toLowerCase();
+  const normalizeExportString = (value, fallback) => {
+    const text = value === undefined || value === null ? String(fallback || "") : String(value);
+    const trimmed = text.trim();
+    return trimmed === "" ? String(fallback || "").trim() : trimmed;
+  };
+
+  const exportPath = normalizeExportString(form.export_model?.export_path, form.advanced?.training?.export_path);
+  const exportFormat = normalizeExportString(form.export_model?.format, form.advanced?.training?.format).toLowerCase();
   const exportWeight = String(form.distillation?.student_weight || "").trim();
-  const supportedExportFormats = new Set(["onnx", "torchscript", "tflite", "saved_model", "coreml"]);
+  const supportedExportFormats = new Set(["onnx", "torchscript"]);
   const isExportReady = Boolean(exportPath && exportWeight) && supportedExportFormats.has(exportFormat);
 
   const startExport = async () => {
@@ -587,16 +651,17 @@ function TrainingPanel({ toast, active, view = "training" }) {
         weight: form.distillation?.student_weight,
         export_path: exportPath,
         format: exportFormat,
-        keras: form.advanced?.training?.keras,
-        optimize: form.advanced?.training?.optimize,
-        int8: form.advanced?.training?.int8,
-        dynamic: form.advanced?.training?.dynamic,
-        simplify: form.advanced?.training?.simplify,
-        opset: form.advanced?.training?.opset,
-        workspace: form.advanced?.training?.workspace,
-        nms: form.advanced?.training?.nms,
+        keras: form.export_model?.keras ?? form.advanced?.training?.keras,
+        optimize: form.export_model?.optimize ?? form.advanced?.training?.optimize,
+        int8: form.export_model?.int8 ?? form.advanced?.training?.int8,
+        dynamic: form.export_model?.dynamic ?? form.advanced?.training?.dynamic,
+        simplify: form.export_model?.simplify ?? form.advanced?.training?.simplify,
+        opset: form.export_model?.opset ?? form.advanced?.training?.opset,
+        workspace: form.export_model?.workspace ?? form.advanced?.training?.workspace,
+        nms: form.export_model?.nms ?? form.advanced?.training?.nms,
       });
       setExportRunning(true);
+      pollExportStatusAndLogs();
       setExportLogs((prev) => [...prev, `导出任务已启动，PID=${res.pid || "unknown"}`]);
       toast("模型导出已开始", "success");
     } catch (error) {
@@ -847,14 +912,28 @@ function TrainingPanel({ toast, active, view = "training" }) {
   const progressPercent = progress.total > 0 ? Math.min(100, (progress.current / progress.total) * 100) : 0;
   const isResumeStartDisabled = mode === "resume" && resumeCandidates.length === 0;
   const renderAdvancedField = (scope, param) => {
-    const value = form.advanced?.[scope]?.[param.key] ?? "";
+    const legacyValue = form.advanced?.training?.[param.key];
+    const exportModelValue = form.export_model?.[param.key];
+    const value =
+      scope === "export_model"
+        ? exportModelValue !== undefined && String(exportModelValue).trim() !== ""
+          ? exportModelValue
+          : legacyValue ?? ""
+        : form.advanced?.[scope]?.[param.key] ?? "";
     const disabled = running || isResumeConfigLocked;
+    const onChangeValue = (next) => {
+      if (scope === "export_model") {
+        setExportModelValue(param.key, next);
+      } else {
+        setAdvancedValue(scope, param.key, next);
+      }
+    };
     if (param.type === "enum") {
       return (
         <SelectField
           label={param.label}
           value={value === undefined || value === null ? "" : String(value)}
-          onChange={(next) => setAdvancedValue(scope, param.key, next)}
+          onChange={(next) => onChangeValue(next)}
           options={param.options || []}
           disabled={disabled}
         />
@@ -866,7 +945,7 @@ function TrainingPanel({ toast, active, view = "training" }) {
           label={param.label}
           value={value === "" ? null : value}
           step="any"
-          onChange={(next) => setAdvancedValue(scope, param.key, next === null ? "" : next)}
+          onChange={(next) => onChangeValue(next === null ? "" : next)}
           disabled={disabled}
         />
       );
@@ -876,16 +955,16 @@ function TrainingPanel({ toast, active, view = "training" }) {
         <PathField
           label={param.label}
           value={String(value || "")}
-          onChange={(next) => setAdvancedValue(scope, param.key, next)}
+          onChange={(next) => onChangeValue(next)}
           onBrowse={async () => {
             const next = await pickLocalPath({ kind: "directory", title: "选择导出路径", initialPath: String(value || "") });
-            if (next) setAdvancedValue(scope, param.key, next);
+            if (next) onChangeValue(next);
           }}
           disabled={disabled}
         />
       );
     }
-    return <TextField label={param.label} value={String(value || "")} onChange={(next) => setAdvancedValue(scope, param.key, next)} disabled={disabled} />;
+    return <TextField label={param.label} value={String(value || "")} onChange={(next) => onChangeValue(next)} disabled={disabled} />;
   };
 
   return (

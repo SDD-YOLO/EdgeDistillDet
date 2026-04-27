@@ -11,6 +11,7 @@
 
 - 重构 `web/src/features/training/TrainingPanel.jsx`，简化视图切换逻辑并抽离显示/导出面板。
 - 调整 `train-launcher` 样式，使推理与导出控制台横跨整个面板并优化日志面板高度填充。
+- 修复模型导出功能：`export_path` 现在会按照前端指定的目录或文件名正确保存导出模型。
 
 ## [1.0.6] - 2026-04-27
 

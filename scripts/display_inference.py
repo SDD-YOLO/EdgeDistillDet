@@ -48,6 +48,14 @@ def _get_nested(cfg: dict, keys: list[str], default=None):
     return node
 
 
+def _get_config_value(cfg: dict, paths: list[list[str]], default=None):
+    for path in paths:
+        value = _get_nested(cfg, path)
+        if value is not None and (not isinstance(value, str) or value.strip() != ""):
+            return value
+    return default
+
+
 def _coerce_bool(value):
     if isinstance(value, bool):
         return value
@@ -88,7 +96,10 @@ def main() -> int:
     config_path = _resolve_path(payload.get('config') or 'configs/distill_config.yaml')
     cfg = _load_yaml(config_path) if config_path else {}
 
-    source = payload.get('source') or _get_nested(cfg, ['advanced', 'training', 'source']) or _get_nested(cfg, ['training', 'data_yaml'])
+    source = payload.get('source') or _get_config_value(
+        cfg,
+        [['predict', 'source'], ['advanced', 'training', 'source'], ['training', 'data_yaml']],
+    )
     if not source:
         _print_line('ERROR: 未指定推理数据源 source')
         return 2
@@ -105,26 +116,68 @@ def main() -> int:
         _print_line(f'ERROR: 模型权重不存在: {student_weight}')
         return 2
 
-    device = payload.get('device') or _get_nested(cfg, ['training', 'device']) or 'cpu'
-    imgsz = payload.get('imgsz') or _get_nested(cfg, ['training', 'imgsz']) or 640
-    conf = payload.get('conf') or _get_nested(cfg, ['training', 'conf']) or 0.25
-    iou = payload.get('iou') or _get_nested(cfg, ['training', 'iou']) or 0.45
+    device = payload.get('device') or _get_config_value(
+        cfg,
+        [['predict', 'device'], ['advanced', 'training', 'device'], ['training', 'device']],
+    ) or 'cpu'
+    imgsz = payload.get('imgsz') or _get_config_value(
+        cfg,
+        [['predict', 'imgsz'], ['advanced', 'training', 'imgsz'], ['training', 'imgsz']],
+    ) or 640
+    conf = payload.get('conf') or _get_config_value(
+        cfg,
+        [['predict', 'conf'], ['advanced', 'training', 'conf'], ['training', 'conf']],
+    ) or 0.25
+    iou = payload.get('iou') or _get_config_value(
+        cfg,
+        [['predict', 'iou'], ['advanced', 'training', 'iou'], ['training', 'iou']],
+    ) or 0.45
 
-    output_dir = payload.get('output_dir') or _get_nested(cfg, ['advanced', 'training', 'output_dir'])
+    output_dir = payload.get('output_dir') or _get_config_value(
+        cfg,
+        [['predict', 'output_dir'], ['advanced', 'training', 'output_dir']],
+    )
     if not output_dir:
         output_dir = 'runs/inference_results'
     output_path = _resolve_path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    save_txt = _coerce_bool(payload.get('save_txt') or _get_nested(cfg, ['advanced', 'training', 'save_txt']))
-    save_conf = _coerce_bool(payload.get('save_conf') or _get_nested(cfg, ['advanced', 'training', 'save_conf']))
-    save_crop = _coerce_bool(payload.get('save_crop') or _get_nested(cfg, ['advanced', 'training', 'save_crop']))
-    show_labels = _coerce_bool(payload.get('show_labels') or _get_nested(cfg, ['advanced', 'training', 'show_labels']))
-    show_conf = _coerce_bool(payload.get('show_conf') or _get_nested(cfg, ['advanced', 'training', 'show_conf']))
-    show_boxes = _coerce_bool(payload.get('show_boxes') or _get_nested(cfg, ['advanced', 'training', 'show_boxes']))
-    line_width = payload.get('line_width') or _get_nested(cfg, ['advanced', 'training', 'line_width']) or 2
-    visualize = _coerce_bool(payload.get('visualize') or _get_nested(cfg, ['advanced', 'training', 'visualize']))
-    show = _coerce_bool(payload.get('show') or _get_nested(cfg, ['advanced', 'training', 'show']))
+    save_txt = _coerce_bool(
+        payload.get('save_txt')
+        or _get_config_value(cfg, [['predict', 'save_txt'], ['advanced', 'training', 'save_txt']])
+    )
+    save_conf = _coerce_bool(
+        payload.get('save_conf')
+        or _get_config_value(cfg, [['predict', 'save_conf'], ['advanced', 'training', 'save_conf']])
+    )
+    save_crop = _coerce_bool(
+        payload.get('save_crop')
+        or _get_config_value(cfg, [['predict', 'save_crop'], ['advanced', 'training', 'save_crop']])
+    )
+    show_labels = _coerce_bool(
+        payload.get('show_labels')
+        or _get_config_value(cfg, [['predict', 'show_labels'], ['advanced', 'training', 'show_labels']])
+    )
+    show_conf = _coerce_bool(
+        payload.get('show_conf')
+        or _get_config_value(cfg, [['predict', 'show_conf'], ['advanced', 'training', 'show_conf']])
+    )
+    show_boxes = _coerce_bool(
+        payload.get('show_boxes')
+        or _get_config_value(cfg, [['predict', 'show_boxes'], ['advanced', 'training', 'show_boxes']])
+    )
+    line_width = payload.get('line_width') or _get_config_value(
+        cfg,
+        [['predict', 'line_width'], ['advanced', 'training', 'line_width']],
+    ) or 2
+    visualize = _coerce_bool(
+        payload.get('visualize')
+        or _get_config_value(cfg, [['predict', 'visualize'], ['advanced', 'training', 'visualize']])
+    )
+    show = _coerce_bool(
+        payload.get('show')
+        or _get_config_value(cfg, [['predict', 'show'], ['advanced', 'training', 'show']])
+    )
 
     save_flag = visualize or save_txt or save_conf or save_crop
     if not save_flag:

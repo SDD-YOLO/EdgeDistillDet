@@ -32,6 +32,8 @@
 
 ### 安装
 
+建议python3.12
+
 ```bash
 # 1. 克隆仓库
 cd EdgeDistillDet
