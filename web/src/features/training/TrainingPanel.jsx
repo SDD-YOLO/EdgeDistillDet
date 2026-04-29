@@ -552,13 +552,8 @@ function TrainingPanel({ toast, active, view = "training" }) {
 
   const scrollLogsToBottom = (el) => {
     if (!el) return;
-    const lastLine = el.lastElementChild;
     window.requestAnimationFrame(() => {
-      if (lastLine) {
-        lastLine.scrollIntoView({ block: "end", inline: "nearest" });
-      } else {
         el.scrollTop = el.scrollHeight;
-      }
     });
   };
 

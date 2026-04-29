@@ -14,3 +14,38 @@ temperature: 蒸馏温度 (推荐 2~8)alpha: 软标签损失权重 (推荐 0.3~0
 [x]仔细检查代码中有没有潜在的bug，如果有的话需要修复
 [x]补全模块测试，将项目中的所有的代码的模块化进行到底，确保代码的最高可复用程度
 [x]installer脚本中添加一个如果没有python就下载python的逻辑，如果有python就升级python的逻辑，如果有python但是版本不符合就升级python的逻辑，确保安装的python版本是3.10+
+
+[ ]前端的指标因为过滤的规则过于严格而无法显示的bug
+[ ]高级参数设置的界面中有一些参数和既定的流程冲突或者冗余
+[ ]后端数据链路的 4 个关键缺陷
+[ ]1.  results.csv  扫描路径硬编码
+文件： web/services/backend_metrics.py:44 
+python
+runs_dir = BASE_DIR / 'runs'
+
+后端只扫描  runs/  目录，但你的训练配置（ output.project ）可能设置为  runs/detect 、 my_experiments  等其他路径。此时训练产出的  results.csv  不在扫描范围内，前端就永远找不到数据源。
+[ ]2. 蒸馏指标列与 Ultralytics 存在"覆写竞争"
+文件： core/distillation/adaptive_kd_trainer.py:778-827 
+蒸馏指标（alpha、temperature、kd_loss）是通过回调  _on_fit_epoch_end  注入到  results.csv  的。但这里存在两个问题：
+ 
+Ultralytics 的  final_eval()  会在训练结束时覆写整个  results.csv ，之前注入的蒸馏列可能被清空。
+ 
+ _append_csv  使用  'w'  模式重写整个 CSV 文件，如果在训练过程中有并发读写，文件可能损坏。
+虽然代码在  _on_train_end （第 959 行）设置了"安全网"来重新补全蒸馏数据，但如果训练被用户手动停止或异常中断，这个安全网不会执行。
+
+[ ]3.  distill_log.json  回退机制失效
+文件： web/services/backend_common.py:560-573 
+python
+has_distill_columns = any(col.startswith('distill/') for col in (columns or []))
+distill_log_fallback = _load_distill_log_json(run_dir) if not has_distill_columns else []
+
+这里的逻辑有缺陷：当 CSV 中有空列名但值为空时（例如 Ultralytics 覆写保留了列名但清空了值）， has_distill_columns  为  True ，导致系统不会加载  distill_log.json  作为备用数据。结果蒸馏图表没有任何数据点。
+[ ]4. CSV 列名严格匹配，版本兼容性差
+文件： web/services/backend_common.py:584-599 
+python
+chart['map_series']['map50'].append(_as_float(row.get('metrics/mAP50(B)')) or 0)
+chart['lr_series']['pg0'].append(_as_float(row.get('lr/pg0')) or 0)
+
+这些列名（如  metrics/mAP50(B) 、 lr/pg0 ）是硬编码的。如果 Ultralytics 版本升级导致列名变化（例如去掉括号、改变大小写），所有指标都会读取为  0  而不是真实值。此时图表会显示为全零直线，看起来就像"没数据"。
+
+[ ]TraingingPanel拆解模块
