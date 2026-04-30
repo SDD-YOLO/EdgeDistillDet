@@ -247,6 +247,8 @@ def _build_train_args(
         "val": True,
         "plots": True,
         "save": True,
+        "conf": None,    # ← 新增：防止被覆盖为 0
+        "iou": 0.7,      # ← 新增：防止被覆盖为 0
     }
 
     # 透传所有训练参数（只过滤有害参数）

@@ -197,6 +197,9 @@ class AdaptiveKDTrainer(DetectionTrainer):
         
         # 加载蒸馏组件
         self._setup_distill_from_class_params()
+        import types
+        self.criterion = types.MethodType(AdaptiveKDTrainer.criterion, self)
+        logger.info("[INIT] criterion() 已重新绑定到蒸馏方法")
 
     def _setup_distill_from_class_params(self):
         """从类参数加载教师模型和蒸馏组件"""
