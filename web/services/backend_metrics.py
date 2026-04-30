@@ -87,18 +87,22 @@ def get_metrics(source: str = Query('')):
                 if rows:
                     chart_series = _build_metric_series(rows, columns, target.parent)
                     summary_metrics = {}
-                    for key, col, better in [
-                        ('box_loss', 'train/box_loss', 'lower'),
-                        ('cls_loss', 'train/cls_loss', 'lower'),
-                        ('dfl_loss', 'train/dfl_loss', 'lower'),
-                        ('map50', 'metrics/mAP50(B)', 'higher'),
-                        ('map50_95', 'metrics/mAP50-95(B)', 'higher'),
-                        ('precision', 'metrics/precision(B)', 'higher'),
-                        ('recall', 'metrics/recall(B)', 'higher'),
-                    ]:
+                    _summary_metric_map = [
+                        ('box_loss', ['train/box_loss', 'box_loss', 'train_box_loss'], 'lower'),
+                        ('cls_loss', ['train/cls_loss', 'cls_loss', 'train_cls_loss'], 'lower'),
+                        ('dfl_loss', ['train/dfl_loss', 'dfl_loss', 'train_dfl_loss'], 'lower'),
+                        ('map50', ['metrics/mAP50(B)', 'metrics/mAP50', 'mAP50', 'map50'], 'higher'),
+                        ('map50_95', ['metrics/mAP50-95(B)', 'metrics/mAP50-95', 'mAP50-95', 'map50_95'], 'higher'),
+                        ('precision', ['metrics/precision(B)', 'metrics/precision', 'precision'], 'higher'),
+                        ('recall', ['metrics/recall(B)', 'metrics/recall', 'recall'], 'higher'),
+                    ]
+                    for key, aliases, better in _summary_metric_map:
+                        actual_col = _resolve_column_name(columns, aliases)
+                        if not actual_col:
+                            continue
                         try:
-                            s = _summarize_series(rows, col, better=better)
-                            if s is not None:
+                            s = _summarize_series(rows, actual_col, better=better)
+                           if s is not None:
                                 summary_metrics[key] = s
                         except Exception:
                             pass

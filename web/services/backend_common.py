@@ -557,6 +557,46 @@ def _load_distill_log_json(run_dir):
     except Exception:
         return []
 
+# 在 _build_metric_series 函数前添加以下辅助函数
+def _resolve_column_name(columns, candidates):
+    """
+    从实际 CSV 列名中匹配候选列名（不区分大小写，支持多种变体）
+    columns: 实际 CSV 的 fieldnames 列表
+    candidates: 候选列名列表（按优先级排序）
+    """
+    if not columns:
+        return None
+    col_map = {col.lower().strip(): col for col in columns}
+    for candidate in candidates:
+        # 精确匹配
+        if candidate in columns:
+            return candidate
+        # 忽略大小写匹配
+        lookup = candidate.lower().strip()
+        if lookup in col_map:
+            return col_map[lookup]
+    return None
+
+
+# 列名兼容性映射表：支持多种 YOLO 版本的列名格式
+_METRIC_COLUMN_ALIASES = {
+    'epoch': ['epoch'],
+    'box_loss': ['train/box_loss', 'box_loss', 'train_box_loss'],
+    'cls_loss': ['train/cls_loss', 'cls_loss', 'train_cls_loss'],
+    'dfl_loss': ['train/dfl_loss', 'dfl_loss', 'train_dfl_loss'],
+    'map50': ['metrics/mAP50(B)', 'metrics/mAP50', 'mAP50', 'map50'],
+    'map50_95': ['metrics/mAP50-95(B)', 'metrics/mAP50-95', 'mAP50-95', 'map50_95'],
+    'precision': ['metrics/precision(B)', 'metrics/precision', 'precision'],
+    'recall': ['metrics/recall(B)', 'metrics/recall', 'recall'],
+    'lr_pg0': ['lr/pg0', 'lr_pg0', 'learning_rate/pg0'],
+    'lr_pg1': ['lr/pg1', 'lr_pg1', 'learning_rate/pg1'],
+    'lr_pg2': ['lr/pg2', 'lr_pg2', 'learning_rate/pg2'],
+    'distill_alpha': ['distill/alpha'],
+    'distill_temperature': ['distill/temperature'],
+    'distill_kd_loss': ['distill/kd_loss'],
+    'time': ['time'],
+}
+
 def _build_metric_series(rows, columns, run_dir):
     chart = {
         'epochs': [],
@@ -631,6 +671,8 @@ def _build_metric_series(rows, columns, run_dir):
         chart['pr_curve'] = None
     chart['class_performance'] = _extract_class_performance(rows, columns, None, run_dir)
     return chart
+
+
 
 def _error(message: str, status_code: int = 400):
     return JSONResponse(status_code=status_code, content={'error': message})
