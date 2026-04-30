@@ -24,8 +24,6 @@ distillation:
   dynamic_temperature: false
   lambda_kd: 0.5
   use_adaptive_loss: false
-  temperature: 0
-  alpha: 0
 training:
   compute_provider: local
   cloud_api:
@@ -58,7 +56,7 @@ training:
   mode: train
   time: 0
   patience: 100
-  save: tre
+  save: true
   save_period: -1
   cache: false
   exist_ok: false
@@ -138,10 +136,9 @@ training:
   opset: 0
   workspace: 0
   nms: false
-  workers: 0
 output:
   project: runs
-  name: exp36
+  name: exp2
 wandb:
   enabled: false
   mode: online
@@ -228,15 +225,6 @@ export_model:
   show_conf: true
   show_boxes: true
   line_width: 2
-  workers: 0
-  freeze: ''
-  auto_augment: ''
-  cfg: ''
-  tracker: ''
-  save_dir: ''
-  source: ''
-  classes: ''
-  embed: ''
 advanced:
   training:
     task: detect
@@ -304,15 +292,6 @@ advanced:
     show_conf: true
     show_boxes: true
     line_width: 2
-    workers: 0
-    freeze: ''
-    auto_augment: ''
-    cfg: ''
-    tracker: ''
-    save_dir: ''
-    source: ''
-    classes: ''
-    embed: ''
   distillation:
     distill_mode: adaptive
     beta: 0
@@ -328,8 +307,3 @@ advanced:
     dynamic_temperature: false
     lambda_kd: 0.5
     use_adaptive_loss: false
-    teacher_cfg: ''
-    temperature: 0
-    alpha: 0
-    teacher_device: ''
-    feature_layers: ''

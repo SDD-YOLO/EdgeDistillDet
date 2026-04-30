@@ -163,94 +163,133 @@ class AdaptiveKDTrainer(DetectionTrainer):
             cls._kd_class_params.update(extra_kwargs)
     
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
+        if overrides and "trainer" in overrides:
+            del overrides["trainer"]
+        
         super().__init__(cfg, overrides, _callbacks)
-        # 蒸馏状态全部挂在 trainer 自身上，绝不碰 model
+        
+        # 初始化蒸馏状态
         self.teacher_model = None
-        self._orig_loss = None          # 原始损失函数（从 model.loss 保存后恢复 model）
+        self._distill_loss = None
+        self._temp_scheduler = None
+        self._alpha_scheduler = None
         self._teacher_path = ""
         self._warm_epochs = 5
-        self._w_kd = 0.5; self._w_focal = 0.3; self._w_feat = 0.0
-        self._T_max = 6.0; self._T_min = 1.5; self._alpha_init = 0.5
-        self._scale_boost = 2.0; self._focal_gamma = 2.0
-        self._alpha_scheduler = None
-        self._temp_scheduler = None
-        self._distill_loss = None
-        self._distill_log = []
-        self._resume_prev_kd_loss = None
-        self._resume_prev_epoch = None
-        self._epoch_task_loss = 0.0; self._epoch_kd_loss = 0.0
-        self._batch_count = 0; self._distill_entered = False
-        self._batch = None  # 当前批次数据，由 _distill_model_loss 注入
-        self._cached_student_preds = None  # 【v4修复】ultralytics外层已计算的学生预测（避免双重前向）
-        # 蒸馏是否激活（warm-up 后自动开启，无需手动控制）
-        # 去掉 _distill_active 标志，改用 epoch 直接判断（与旧版 v2 行为一致）
+        self._w_kd = 0.5
+        self._w_focal = 0.3
+        self._w_feat = 0.0
+        self._T_max = 6.0
+        self._T_min = 1.5
+        self._alpha_init = 0.5
+        self._scale_boost = 2.0
+        self._focal_gamma = 2.0
+        self._distill_entered = False
+        self._orig_loss = None
+        self._accum_task_loss = []
+        self._accum_kd_loss = []
+        self._batch_count = 0          # ← 新增
+        self._last_log_batch = 0       # ← 新增（如果用到）
+        self._distill_log = []     
+        
+        # 【新增】在 __init__ 中直接加载蒸馏组件
+        self._setup_distill_from_class_params()
+
+    def _setup_distill_from_class_params(self):
+        """从类参数加载教师模型和蒸馏组件"""
+        kd = AdaptiveKDTrainer._kd_class_params
+        if not kd:
+            return
+        
+        teacher_path = str(kd.get("teacher_path", "")).strip()
+        if not teacher_path or not os.path.exists(teacher_path):
+            return
+        
+        self._teacher_path = teacher_path
+        self._warm_epochs = int(kd.get("warm_epochs", 5))
+        self._w_kd = float(kd.get("w_kd", 0.5))
+        self._w_focal = float(kd.get("w_focal", 0.3))
+        self._w_feat = w_feat_to_scalar(kd.get("w_feat", 0.0))
+        self._T_max = float(kd.get("T_max", 6.0))
+        self._T_min = float(kd.get("T_min", 1.5))
+        self._alpha_init = float(kd.get("alpha_init", 0.5))
+        self._scale_boost = float(kd.get("scale_boost", 2.0))
+        self._focal_gamma = float(kd.get("focal_gamma", 2.0))
+        
+        print(f"[INIT] 蒸馏参数 | teacher={os.path.basename(self._teacher_path)} | "
+            f"α={self._alpha_init} T=[{self._T_max},{self._T_min}]")
+        
+        self._load_teacher()
+        self._init_distill()
+        print("[INIT] 蒸馏损失函数 + 调度器 就绪 ✓")
     
     def setup_model(self):
-        # 【关键修复】必须返回 super().setup_model() 的返回值（ckpt），
-        # 否则 _setup_train 中 resume_training(ckpt) 收到 None，
-        # 导致 resume 失效、epoch 从头开始！
+        print("[DIAG] ===== setup_model() 被调用了！=====")  # ← 添加这行
         ckpt = super().setup_model()
-
         logger.info("[INIT 5/6] 检测模型就绪 → 初始化蒸馏组件...")
 
-        # 【关键】保存原始 loss 函数引用，然后立即恢复 model.loss
-        # （后续蒸馏逻辑通过 get_loss() 注入，不需要替换 model.loss）
+        # 【关键】保存原始 loss 函数引用
         self._orig_loss = _resolve_original_model_loss(self.model)
         if self._orig_loss is None:
             logger.error("[FATAL] 找不到 model.loss!")
-            return
-        
+            return ckpt
+
+        # 【修复】只在配置了教师路径时才加载蒸馏组件
         kd = AdaptiveKDTrainer._kd_class_params
         if kd and kd.get("teacher_path"):
             self._teacher_path = kd["teacher_path"]
             self._warm_epochs = int(kd.get("warm_epochs", 5))
-            self._w_kd=float(kd.get("w_kd", 0.5)); self._w_focal=float(kd.get("w_focal", 0.3))
+            self._w_kd = float(kd.get("w_kd", 0.5))
+            self._w_focal = float(kd.get("w_focal", 0.3))
             self._w_feat = w_feat_to_scalar(kd.get("w_feat", 0.0))
-            self._T_max=float(kd.get("T_max", 6.0)); self._T_min=float(kd.get("T_min", 1.5))
-            self._alpha_init=float(kd.get("alpha_init", 0.5))
-            self._scale_boost=float(kd.get("scale_boost", 2.0)); self._focal_gamma=float(kd.get("focal_gamma", 2.0))
-            logger.info(f"蒸馏参数 | teacher={os.path.basename(self._teacher_path)} | "
-                       f"α={self._alpha_init} T=[{self._T_max},{self._T_min}]")
-        
-        logger.info(f"[INIT 5/6] 加载教师模型: {os.path.basename(self._teacher_path)} ...")
-        self._load_teacher()
-        self._init_distill()
-        logger.info(f"[INIT 5/6] 蒸馏损失函数 + 调度器 就绪 ✓")
+            self._T_max = float(kd.get("T_max", 6.0))
+            self._T_min = float(kd.get("T_min", 1.5))
+            self._alpha_init = float(kd.get("alpha_init", 0.5))
+            self._scale_boost = float(kd.get("scale_boost", 2.0))
+            self._focal_gamma = float(kd.get("focal_gamma", 2.0))
+            logger.info(
+                f"蒸馏参数 | teacher={os.path.basename(self._teacher_path)} | "
+                f"α={self._alpha_init} T=[{self._T_max},{self._T_min}]"
+            )
 
-        # 不再替换 model.loss — Ultralytics 8.4.19 使用 criterion 计算损失，
-        # 替换 model.loss 会导致 criterion 内部拿到的 preds 格式错误。
-        # 蒸馏逻辑完全通过重写的 get_loss() 注入。
-        logger.info("[DEBUG] AdaptiveKDTrainer 使用 get_loss() 注入蒸馏逻辑（不修改 model.loss）")
+            logger.info(f"[INIT 5/6] 加载教师模型: {os.path.basename(self._teacher_path)} ...")
+            self._load_teacher()
+            self._init_distill()
+            logger.info(f"[INIT 5/6] 蒸馏损失函数 + 调度器 就绪 ✓")
+        else:
+            logger.info("[INIT 5/6] 无教师模型配置 → 以标准检测模式训练")
 
-        return ckpt  # 返回 checkpoint 供 _setup_train 中 resume_training() 使用
+        logger.info("[DEBUG] AdaptiveKDTrainer 使用 criterion() / get_loss() 注入蒸馏逻辑")
+
+        return ckpt
 
     def _load_teacher(self):
-        if not self._teacher_path or not os.path.exists(self._teacher_path):
+        # 【修复】空路径时直接返回，不报错
+        if not self._teacher_path:
+            logger.info("[TEACHER] 教师路径为空，跳过加载")
+            return
+        if not os.path.exists(self._teacher_path):
             raise FileNotFoundError(f"教师模型不存在: {self._teacher_path}")
+        
         logger.info(f"加载教师模型: {self._teacher_path}")
         buf = io.StringIO()
         with redirect_stdout(buf), redirect_stderr(buf):
             teacher = YOLO(self._teacher_path, verbose=False)
         
         teacher_model = teacher.model.to(self.device).eval()
-        del teacher  # 释放 YOLO 包装器（只保留内部模型）
+        del teacher
         
-        # 冻结所有参数
         for p in teacher_model.parameters():
             p.requires_grad = False
         
-        # 【v4内存优化】对教师模型启用梯度检查点
-        # 教师模型仅做前向推理，gradient_checkpointing 可大幅减少中间激活值显存占用
+        # 【修复】梯度检查点可能不兼容所有模型，改为可选
         try:
             teacher_model.gradient_checkpointing_enable()
-            logger.info("教师模型已启用梯度检查点 (gradient checkpointing)")
+            logger.info("教师模型已启用梯度检查点")
         except Exception:
-            # 某些版本不支持或已开启，忽略错误
             pass
         
         self.teacher_model = teacher_model
-        # 手动清理
-        gc_collected = gc.collect()
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         logger.info("教师模型就绪 ✓ (显存已优化)")
@@ -462,145 +501,109 @@ class AdaptiveKDTrainer(DetectionTrainer):
     # ══════════════════════════════════════════════════════════════════════════
     def get_loss(self, batch, preds=None):
         """
-        重写损失计算：warm-up 用原始损失，之后注入蒸馏损失。
+        兼容层：将 get_loss 调用转发到 criterion()。
+        ultralytics 8.4.19 训练循环调用 criterion()，
+        但保留 get_loss() 以兼容其他扩展方式。
         """
-        if self._orig_loss is None:
-            if hasattr(super(), 'get_loss'):
-                return super().get_loss(batch, preds)
-            raise RuntimeError("Distill trainer missing original model loss function")
-
-        # 确保 preds 已计算（从 train_one_epoch 传入）
         if preds is None:
             preds = self.model(batch['img'])
+        return self.criterion(preds, batch)
 
-        # 输出批次进度（节流：每 epoch 最多 ~10 条日志）
+    def criterion(self, preds, batch):
+        """
+        重写 criterion() —— ultralytics 8.4.19 训练循环的实际调用路径。
+        在标准检测损失基础上注入蒸馏损失。
+        """
+        # 【兼容】首次调用时初始化 compute_loss（继承 DetectionTrainer 逻辑）
+        if not hasattr(self, 'compute_loss') or self.compute_loss is None:
+            # 让父类初始化 compute_loss
+            _ = super().criterion(preds, batch)  # 这会初始化 self.compute_loss
+        
+        # 计算标准检测损失
+        loss_task, loss_items = self.compute_loss(preds, batch)
+        
+        # 如果没有教师模型，直接返回
+        if getattr(self, 'teacher_model', None) is None:
+            return loss_task, loss_items
+        
         epoch = getattr(self, 'epoch', 0)
-        display_epoch = (epoch + 1) if epoch is not None else None
-        total_epochs, batch_size, total_batches, dataset_samples = self._get_epoch_info()
-        current_batch = self._batch_count + 1
         warm_phase = epoch < self._warm_epochs
-        phase = 'warm' if warm_phase else 'distill'
         
-        _log_interval = getattr(self, '_batch_log_interval', 0)
-        if _log_interval <= 0 and total_batches and isinstance(total_batches, int):
-            self._batch_log_interval = max(1, total_batches // 10)
-            _log_interval = self._batch_log_interval
+        # 累加损失（用于 epoch 统计）
+        self._epoch_task_loss += loss_task.item() if hasattr(loss_task, 'item') else float(loss_task)
+        self._batch_count += 1  # ← 关键：递增 batch_count
         
-        if current_batch == 1 or (_log_interval > 0 and current_batch % _log_interval == 0) or current_batch == total_batches:
-            percent = current_batch / total_batches * 100.0 if total_batches and total_batches > 0 else 0.0
-            bar = _format_progress_bar(current_batch, total_batches) if total_batches else '[unknown]'
-            logger.info(
-                f"[BATCH_PROGRESS] Epoch {display_epoch}/{total_epochs} | "
-                f"Batch [{current_batch:>4d}/{total_batches}] | "
-                f"{bar} {percent:5.1f}% | "
-                f"batch_size={batch_size} | "
-                f"samples={current_batch * batch_size if batch_size else '?'}/{dataset_samples or '?'} | "
-                f"phase={phase}"
-            )
-
-        # Warm-up 阶段：直接使用传入的 preds 计算原始损失
+        # Warm-up 阶段
         if warm_phase:
-            try:
-                loss, loss_items = self._orig_loss(batch, preds=preds)
-            except TypeError:
-                try:
-                    loss, loss_items = self._orig_loss(batch, preds=batch.get('preds') if isinstance(batch, dict) else None)
-                except TypeError:
-                    loss, loss_items = self._orig_loss(batch)
-            self._accumulate_losses(task_loss=loss)
-            return loss, loss_items
-
-        # 蒸馏阶段（epoch >= warm_epochs）
+            return loss_task, loss_items
+        
+        # 蒸馏阶段
         if not self._distill_entered:
             self._distill_entered = True
             logger.info(f"[DISTILL] 进入蒸馏阶段 epoch={epoch}")
-
+        
+        # 教师模型前向 + 蒸馏损失
         img = batch['img']
         device_type = img.device.type
-
-        # 计算原始任务损失（使用传入的 preds）
-        try:
-            loss_task, loss_items = self._orig_loss(batch, preds=preds)
-        except Exception as e:
-            logger.warning(f"[DISTILL] _orig_loss(preds=...) 失败 ({e})，尝试无参调用")
-            loss_task, loss_items = self._orig_loss(batch)
-
-        # 教师模型前向传播（无梯度）
-        teacher_img = batch['img'].float()
         with torch.no_grad():
             with torch.amp.autocast(device_type, enabled=False):
-                teacher_preds = self.teacher_model(teacher_img)
-
-        # 蒸馏损失计算
+                teacher_preds = self.teacher_model(img.float())
+        
         num_classes = getattr(self.model, 'nc', 80)
         current_temp = self._temp_scheduler.current_temperature
-        loss_distill, _detail = self._distill_loss(
+        loss_distill, _ = self._distill_loss(
             student_preds=preds,
             teacher_preds=teacher_preds,
             num_classes=num_classes,
             temperature=current_temp,
         )
-
-        # 立即释放中间张量
+        
+        self._epoch_kd_loss += loss_distill.item() if hasattr(loss_distill, 'item') else float(loss_distill)
+        
         del teacher_preds
         if device_type == 'cuda':
             torch.cuda.empty_cache()
-
+        
         # 加权组合
         alpha = self._alpha_scheduler.current_alpha
         total_loss = (1 - alpha) * loss_task + alpha * loss_distill
-
-        self._accumulate_losses(task_loss=loss_task, kd_loss=loss_distill)
-
+        
+        # 【关键】每个 batch 直接记录到 _distill_log
+        self._distill_log.append({
+            "epoch": epoch + 1,
+            "phase": "distill",
+            "task_loss": round(loss_task.item() if hasattr(loss_task, 'item') else float(loss_task), 6),
+            "kd_loss": round(loss_distill.item() if hasattr(loss_distill, 'item') else float(loss_distill), 6),
+            "alpha": round(alpha, 6),
+            "temperature": round(current_temp, 6),
+        })
+        
         return total_loss, loss_items
-   
+
+
     def _setup_train(self):
-        """重写 setup_train：全程锁定 workers=0，避免 DataLoader 子进程与主训练争内存。"""
+        """重写 setup_train：全程锁定 workers=0"""
         self.args.workers = 0
-
-        # 【关键修复】保存配置文件中的 epochs 值，防止 resume 时被 checkpoint 覆盖
-        # 当使用断点续训时，ultralytics 会从 last.pt 中恢复所有训练参数（含 epochs），
-        # 如果之前是用不同 epochs 训练的，会导致总轮数变成错误的值。
-        cfg_epochs = getattr(self.args, 'epochs', None)
-
-        total_batches = "unknown"
         super()._setup_train()
-
-        # 再次强制 workers=0：checkpoint 内的 args 可能在 super() 里把 workers 改回非 0
         self.args.workers = 0
+        
+        # 【删除】以下所有检查代码——它会消耗 DataLoader 的第一个 batch！
+        # for attr in ('dataloader', 'train_dataloader', ...):
+        #     loader = getattr(self, attr, None)
+        #     if loader is not None:
+        #         first_batch = next(iter(loader))  # ← 这一行会消耗 batch！
+        #         ...
+        
+        logger.info("[INIT 6/6] 数据集加载完成 ✓ | ...")
 
-        # resume 时恢复 alpha 调度状态（优先 distill_state.json，回退 results.csv）
-        self._restore_distill_state_if_needed()
-
-        # 强制将 epochs 恢复为配置文件中的值（而非 checkpoint 里的旧值）
-        if cfg_epochs is not None and hasattr(self.args, 'epochs'):
-            restored = int(cfg_epochs)
-            if self.args.epochs != restored:
-                logger.info(
-                    f"[RESUME_FIX] epochs 已被 checkpoint 覆盖 → "
-                    f"强制恢复为配置文件值: {self.args.epochs} → {restored}"
-                )
-                self.args.epochs = restored
-
-        for attr in ('dataloader', 'train_dataloader', 'train_loader', 'loader', 'data_loader'):
-            loader = getattr(self, attr, None)
-            if loader is not None:
-                try:
-                    total_batches = len(loader)
-                    break
-                except Exception:
-                    continue
-        self._known_total_batches = total_batches if isinstance(total_batches, int) else None
-        logger.info(
-            f"[INIT 6/6] 数据集加载完成 ✓ | "
-            f"total_batches={total_batches} | batch_size={self.args.batch} | "
-            f"epochs={self.args.epochs} | 即将开始训练..."
-        )
-    
+ 
     def _accumulate_losses(self, task_loss=None, kd_loss=None):
-        if task_loss is not None: self._epoch_task_loss += _safe_scalar(task_loss)
-        if kd_loss is not None: self._epoch_kd_loss += _safe_scalar(kd_loss)
-        self._batch_count += 1
+        """累加损失并递增 batch 计数"""
+        if task_loss is not None:
+            self._epoch_task_loss += task_loss.item() if hasattr(task_loss, 'item') else float(task_loss)
+        if kd_loss is not None:
+            self._epoch_kd_loss += kd_loss.item() if hasattr(kd_loss, 'item') else float(kd_loss)
+        self._batch_count += 1  # ← 确保这行存在！
     
     def _get_epoch_info(self):
         total_epochs = getattr(self.args, 'epochs', 0) if hasattr(self, 'args') else 0
@@ -697,52 +700,77 @@ class AdaptiveKDTrainer(DetectionTrainer):
         """注入蒸馏指标到 results.csv"""
         epoch = trainer.epoch
         display_epoch = epoch + 1
+        print(f"[DIAG_CSV] _on_fit_epoch_end called epoch={display_epoch}")  # ← 添加
+        
         entry = next((e for e in reversed(self._distill_log) if e["epoch"] == display_epoch), None)
-        if entry is None and self._distill_log: entry = self._distill_log[-1]
+        if entry is None and self._distill_log:
+            entry = self._distill_log[-1]
         if not entry:
+            print(f"[DIAG_CSV] 无 entry，跳过")  # ← 添加
             return
         
         av, tv, kv = entry['alpha'], entry['temperature'], entry['kd_loss']
+        print(f"[DIAG_CSV] entry found: alpha={av} temp={tv} kd_loss={kv}")  # ← 添加
+        
+        # 注入 metrics
         for target in [getattr(trainer, 'metrics', None), getattr(trainer, 'results_dict', None)]:
             if isinstance(target, dict):
                 try:
-                    target['distill/alpha']=av
-                    target['distill/temperature']=tv
-                    target['distill/kd_loss']=kv
-                except Exception:
-                    pass
+                    target['distill/alpha'] = av
+                    target['distill/temperature'] = tv
+                    target['distill/kd_loss'] = kv
+                    print(f"[DIAG_CSV] 已注入 metrics")  # ← 添加
+                except Exception as e:
+                    print(f"[DIAG_CSV] 注入 metrics 失败: {e}")  # ← 添加
+        
         self._append_csv(display_epoch, av, tv, kv)
-    
+
     def _append_csv(self, epoch, a, t, k):
         sd = getattr(self, 'save_dir', None)
-        if not sd: return
-        p = Path(sd)/'results.csv'
-        if not p.exists(): return
+        print(f"[DIAG_CSV] _append_csv called save_dir={sd}")  # ← 添加
+        if not sd:
+            print(f"[DIAG_CSV] save_dir 为空，跳过")  # ← 添加
+            return
+        
+        p = Path(sd) / 'results.csv'
+        print(f"[DIAG_CSV] CSV 路径: {p}, exists={p.exists()}")  # ← 添加
+        if not p.exists():
+            print(f"[DIAG_CSV] results.csv 不存在，跳过")  # ← 添加
+            return
+        
         try:
-            rows=[]; fn=[]
-            with open(p,'r',encoding='utf-8',newline='') as f:
-                r=_c.DictReader(f); fn=list(r.fieldnames or []); rows=list(r)
-            for c in ['distill/alpha','distill/temperature','distill/kd_loss']:
-                if c not in fn: fn.append(c)
+            rows = []; fn = []
+            with open(p, 'r', encoding='utf-8', newline='') as f:
+                r = _c.DictReader(f); fn = list(r.fieldnames or []); rows = list(r)
+            
+            print(f"[DIAG_CSV] 原始列: {fn}, 行数: {len(rows)}")  # ← 添加
+            
+            for c in ['distill/alpha', 'distill/temperature', 'distill/kd_loss']:
+                if c not in fn:
+                    fn.append(c)
+            
             matched = False
             for row in rows:
                 try:
-                    row_epoch = int(float(row.get('epoch','-1')))
+                    row_epoch = int(float(row.get('epoch', '-1')))
                     if row_epoch == int(epoch):
-                        row['distill/alpha']=a; row['distill/temperature']=t; row['distill/kd_loss']=k; matched = True; break
+                        row['distill/alpha'] = a
+                        row['distill/temperature'] = t
+                        row['distill/kd_loss'] = k
+                        matched = True
+                        break
                 except (ValueError, TypeError, KeyError):
                     continue
-            if not matched:
-                for row in rows:
-                    try:
-                        row_epoch = int(float(row.get('epoch','-1')))
-                        if row_epoch == int(epoch) + 1 or row_epoch == int(epoch) - 1:
-                            row['distill/alpha']=a; row['distill/temperature']=t; row['distill/kd_loss']=k; break
-                    except (ValueError, TypeError, KeyError):
-                        continue
-            with open(p,'w',encoding='utf-8',newline='') as f:
-                _c.DictWriter(f,fn).writeheader(); _c.DictWriter(f,fn).writerows(rows)
-        except Exception as e: logger.debug(f"csv追加跳过: {e}")
+            
+            print(f"[DIAG_CSV] 匹配到行: {matched}")  # ← 添加
+            
+            with open(p, 'w', encoding='utf-8', newline='') as f:
+                _c.DictWriter(f, fn).writeheader()
+                _c.DictWriter(f, fn).writerows(rows)
+            print(f"[DIAG_CSV] CSV 写入成功")  # ← 添加
+                
+        except Exception as e:
+            print(f"[DIAG_CSV] CSV 追加失败: {type(e).__name__}: {e}")  # ← 改为 print
     
     def _on_val_end(self, trainer):
         """验证结束后：提取并缓存每类别的性能指标（AP / Precision / Recall）"""

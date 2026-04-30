@@ -218,7 +218,6 @@ def _find_auto_resume(project: str, name: str, root: Path) -> Optional[Path]:
 def _pre_cuda_gc():
     cleanup_gpu_resources()
 
-
 def _build_train_args(
     train_cfg: Dict[str, Any],
     output_cfg: Dict[str, Any],
@@ -226,39 +225,35 @@ def _build_train_args(
     root: Path,
     allow_overwrite: bool = False,
 ) -> Dict[str, Any]:
-    # Resolve data YAML under project root when possible so Ultralytics sees the correct file
     data_yaml = str(_resolve_under_root(train_cfg.get("data_yaml", "coco128.yaml"), root))
 
+    # 【排查】先用最小参数集，确认数据加载是否正常
     train_args = {
-        "data": data_yaml,  # ← 恢复为字符串，不要传字典
+        "data": data_yaml,
         "epochs": int(train_cfg.get("epochs", 10)),
         "imgsz": int(train_cfg.get("imgsz", 640)),
         "batch": int(train_cfg.get("batch", 16)),
         "workers": _TRAIN_LOADER_WORKERS,
-        "device": train_cfg.get("device", 0),
-        "lr0": float(train_cfg.get("lr0", 0.01)),
-        "lrf": float(train_cfg.get("lrf", 0.1)),
-        "warmup_epochs": int(train_cfg.get("warmup_epochs", 3)),
-        "mosaic": float(train_cfg.get("mosaic", 0.8)),
-        "mixup": float(train_cfg.get("mixup", 0.1)),
-        "close_mosaic": int(train_cfg.get("close_mosaic", 1)),
-        "amp": bool(train_cfg.get("amp", True)),
         "project": output_cfg.get("project", "runs"),
         "name": output_cfg.get("name", "exp"),
         "exist_ok": bool(allow_overwrite),
         "verbose": True,
-        "plots": False,
-        **({"resume": str(resume_path)} if resume_path is not None else {}),
     }
-    invalid_yolo_args = {"cls_pw", "export_path", "format", "source", "output_dir", "save_dir"}
-    for key, value in (train_cfg or {}).items():
-        if key in _TRAINING_STRUCTURAL_KEYS or key in invalid_yolo_args:
-            continue
-        if value is None:
-            continue
-        train_args[key] = value
+    
+    # 如果最小参数集正常，再逐个加回以下参数测试
+    # optional = {
+    #     "device": train_cfg.get("device", 0),
+    #     "lr0": float(train_cfg.get("lr0", 0.01)),
+    #     "lrf": float(train_cfg.get("lrf", 0.1)),
+    #     "warmup_epochs": int(train_cfg.get("warmup_epochs", 3)),
+    #     "mosaic": float(train_cfg.get("mosaic", 0.8)),      # ← 最可疑
+    #     "mixup": float(train_cfg.get("mixup", 0.1)),        # ← 次可疑
+    #     "close_mosaic": int(train_cfg.get("close_mosaic", 1)), # ← 次可疑
+    #     "amp": bool(train_cfg.get("amp", True)),
+    #     "plots": False,
+    # }
+    
     return train_args
-
 
 def _to_bool(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -419,16 +414,27 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     _setup_wandb_env(wandb_cfg, output_cfg, resume_path)
 
     try:
-        results = student_model.train(trainer=AdaptiveKDTrainer, **train_args)
+        # 【关键修复】直接实例化 AdaptiveKDTrainer，不通过 model.train()
+        # 旧代码：results = student_model.train(AdaptiveKDTrainer, **train_args)
+        if "model" not in train_args:
+            train_args["model"] = student_weight
+        
+        trainer = AdaptiveKDTrainer(overrides=train_args)
+        results = trainer.train()
+        student_model.trainer = trainer
+ 
     except Exception as e:
         msg = str(e).lower()
         if resume_path and ("nothing to resume" in msg or "finished, nothing to resume" in msg):
             print("[RESUME] 检测到 checkpoint 已训练完成，自动切换为新训练模式并重建学生模型。", flush=True)
             train_args.pop("resume", None)
-            # 首次 resume 失败后，AdaptiveKDTrainer 可能已对模型类做过 loss 注入；
-            # 这里重建模型实例，避免沿用潜在污染状态。
             student_model = YOLO(student_weight)
-            results = student_model.train(trainer=AdaptiveKDTrainer, **train_args)
+            # resume 也使用直接实例化
+            if "model" not in train_args:
+                train_args["model"] = student_weight
+            trainer = AdaptiveKDTrainer(overrides=train_args)
+            results = trainer.train()
+            student_model.trainer = trainer
         else:
             raise
 
