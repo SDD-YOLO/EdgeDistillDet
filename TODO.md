@@ -49,3 +49,373 @@ chart['lr_series']['pg0'].append(_as_float(row.get('lr/pg0')) or 0)
 这些列名（如  metrics/mAP50(B) 、 lr/pg0 ）是硬编码的。如果 Ultralytics 版本升级导致列名变化（例如去掉括号、改变大小写），所有指标都会读取为  0  而不是真实值。此时图表会显示为全零直线，看起来就像"没数据"。
 
 [ ]TraingingPanel拆解模块
+
+EdgeDistillDet 底层框架优化分析报告
+
+涵盖范围: 后端架构、API 层、核心训练模块、前端工程化、依赖管理、安全运维
+
+---
+
+一、指标监控显示为 0 的问题分析与修复
+
+1.1 根因定位
+
+问题出在 `web/services/backend_common.py` 的 `_build_metric_series` 函数中：指标数据提取使用了硬编码的 Ultralytics YOLOv8 默认列名，且对空值使用 `or 0` 回退。
+
+```python
+# 硬编码列名 + or 0 回退（原代码）
+chart['map_series']['map50'].append(_as_float(row.get('metrics/mAP50(B)')) or 0)
+chart['map_series']['map50_95'].append(_as_float(row.get('metrics/mAP50-95(B)')) or 0)
+chart['precision_recall']['precision'].append(_as_float(row.get('metrics/precision(B)')) or 0)
+```
+
+1.2 具体原因
+
+场景	说明	
+YOLO 版本差异	YOLOv6/v9 等版本的 `results.csv` 列名可能不带 `(B)` 后缀，如 `metrics/mAP50`	
+列名前缀差异	某些版本使用 `val/box_loss` 而非 `train/box_loss`	
+`or 0` 回退	列名不匹配时，`row.get()` 返回 `None`，`or 0` 使其变成 `0`	
+后端 summary 同样受影响	`_summarize_series` 中也使用相同硬编码列名	
+
+1.3 不同 YOLO 版本的列名对比
+
+指标	YOLOv8 格式	YOLOv6/v9 格式	
+mAP50	`metrics/mAP50(B)`	`metrics/mAP50`	
+mAP50-95	`metrics/mAP50-95(B)`	`metrics/mAP50-95`	
+Precision	`metrics/precision(B)`	`metrics/precision`	
+Recall	`metrics/recall(B)`	`metrics/recall`	
+Box Loss	`train/box_loss`	`box_loss`	
+
+1.4 修复方案
+
+1.4.1 添加列名自动探测与兼容映射
+
+在 `web/services/backend_common.py` 中添加列名解析辅助函数和映射表：
+
+```python
+def _resolve_column_name(columns, candidates):
+    """从实际 CSV 列名中匹配候选列名"""
+    if not columns:
+        return None
+    col_map = {col.lower().strip(): col for col in columns}
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+        lookup = candidate.lower().strip()
+        if lookup in col_map:
+            return col_map[lookup]
+    return None
+
+_METRIC_COLUMN_ALIASES = {
+    'box_loss': ['train/box_loss', 'box_loss', 'train_box_loss'],
+    'cls_loss': ['train/cls_loss', 'cls_loss', 'train_cls_loss'],
+    'dfl_loss': ['train/dfl_loss', 'dfl_loss', 'train_dfl_loss'],
+    'map50': ['metrics/mAP50(B)', 'metrics/mAP50', 'mAP50', 'map50'],
+    'map50_95': ['metrics/mAP50-95(B)', 'metrics/mAP50-95', 'mAP50-95', 'map50_95'],
+    'precision': ['metrics/precision(B)', 'metrics/precision', 'precision'],
+    'recall': ['metrics/recall(B)', 'metrics/recall', 'recall'],
+    'lr_pg0': ['lr/pg0', 'lr_pg0'],
+    'lr_pg1': ['lr/pg1', 'lr_pg1'],
+    'lr_pg2': ['lr/pg2', 'lr_pg2'],
+}
+```
+
+1.4.2 重写 `_build_metric_series`
+
+使用动态列名探测替代硬编码：
+
+```python
+def _build_metric_series(rows, columns, run_dir):
+    col = {}
+    for metric_key, aliases in _METRIC_COLUMN_ALIASES.items():
+        col[metric_key] = _resolve_column_name(columns, aliases)
+    
+    for row in rows:
+        epoch = _as_float(row.get('epoch'))
+        if epoch is None:
+            continue
+        # 动态提取指标，列不存在时保留 None
+        m50_val = _as_float(row.get(col['map50'])) if col['map50'] else None
+        # ... 其他指标同理
+```
+
+1.4.3 同步修复 `backend_metrics.py` 中的 summary 指标
+
+```python
+_summary_metric_map = [
+    ('box_loss', ['train/box_loss', 'box_loss', 'train_box_loss'], 'lower'),
+    ('map50', ['metrics/mAP50(B)', 'metrics/mAP50', 'mAP50', 'map50'], 'higher'),
+    # ...
+]
+for key, aliases, better in _summary_metric_map:
+    actual_col = _resolve_column_name(columns, aliases)
+    if not actual_col:
+        continue
+```
+
+---
+
+二、架构层优化
+
+2.1 引入状态持久化层（最高优先级）
+
+现状：所有状态通过文件系统管理，每次 API 请求都重新 `os.walk` 扫描并解析 CSV。
+
+问题：
+- 高并发时大量磁盘 I/O
+- 没有历史数据的增量更新机制
+- 训练状态依赖文件系统，不可靠
+
+优化方案：
+- 引入 SQLite 或 TinyDB 作为元数据存储层
+- 训练运行时写入数据库，Web 端从数据库读取
+- 文件系统保留为原始数据源，数据库作为查询缓存层
+- 可选：使用 SQLAlchemy + Alembic 做 ORM 和迁移管理
+
+2.2 引入任务队列替代子进程管理
+
+现状：`backend_train_runtime.py` 使用 `subprocess.Popen` + 文件锁管理训练进程。
+
+优化方案：
+- 使用 Celery + Redis 或 RQ 将训练任务异步化
+- 好处：天然支持任务状态追踪、重试、并发控制、结果回调
+- WebSocket 推送训练进度时，从任务队列消费事件而非轮询文件
+
+2.3 拆分 God Class
+
+现状：`backend_common.py` 636 行，混合了 CSV 解析、YAML 读写、路径扫描、模型估算、checkpoint 管理等十几种职责。
+
+建议拆分结构：
+
+```
+web/services/
+├── io/               # 文件读写（csv, yaml, json）
+├── scan/             # 目录扫描、checkpoint 发现
+├── metrics/          # 指标计算与汇总
+├── profile/          # 模型参数量/GFLOPs 估算
+├── config/           # 配置验证与解析
+└── cache/            # 缓存层
+```
+
+---
+
+三、API 层优化
+
+3.1 统一配置管理（Pydantic Settings）
+
+现状：`settings.py` 手工读取环境变量，无类型验证、无默认值提示。
+
+优化方案：
+
+```python
+from pydantic_settings import BaseSettings
+
+class AppSettings(BaseSettings):
+    host: str = "127.0.0.1"
+    port: int = 5000
+    cors_origins: list[str] = []
+    db_path: str = "./data/app.db"
+    
+    class Config:
+        env_prefix = "EDGE_"
+        env_file = ".env"
+
+settings = AppSettings()
+```
+
+3.2 增加 API 基础设施
+
+现状缺失：
+- 统一响应格式
+- 全局异常处理中间件
+- 请求日志/追踪
+- API 认证
+- 限流（Rate Limiting）
+
+优化方案：
+
+```python
+# 统一响应模型
+class ResponseModel[T](BaseModel):
+    code: int = 0
+    data: T | None = None
+    message: str = "ok"
+
+# 全局异常处理
+@app.exception_handler(ValidationError)
+async def validation_exception_handler(request, exc): ...
+
+# 限流
+from slowapi import Limiter
+limiter = Limiter(key_func=lambda: "global")
+```
+
+3.3 WebSocket 与 FastAPI 原生集成
+
+现状：`websocket_server.py` 是独立模块，使用自定义 `ConnectionManager` + `threading.Lock`。
+
+优化方案：
+- 使用 FastAPI 原生 `@app.websocket("/ws/train")`
+- 用 `asyncio.Queue` 替代线程锁做消息广播
+- 集成到 `app.py` 中，无需单独运行
+
+---
+
+四、核心训练层优化
+
+4.1 指标采集管道化
+
+现状：训练指标通过 Ultralytics 的 `results.csv` 被动写入，Web 端主动轮询文件。
+
+优化方案：
+
+实现 Ultralytics 回调系统直接推送指标：
+
+```python
+# core/distillation/callbacks.py
+class MetricsCallback:
+    def on_train_epoch_end(self, trainer):
+        epoch = trainer.epoch
+        metrics = trainer.metrics
+        # 直接写入 DB 或推送到 WebSocket
+        push_metrics(epoch, metrics)
+```
+
+4.2 模型版本管理
+
+现状：`yolo26n.pt` 直接放在仓库根目录，Git 管理二进制权重效率极低。
+
+优化方案：
+- 使用 Git LFS 或从 HuggingFace 按需下载
+- 提供 `scripts/download_models.py` 脚本
+- 在 `.gitignore` 中排除 `*.pt`
+
+---
+
+五、前端层优化
+
+5.1 状态管理升级
+
+现状：`MetricsPanel.jsx` 733 行，组件内部状态过多。
+
+优化方案：
+- 引入轻量级状态管理库（Zustand 或 Jotai）
+- 将 metrics、training、config 等状态拆分为独立 store
+
+5.2 API 客户端增强
+
+优化方案：
+- 使用 TanStack Query (React Query) 替代手写 `useEffect` 轮询
+- 增加请求拦截器、重试机制、请求取消
+
+5.3 前端性能优化
+
+- 使用 `useMemo` / `useCallback` 避免重复渲染
+- Chart.js 数据量大时考虑虚拟化或采样
+- 使用 `React.lazy` 做路由级代码分割
+
+---
+
+六、依赖与工程化优化
+
+6.1 依赖瘦身
+
+现状：同时依赖 PyTorch、TensorFlow、ONNXRuntime、OpenVINO、MNN、NCNN、CoreML，体积巨大。
+
+优化方案：按功能拆分 extras：
+
+```toml
+[project.optional-dependencies]
+tf = ["tensorflow>=2.16.0"]
+edge = ["openvino>=2024.0.0", "nncf>=2.19.0", "MNN>=3.0.0"]
+ml = ["coremltools>=8.0.0"]
+dev = ["pytest", "black", "ruff", "mypy"]
+```
+
+6.2 代码质量工具链
+
+工具	用途	
+Ruff	替代 flake8 + black，极速 Lint 和格式化	
+mypy	严格类型检查	
+pre-commit	提交前自动格式化和检查	
+pytest + coverage	测试框架和覆盖率	
+
+6.3 日志系统结构化
+
+现状：大量使用 `print()` 和普通 `logging`，格式不统一。
+
+优化方案：
+
+```python
+import structlog
+
+logger = structlog.get_logger()
+logger.info("training_started", epoch=10, loss=0.5, gpu="cuda:0")
+# 输出 JSON 格式，便于 ELK/Loki 收集
+```
+
+---
+
+七、安全与运维优化
+
+7.1 CORS 与安全性
+
+现状：`allow_methods=["*"], allow_headers=["*"]` 过于宽松。
+
+优化：显式声明允许的方法和头，生产环境关闭 `*`。
+
+7.2 健康检查与监控
+
+新增 `/health` 端点：
+
+```python
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "db": check_db(),
+        "gpu": check_gpu(),
+        "queue": check_task_queue()
+    }
+```
+
+7.3 容器化
+
+提供 `Dockerfile` 和 `docker-compose.yml`：
+
+```yaml
+services:
+  app:
+    build: .
+    ports: ["5000:5000"]
+    volumes:
+      - ./runs:/app/runs
+      - ./data:/app/data
+  redis:
+    image: redis:alpine
+```
+
+---
+
+八、优化路线图
+
+阶段	优先级	内容	预计投入	
+P0	立即	指标列名动态探测修复、统一错误处理、拆分 `backend_common.py`	1-2 天	
+P1	短期	引入 SQLite 元数据缓存、Celery 任务队列、Pydantic Settings 重构	1-2 周	
+P2	中期	FastAPI WebSocket 原生集成、前端 TanStack Query + Zustand、依赖瘦身	2-3 周	
+P3	长期	Docker 容器化、结构化日志、完整测试覆盖、监控告警体系	1 个月+	
+
+---
+
+附录：涉及修改的文件清单
+
+文件路径	修改类型	说明	
+`web/services/backend_common.py`	重构	添加列名探测、拆分职责	
+`web/services/backend_metrics.py`	修改	summary 指标动态列名	
+`web/services/metrics_service.py`	可选	接入数据库缓存层	
+`web/app.py`	修改	集成 WebSocket、增加中间件	
+`web/core/settings.py`	重构	Pydantic Settings	
+`web/websocket_server.py`	重构	迁移到 FastAPI 原生 WebSocket	
+`pyproject.toml`	修改	拆分 optional-dependencies	
+`core/distillation/`	新增	训练回调推送指标	
+`web/src/features/metrics/`	优化	前端状态管理和 API 调用
