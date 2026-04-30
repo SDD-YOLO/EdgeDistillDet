@@ -58,7 +58,7 @@ training:
   mode: train
   time: 0
   patience: 100
-  save: true
+  save: tre
   save_period: -1
   cache: false
   exist_ok: false
@@ -74,7 +74,7 @@ training:
   profile: false
   multi_scale: false
   compile: false
-  val: false
+  val: true
   save_json: false
   conf: 0
   iou: 0
@@ -141,7 +141,7 @@ training:
   workers: 0
 output:
   project: runs
-  name: exp35
+  name: exp36
 wandb:
   enabled: false
   mode: online

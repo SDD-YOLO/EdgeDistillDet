@@ -7,7 +7,14 @@ from pathlib import Path
 from fastapi import Query
 
 from web.core.paths import BASE_DIR
-from web.services.backend_common import _as_float, _build_metric_series, _estimate_run_stats, _load_csv_summary, _summarize_series
+from web.services.backend_common import (
+    _as_float,
+    _build_metric_series,
+    _estimate_run_stats,
+    _load_csv_summary,
+    _resolve_column_name,
+    _summarize_series,
+)
 
 
 def _calc_total_time_with_resumes(rows: list[dict]) -> tuple[float | None, int]:
@@ -102,7 +109,7 @@ def get_metrics(source: str = Query('')):
                             continue
                         try:
                             s = _summarize_series(rows, actual_col, better=better)
-                           if s is not None:
+                            if s is not None:
                                 summary_metrics[key] = s
                         except Exception:
                             pass

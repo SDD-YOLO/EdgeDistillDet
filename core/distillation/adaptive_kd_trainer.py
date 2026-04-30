@@ -118,86 +118,21 @@ def _format_progress_bar(completed, total, width=24):
     filled = int(round(ratio * width))
     return '[' + '#' * filled + '-' * (width - filled) + ']'
 
-
-def _find_trainer_for_model(model):
-    """
-    安全查找与给定模型关联的 trainer。
-    
-    【断点续训场景】ultralytics 在 resume_training() 时可能替换 self.model，
-    此时直接用新模型查 _KD_TRAINERS 会失败。需要遍历查找匹配的 trainer。
-    """
-    # 直接查找（正常路径）
-    trainer = _KD_TRAINERS.get(model)
-    if trainer is not None:
-        return trainer
-    
-    # 回退：通过 id 查找（断点续训时模型可能被替换但 trainer 仍存在）
-    # 检查是否有 trainer 的 self.model 与传入的 model 是同一对象或 id 匹配
-    for registered_model, t in list(_KD_TRAINERS.items()):
-        if t is not None and getattr(t, 'model', None) is not None:
-            if t.model is model or id(t.model) == id(model):
-                # 更新注册表，让后续调用走快速路径
-                _KD_TRAINERS[model] = t
-                return t
-    
-    return None
-
-
-def _distill_model_loss(model, batch, preds=None):
-    """
-    注入到 DetectionModel.loss 的蒸馏包装器。
-
-    【重要】ultralytics 训练循环中调用链：
-      model(batch) → BaseModel.forward(dict) → model.loss(batch)   ← 注意：不传 preds！
-      或 compile 模式：model(img) → model.loss(batch, preds=preds) ← 只有 compile 才传 preds
-
-    此函数确保无论哪种模式，都正确缓存学生预测并传递给 trainer.get_loss()。
-    """
-    trainer = _find_trainer_for_model(model)
-    if trainer is not None:
-        # 将当前 batch 存入 trainer
-        trainer._batch = batch
-
-        # 【核心修复】当 preds 为空时（非 compile 模式的默认情况），
-        # 主动计算学生预测并缓存，避免蒸馏阶段回退到双重前向传播。
-        # 【关键】必须使用 model(img) 而非 model.predict(img)！
-        #   model.predict() 内部使用 torch.no_grad()，返回的预测无梯度 → 反向传播失效！
-        #   model(img) 保留计算图，确保蒸馏损失梯度能正确回传给学生模型参数。
-        if preds is None:
-            img = batch['img']
-            device_type = img.device.type
-            with torch.amp.autocast(device_type, enabled=trainer.args.amp if hasattr(trainer, 'args') else False):
-                preds = model(img.float())
-
-        trainer._cached_student_preds = preds  # 缓存学生预测供 get_loss 复用
-        return trainer.get_loss()
-
-    # 无 trainer 注册时的安全回退（不应发生，但保留以防万一）
-    original_loss_fn = getattr(type(model), '_distill_original_loss', None)
-    if original_loss_fn is None:
-        raise RuntimeError("Distill loss wrapper invoked without registered trainer")
-    return original_loss_fn(model, batch, preds=preds)
-
-
 def _resolve_original_model_loss(model):
     """
-    解析 DetectionModel 的真实原始 loss 函数（防止异常重试后把包装器误当原始函数）。
+    解析 DetectionModel 的真实原始 loss 函数。
     """
     current_loss = getattr(model, "loss", None)
     if current_loss is None:
         return None
-
-    current_fn = current_loss.__func__ if hasattr(current_loss, "__func__") else current_loss
-    if current_fn is not _distill_model_loss:
-        return current_loss
-
+    
+    # 直接从 type 上获取备份的原始 loss
     original_fn = getattr(type(model), "_distill_original_loss", None)
-    if original_fn is None:
-        return current_loss
-
-    # 将函数重新绑定到当前 model 实例，保持调用签名一致
-    return original_fn.__get__(model, type(model))
-
+    if original_fn is not None:
+        return original_fn.__get__(model, type(model)) if hasattr(original_fn, '__get__') else original_fn
+    
+    # 没有备份，就返回当前的（首次 setup 时）
+    return current_loss
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 主训练器 — v3: 纯 get_loss 重写，零模型污染
@@ -282,13 +217,10 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._init_distill()
         logger.info(f"[INIT 5/6] 蒸馏损失函数 + 调度器 就绪 ✓")
 
-        # 为模型注入蒸馏损失包装器，并保留原始 loss 方法以便热身阶段和权重保存。
-        _KD_TRAINERS[self.model] = self
-        original_loss_fn = self._orig_loss.__func__ if hasattr(self._orig_loss, '__func__') else self._orig_loss
-        type(self.model).loss = _distill_model_loss
-        type(self.model)._distill_original_loss = original_loss_fn
-        self._class_loss_backup = original_loss_fn
-        logger.warning("[DEBUG] AdaptiveKDTrainer patched DetectionModel.loss for distillation")
+        # 不再替换 model.loss — Ultralytics 8.4.19 使用 criterion 计算损失，
+        # 替换 model.loss 会导致 criterion 内部拿到的 preds 格式错误。
+        # 蒸馏逻辑完全通过重写的 get_loss() 注入。
+        logger.info("[DEBUG] AdaptiveKDTrainer 使用 get_loss() 注入蒸馏逻辑（不修改 model.loss）")
 
         return ckpt  # 返回 checkpoint 供 _setup_train 中 resume_training() 使用
 
@@ -528,19 +460,18 @@ class AdaptiveKDTrainer(DetectionTrainer):
     # 可选：兼容旧版 ultralytics 的 get_loss 扩展点
     # 当前训练流程实际通过 DetectionModel.loss 注入蒸馏损失
     # ══════════════════════════════════════════════════════════════════════════
-    def get_loss(self):
+    def get_loss(self, batch, preds=None):
         """
         重写损失计算：warm-up 用原始损失，之后注入蒸馏损失。
-        
-        【v4 内存修复】关键改进：
-          - 通过 _cached_student_preds 复用 ultralytics 外层 model(batch) 已计算的学生预测
-          - 蒸馏阶段不再额外调用 self.model(img)，消除双重前向传播
-          - 显存占用降低 ~50%
         """
         if self._orig_loss is None:
             if hasattr(super(), 'get_loss'):
-                return super().get_loss()
+                return super().get_loss(batch, preds)
             raise RuntimeError("Distill trainer missing original model loss function")
+
+        # 确保 preds 已计算（从 train_one_epoch 传入）
+        if preds is None:
+            preds = self.model(batch['img'])
 
         # 输出批次进度（节流：每 epoch 最多 ~10 条日志）
         epoch = getattr(self, 'epoch', 0)
@@ -567,12 +498,10 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 f"phase={phase}"
             )
 
-        # Warm-up 阶段：复用 _distill_model_loss 里已算好的学生预测，避免同 batch 二次前向
-        batch = self._batch
+        # Warm-up 阶段：直接使用传入的 preds 计算原始损失
         if warm_phase:
-            warm_preds = self._cached_student_preds
             try:
-                loss, loss_items = self._orig_loss(batch, preds=warm_preds)
+                loss, loss_items = self._orig_loss(batch, preds=preds)
             except TypeError:
                 try:
                     loss, loss_items = self._orig_loss(batch, preds=batch.get('preds') if isinstance(batch, dict) else None)
@@ -581,9 +510,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
             self._accumulate_losses(task_loss=loss)
             return loss, loss_items
 
-        # ════════════════════════════════════════════════════════
-        # 蒸馏阶段（epoch >= warm_epochs）— v4 内存优化版
-        # ════════════════════════════════════════════════════════
+        # 蒸馏阶段（epoch >= warm_epochs）
         if not self._distill_entered:
             self._distill_entered = True
             logger.info(f"[DISTILL] 进入蒸馏阶段 epoch={epoch}")
@@ -591,17 +518,9 @@ class AdaptiveKDTrainer(DetectionTrainer):
         img = batch['img']
         device_type = img.device.type
 
-        # 【v4核心】复用 ultralytics 外层已计算的学生预测，避免额外前向！
-        student_preds = self._cached_student_preds
-        if student_preds is None:
-            # 极端情况回退：外层未传递 preds（理论上不应发生）
-            logger.warning("[DISTILL] 缓存预测为空，执行回退前向（应避免此路径）")
-            with torch.amp.autocast(device_type, enabled=False):
-                student_preds = self.model(img.float())
-
+        # 计算原始任务损失（使用传入的 preds）
         try:
-            # 原始任务损失（复用学生预测）
-            loss_task, loss_items = self._orig_loss(batch, preds=student_preds)
+            loss_task, loss_items = self._orig_loss(batch, preds=preds)
         except Exception as e:
             logger.warning(f"[DISTILL] _orig_loss(preds=...) 失败 ({e})，尝试无参调用")
             loss_task, loss_items = self._orig_loss(batch)
@@ -612,19 +531,18 @@ class AdaptiveKDTrainer(DetectionTrainer):
             with torch.amp.autocast(device_type, enabled=False):
                 teacher_preds = self.teacher_model(teacher_img)
 
-        # 蒸散损失计算
+        # 蒸馏损失计算
         num_classes = getattr(self.model, 'nc', 80)
         current_temp = self._temp_scheduler.current_temperature
         loss_distill, _detail = self._distill_loss(
-            student_preds=student_preds,
+            student_preds=preds,
             teacher_preds=teacher_preds,
             num_classes=num_classes,
             temperature=current_temp,
         )
 
-        # 立即释放中间张量，回收显存
-        del student_preds, teacher_preds
-        self._cached_student_preds = None  # 清除缓存引用
+        # 立即释放中间张量
+        del teacher_preds
         if device_type == 'cuda':
             torch.cuda.empty_cache()
 
@@ -635,7 +553,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._accumulate_losses(task_loss=loss_task, kd_loss=loss_distill)
 
         return total_loss, loss_items
-    
+   
     def _setup_train(self):
         """重写 setup_train：全程锁定 workers=0，避免 DataLoader 子进程与主训练争内存。"""
         self.args.workers = 0
