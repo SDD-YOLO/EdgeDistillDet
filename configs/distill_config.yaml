@@ -138,7 +138,7 @@ training:
   nms: false
 output:
   project: runs
-  name: exp2
+  name: exp4
 wandb:
   enabled: false
   mode: online

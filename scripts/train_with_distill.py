@@ -227,8 +227,14 @@ def _build_train_args(
 ) -> Dict[str, Any]:
     data_yaml = str(_resolve_under_root(train_cfg.get("data_yaml", "coco128.yaml"), root))
 
-    # 【排查】先用最小参数集，确认数据加载是否正常
-    train_args = {
+    # 有害参数：这些会干扰 ultralytics
+    harmful_args = {
+        "cls_pw", "export_path", "format", "source", "output_dir", "save_dir",
+        "mode", "task", "time",
+        "compute_provider", "cloud_api", "dataset_api", "data_yaml",
+    }
+
+    train_args: Dict[str, Any] = {
         "data": data_yaml,
         "epochs": int(train_cfg.get("epochs", 10)),
         "imgsz": int(train_cfg.get("imgsz", 640)),
@@ -238,21 +244,21 @@ def _build_train_args(
         "name": output_cfg.get("name", "exp"),
         "exist_ok": bool(allow_overwrite),
         "verbose": True,
+        "val": True,
+        "plots": True,
+        "save": True,
     }
-    
-    # 如果最小参数集正常，再逐个加回以下参数测试
-    # optional = {
-    #     "device": train_cfg.get("device", 0),
-    #     "lr0": float(train_cfg.get("lr0", 0.01)),
-    #     "lrf": float(train_cfg.get("lrf", 0.1)),
-    #     "warmup_epochs": int(train_cfg.get("warmup_epochs", 3)),
-    #     "mosaic": float(train_cfg.get("mosaic", 0.8)),      # ← 最可疑
-    #     "mixup": float(train_cfg.get("mixup", 0.1)),        # ← 次可疑
-    #     "close_mosaic": int(train_cfg.get("close_mosaic", 1)), # ← 次可疑
-    #     "amp": bool(train_cfg.get("amp", True)),
-    #     "plots": False,
-    # }
-    
+
+    # 透传所有训练参数（只过滤有害参数）
+    for key, value in (train_cfg or {}).items():
+        if key in _TRAINING_STRUCTURAL_KEYS or key in harmful_args:
+            continue
+        if value is not None and key not in train_args:
+            train_args[key] = value
+
+    if resume_path is not None:
+        train_args["resume"] = str(resume_path)
+
     return train_args
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -414,14 +420,11 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     _setup_wandb_env(wandb_cfg, output_cfg, resume_path)
 
     try:
-        # 【关键修复】直接实例化 AdaptiveKDTrainer，不通过 model.train()
-        # 旧代码：results = student_model.train(AdaptiveKDTrainer, **train_args)
-        if "model" not in train_args:
-            train_args["model"] = student_weight
-        
-        trainer = AdaptiveKDTrainer(overrides=train_args)
-        results = trainer.train()
-        student_model.trainer = trainer
+        # 通过 model.train() 传入 trainer，确保 ultralytics 回调完整注册
+        results = student_model.train(
+            trainer=AdaptiveKDTrainer,
+            **train_args
+        )
  
     except Exception as e:
         msg = str(e).lower()
@@ -429,12 +432,10 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
             print("[RESUME] 检测到 checkpoint 已训练完成，自动切换为新训练模式并重建学生模型。", flush=True)
             train_args.pop("resume", None)
             student_model = YOLO(student_weight)
-            # resume 也使用直接实例化
-            if "model" not in train_args:
-                train_args["model"] = student_weight
-            trainer = AdaptiveKDTrainer(overrides=train_args)
-            results = trainer.train()
-            student_model.trainer = trainer
+            results = student_model.train(
+                trainer=AdaptiveKDTrainer,
+                **train_args
+            )
         else:
             raise
 

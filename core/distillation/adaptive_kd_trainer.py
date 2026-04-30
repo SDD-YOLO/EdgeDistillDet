@@ -168,7 +168,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
         
         super().__init__(cfg, overrides, _callbacks)
         
-        # 初始化蒸馏状态
+        # 蒸馏组件
         self.teacher_model = None
         self._distill_loss = None
         self._temp_scheduler = None
@@ -187,11 +187,15 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._orig_loss = None
         self._accum_task_loss = []
         self._accum_kd_loss = []
-        self._batch_count = 0          # ← 新增
-        self._last_log_batch = 0       # ← 新增（如果用到）
-        self._distill_log = []     
         
-        # 【新增】在 __init__ 中直接加载蒸馏组件
+        # 【关键】Epoch 统计
+        self._epoch_task_loss = 0.0
+        self._epoch_kd_loss = 0.0
+        self._batch_count = 0
+        self._distill_log = []
+        self._last_log_batch = 0
+        
+        # 加载蒸馏组件
         self._setup_distill_from_class_params()
 
     def _setup_distill_from_class_params(self):
@@ -223,43 +227,23 @@ class AdaptiveKDTrainer(DetectionTrainer):
         print("[INIT] 蒸馏损失函数 + 调度器 就绪 ✓")
     
     def setup_model(self):
-        print("[DIAG] ===== setup_model() 被调用了！=====")  # ← 添加这行
         ckpt = super().setup_model()
-        logger.info("[INIT 5/6] 检测模型就绪 → 初始化蒸馏组件...")
-
+        logger.info("[INIT] 检测模型就绪")
+        
         # 【关键】保存原始 loss 函数引用
         self._orig_loss = _resolve_original_model_loss(self.model)
         if self._orig_loss is None:
             logger.error("[FATAL] 找不到 model.loss!")
-            return ckpt
-
-        # 【修复】只在配置了教师路径时才加载蒸馏组件
-        kd = AdaptiveKDTrainer._kd_class_params
-        if kd and kd.get("teacher_path"):
-            self._teacher_path = kd["teacher_path"]
-            self._warm_epochs = int(kd.get("warm_epochs", 5))
-            self._w_kd = float(kd.get("w_kd", 0.5))
-            self._w_focal = float(kd.get("w_focal", 0.3))
-            self._w_feat = w_feat_to_scalar(kd.get("w_feat", 0.0))
-            self._T_max = float(kd.get("T_max", 6.0))
-            self._T_min = float(kd.get("T_min", 1.5))
-            self._alpha_init = float(kd.get("alpha_init", 0.5))
-            self._scale_boost = float(kd.get("scale_boost", 2.0))
-            self._focal_gamma = float(kd.get("focal_gamma", 2.0))
-            logger.info(
-                f"蒸馏参数 | teacher={os.path.basename(self._teacher_path)} | "
-                f"α={self._alpha_init} T=[{self._T_max},{self._T_min}]"
-            )
-
-            logger.info(f"[INIT 5/6] 加载教师模型: {os.path.basename(self._teacher_path)} ...")
+        
+        # 如果 _setup_distill_from_class_params 已加载，不再重复
+        if self.teacher_model is not None:
+            logger.info("[INIT] 蒸馏组件已在 __init__ 中加载，跳过重复初始化")
+        elif self._teacher_path and os.path.exists(self._teacher_path):
+            # 兜底：如果 __init__ 中未加载（如 teacher_path 当时不存在），在这里补加载
+            logger.info(f"[INIT] 补加载教师模型: {os.path.basename(self._teacher_path)}")
             self._load_teacher()
             self._init_distill()
-            logger.info(f"[INIT 5/6] 蒸馏损失函数 + 调度器 就绪 ✓")
-        else:
-            logger.info("[INIT 5/6] 无教师模型配置 → 以标准检测模式训练")
-
-        logger.info("[DEBUG] AdaptiveKDTrainer 使用 criterion() / get_loss() 注入蒸馏逻辑")
-
+        
         return ckpt
 
     def _load_teacher(self):
@@ -514,10 +498,9 @@ class AdaptiveKDTrainer(DetectionTrainer):
         重写 criterion() —— ultralytics 8.4.19 训练循环的实际调用路径。
         在标准检测损失基础上注入蒸馏损失。
         """
-        # 【兼容】首次调用时初始化 compute_loss（继承 DetectionTrainer 逻辑）
+        # 初始化 compute_loss
         if not hasattr(self, 'compute_loss') or self.compute_loss is None:
-            # 让父类初始化 compute_loss
-            _ = super().criterion(preds, batch)  # 这会初始化 self.compute_loss
+            _ = super().criterion(preds, batch)
         
         # 计算标准检测损失
         loss_task, loss_items = self.compute_loss(preds, batch)
@@ -529,9 +512,12 @@ class AdaptiveKDTrainer(DetectionTrainer):
         epoch = getattr(self, 'epoch', 0)
         warm_phase = epoch < self._warm_epochs
         
-        # 累加损失（用于 epoch 统计）
-        self._epoch_task_loss += loss_task.item() if hasattr(loss_task, 'item') else float(loss_task)
-        self._batch_count += 1  # ← 关键：递增 batch_count
+        # 累加损失（添加异常保护）
+        try:
+            self._epoch_task_loss += loss_task.item() if hasattr(loss_task, 'item') else float(loss_task)
+            self._batch_count += 1
+        except Exception as e:
+            logger.warning(f"[CRITERION] 累加损失失败: {e}")
         
         # Warm-up 阶段
         if warm_phase:
@@ -542,13 +528,14 @@ class AdaptiveKDTrainer(DetectionTrainer):
             self._distill_entered = True
             logger.info(f"[DISTILL] 进入蒸馏阶段 epoch={epoch}")
         
-        # 教师模型前向 + 蒸馏损失
+        # 教师模型前向
         img = batch['img']
         device_type = img.device.type
         with torch.no_grad():
             with torch.amp.autocast(device_type, enabled=False):
                 teacher_preds = self.teacher_model(img.float())
         
+        # 蒸馏损失
         num_classes = getattr(self.model, 'nc', 80)
         current_temp = self._temp_scheduler.current_temperature
         loss_distill, _ = self._distill_loss(
@@ -558,7 +545,11 @@ class AdaptiveKDTrainer(DetectionTrainer):
             temperature=current_temp,
         )
         
-        self._epoch_kd_loss += loss_distill.item() if hasattr(loss_distill, 'item') else float(loss_distill)
+        # 累加蒸馏损失
+        try:
+            self._epoch_kd_loss += loss_distill.item() if hasattr(loss_distill, 'item') else float(loss_distill)
+        except Exception as e:
+            logger.warning(f"[CRITERION] 累加蒸馏损失失败: {e}")
         
         del teacher_preds
         if device_type == 'cuda':
@@ -567,16 +558,6 @@ class AdaptiveKDTrainer(DetectionTrainer):
         # 加权组合
         alpha = self._alpha_scheduler.current_alpha
         total_loss = (1 - alpha) * loss_task + alpha * loss_distill
-        
-        # 【关键】每个 batch 直接记录到 _distill_log
-        self._distill_log.append({
-            "epoch": epoch + 1,
-            "phase": "distill",
-            "task_loss": round(loss_task.item() if hasattr(loss_task, 'item') else float(loss_task), 6),
-            "kd_loss": round(loss_distill.item() if hasattr(loss_distill, 'item') else float(loss_distill), 6),
-            "alpha": round(alpha, 6),
-            "temperature": round(current_temp, 6),
-        })
         
         return total_loss, loss_items
 
@@ -642,11 +623,14 @@ class AdaptiveKDTrainer(DetectionTrainer):
             self._temp_scheduler.step(epoch)
 
         if batch_count > 0:
-            avg_t = self._epoch_task_loss / batch_count
-            avg_k = self._epoch_kd_loss / batch_count
-            phase = "warm" if epoch < self._warm_epochs else "distill"
+            try:
+                avg_t = self._epoch_task_loss / batch_count
+                avg_k = self._epoch_kd_loss / batch_count
+            except Exception as e:
+                logger.warning(f"[EPOCH_END] 计算平均损失失败: {e}")
+                return  # 跳过本 epoch 的日志记录
             
-            # 结构化日志行 — 前端 handleEpochProgress 可解析
+            phase = "warm" if epoch < self._warm_epochs else "distill"
             alpha_val = round(self._alpha_scheduler.current_alpha, 4)
             temp_val = round(self._temp_scheduler.current_temperature, 4)
             logger.info(
