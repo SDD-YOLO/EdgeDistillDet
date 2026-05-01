@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import os
 import re
@@ -14,6 +13,8 @@ from fastapi.responses import JSONResponse
 from core.model_metrics import estimate_gflops_from_weight, estimate_params_m_from_checkpoint
 from utils import expand_env_vars
 from web.core.paths import BASE_DIR
+from web.services.cache.csv_cache import load_csv_summary_cached as _load_csv_summary
+from web.services.io.csv_io import as_float as _as_float
 
 try:
     from utils.edge_profiler import EdgeProfiler
@@ -40,12 +41,6 @@ _CHECKPOINT_SCAN_SKIP_SUBDIRS = frozenset({
 
 def _is_warning_like(text: str) -> bool:
     return bool(re.search(r'(\bwarn(ing)?\b|警告|告警|⚠|\[W\]|^\s*W\d*:|\bignoring\b|忽略|已忽略|\bdeprecated\b)', str(text or ''), re.IGNORECASE))
-
-def _as_float(value):
-    try:
-        return float(value)
-    except Exception:
-        return None
 
 def _resolve_project_path(project: str, allow_external: bool = False) -> Path:
     project_path = Path(project)
@@ -396,15 +391,6 @@ def _estimate_run_stats(run_dir: Path):
         'ov-params': f"{params_m:.1f}" if params_m is not None else '--'
     }
 
-def _load_csv_summary(path: Path):
-    try:
-        with open(path, 'r', encoding='utf-8', newline='') as f:
-            reader = csv.DictReader(f)
-            rows = [row for row in reader]
-        return list(reader.fieldnames or []), rows
-    except Exception:
-        return [], []
-
 def _run_dir_training_fully_complete(run_dir: Path) -> bool:
     """
     判断该 run 是否已按 args.yaml 中的 epochs 跑满（最后一行 epoch 达到终态）。
@@ -609,8 +595,16 @@ def _build_metric_series(rows, columns, run_dir):
         'class_performance': None
     }
 
+    # 使用动态列名探测替代硬编码
+    col_mapping = {}
+    for metric_key, aliases in _METRIC_COLUMN_ALIASES.items():
+        col_mapping[metric_key] = _resolve_column_name(columns, aliases)
+
     has_distill_columns = any(col.startswith('distill/') for col in (columns or []))
-    distill_log_fallback = _load_distill_log_json(run_dir) if not has_distill_columns else []
+    # 改进：仅当确实没有任何有值的蒸馏列时，才加载备用文件
+    distill_log_fallback = []
+    if not has_distill_columns or columns is None:
+        distill_log_fallback = _load_distill_log_json(run_dir)
 
     distill_by_epoch = {}
     for entry in distill_log_fallback:
@@ -622,34 +616,67 @@ def _build_metric_series(rows, columns, run_dir):
             continue
 
     for row in rows:
-        epoch = _as_float(row.get('epoch'))
+        epoch_col = col_mapping.get('epoch')
+        epoch = _as_float(row.get(epoch_col)) if epoch_col else None
         if epoch is None:
             continue
         epoch_int = int(epoch)
         chart['epochs'].append(epoch_int)
-        chart['train_losses']['box_loss'].append(_as_float(row.get('train/box_loss')) or 0)
-        chart['train_losses']['cls_loss'].append(_as_float(row.get('train/cls_loss')) or 0)
-        chart['train_losses']['dfl_loss'].append(_as_float(row.get('train/dfl_loss')) or 0)
-        chart['map_series']['map50'].append(_as_float(row.get('metrics/mAP50(B)')) or 0)
-        chart['map_series']['map50_95'].append(_as_float(row.get('metrics/mAP50-95(B)')) or 0)
-        chart['lr_series']['pg0'].append(_as_float(row.get('lr/pg0')) or 0)
-        chart['lr_series']['pg1'].append(_as_float(row.get('lr/pg1')) or 0)
-        chart['lr_series']['pg2'].append(_as_float(row.get('lr/pg2')) or 0)
-        chart['precision_recall']['precision'].append(_as_float(row.get('metrics/precision(B)')) or 0)
-        chart['precision_recall']['recall'].append(_as_float(row.get('metrics/recall(B)')) or 0)
 
-        alpha_raw = row.get('distill/alpha')
-        temp_raw = row.get('distill/temperature')
-        kd_raw = row.get('distill/kd_loss')
+        # 使用动态列名，当列不存在时保留 None（而不是 0）
+        box_loss_col = col_mapping.get('box_loss')
+        chart['train_losses']['box_loss'].append(_as_float(row.get(box_loss_col)) if box_loss_col else None)
+
+        cls_loss_col = col_mapping.get('cls_loss')
+        chart['train_losses']['cls_loss'].append(_as_float(row.get(cls_loss_col)) if cls_loss_col else None)
+
+        dfl_loss_col = col_mapping.get('dfl_loss')
+        chart['train_losses']['dfl_loss'].append(_as_float(row.get(dfl_loss_col)) if dfl_loss_col else None)
+
+        map50_col = col_mapping.get('map50')
+        chart['map_series']['map50'].append(_as_float(row.get(map50_col)) if map50_col else None)
+
+        map50_95_col = col_mapping.get('map50_95')
+        chart['map_series']['map50_95'].append(_as_float(row.get(map50_95_col)) if map50_95_col else None)
+
+        lr_pg0_col = col_mapping.get('lr_pg0')
+        chart['lr_series']['pg0'].append(_as_float(row.get(lr_pg0_col)) if lr_pg0_col else None)
+
+        lr_pg1_col = col_mapping.get('lr_pg1')
+        chart['lr_series']['pg1'].append(_as_float(row.get(lr_pg1_col)) if lr_pg1_col else None)
+
+        lr_pg2_col = col_mapping.get('lr_pg2')
+        chart['lr_series']['pg2'].append(_as_float(row.get(lr_pg2_col)) if lr_pg2_col else None)
+
+        precision_col = col_mapping.get('precision')
+        chart['precision_recall']['precision'].append(_as_float(row.get(precision_col)) if precision_col else None)
+
+        recall_col = col_mapping.get('recall')
+        chart['precision_recall']['recall'].append(_as_float(row.get(recall_col)) if recall_col else None)
+
+        # 处理蒸馏指标：优先从 CSV 列读取，否则从 distill_log.json 回退
+        alpha_col = col_mapping.get('distill_alpha')
+        alpha_raw = row.get(alpha_col) if alpha_col else None
+
+        temp_col = col_mapping.get('distill_temperature')
+        temp_raw = row.get(temp_col) if temp_col else None
+
+        kd_col = col_mapping.get('distill_kd_loss')
+        kd_raw = row.get(kd_col) if kd_col else None
+
+        # 检查是否有非空蒸馏值
         has_distill_values = any(v not in (None, '') for v in (alpha_raw, temp_raw, kd_raw))
-        if has_distill_columns and has_distill_values:
+
+        if has_distill_values:
+            # CSV 中有非空蒸馏值，直接使用
             alpha_val = _as_float(alpha_raw)
             temp_val = _as_float(temp_raw)
             kd_val = _as_float(kd_raw)
-            chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [alpha_val if alpha_val is not None else None]
-            chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [temp_val if temp_val is not None else None]
-            chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [kd_val if kd_val is not None else None]
+            chart['distill_series']['alpha'] = chart['distill_series'].get('alpha', []) + [alpha_val]
+            chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [temp_val]
+            chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [kd_val]
         elif distill_by_epoch:
+            # 从 distill_log.json 回退
             de = distill_by_epoch.get(epoch_int) or distill_by_epoch.get(epoch_int - 1)
             if de:
                 alpha_val = de.get('alpha')
@@ -659,8 +686,13 @@ def _build_metric_series(rows, columns, run_dir):
                 chart['distill_series']['temperature'] = chart['distill_series'].get('temperature', []) + [_as_float(temp_val)]
                 chart['distill_series']['kd_loss'] = chart['distill_series'].get('kd_loss', []) + [_as_float(kd_val)]
             else:
+                # distill_log.json 中也没有数据，添加 None
                 for k in ('alpha', 'temperature', 'kd_loss'):
                     chart['distill_series'][k] = chart['distill_series'].get(k, []) + [None]
+        else:
+            # 没有蒸馏数据源
+            for k in ('alpha', 'temperature', 'kd_loss'):
+                chart['distill_series'][k] = chart['distill_series'].get(k, []) + [None]
 
     if chart['precision_recall']['precision'] and chart['precision_recall']['recall']:
         chart['pr_curve'] = {

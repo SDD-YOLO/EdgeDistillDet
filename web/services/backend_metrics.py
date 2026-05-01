@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import os
-from datetime import datetime
 from pathlib import Path
-
-from fastapi import Query
 
 from web.core.paths import BASE_DIR
 from web.services.backend_common import (
@@ -15,6 +11,8 @@ from web.services.backend_common import (
     _resolve_column_name,
     _summarize_series,
 )
+from web.services.cache.result_manifest_cache import load_cached_metrics_index, store_metrics_index
+from web.services.scan.results_discovery import describe_result_csv, discover_results_csvs, get_candidate_runs_directories
 
 
 def _calc_total_time_with_resumes(rows: list[dict]) -> tuple[float | None, int]:
@@ -47,42 +45,33 @@ def _calc_total_time_with_resumes(rows: list[dict]) -> tuple[float | None, int]:
     return total, reset_count
 
 
-def get_metrics(source: str = Query('')):
-    runs_dir = BASE_DIR / 'runs'
+def get_metrics(source: str = ''):
+    """
+    获取所有训练结果的指标汇总及详细数据。
+    
+    Args:
+        source: 指定具体的 results.csv 路径（相对于项目根目录）
+    
+    Returns:
+        {
+            "metrics": [...],  # 所有找到的 results.csv 摘要
+            "selected": {...}  # 如果指定了 source，返回详细数据
+        }
+    """
     base_resolved = Path(BASE_DIR).resolve()
     metrics_data = []
-    if runs_dir.exists():
-        for root, dirs, files in os.walk(str(runs_dir)):
-            for file_name in files:
-                if file_name != 'results.csv':
-                    continue
-                result_path = Path(root) / file_name
-                run_dir = result_path.parent
-                try:
-                    display_name = f"{run_dir.name} @ {datetime.fromtimestamp(run_dir.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}"
-                    rel_dir = str(run_dir.resolve().relative_to(base_resolved))
-                    rel_path = str(result_path.resolve().relative_to(base_resolved))
-                except (ValueError, OSError):
-                    continue
-                entry = {
-                    "name": run_dir.name,
-                    "display_name": display_name,
-                    "dir": rel_dir,
-                    "has_results": True,
-                    "path": rel_path
-                }
-                try:
-                    columns, rows = _load_csv_summary(result_path)
-                    entry["columns"] = columns
-                    entry["rows"] = len(rows)
-                except Exception:
-                    entry["columns"] = []
-                    entry["rows"] = 0
+
+    runs_directories = get_candidate_runs_directories(BASE_DIR)
+    cached_metrics = load_cached_metrics_index()
+    if cached_metrics is not None:
+        metrics_data = cached_metrics
+    else:
+        for result_path in discover_results_csvs(runs_directories):
+            entry = describe_result_csv(result_path, base_resolved)
+            if entry is not None:
                 metrics_data.append(entry)
-        try:
-            metrics_data.sort(key=lambda item: os.path.getmtime(str(base_resolved / item['dir'])), reverse=True)
-        except Exception:
-            pass
+        metrics_data.sort(key=lambda item: item.get('modified_time', 0.0), reverse=True)
+        store_metrics_index(metrics_data)
 
     selected_path = source.strip()
     selected_data = None

@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 5173"
+    "preview": "vite preview --port 5173",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=18.0.0",
@@ -28,11 +30,14 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.4",
+    "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.5.0",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.10",
     "tailwindcss": "^4.2.4",
     "tailwindcss-animate": "^1.0.7",
-    "vite": "^5.4.19"
+    "vite": "^5.4.19",
+    "vitest": "^4.1.5"
   }
 }

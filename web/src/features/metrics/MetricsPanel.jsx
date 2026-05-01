@@ -59,6 +59,19 @@ function minPositiveLen(...lengths) {
   return Math.min(...nums);
 }
 
+function padToLength(array, targetLen) {
+  /**
+   * 将数组补充到指定长度，缺失的位置用 null 填充。
+   * 这允许不同长度的数据数组一起显示，缺失点显示为空白而不是完全隐藏。
+   */
+  if (!Array.isArray(array)) return new Array(targetLen).fill(null);
+  const result = [...array];
+  while (result.length < targetLen) {
+    result.push(null);
+  }
+  return result.slice(0, targetLen);
+}
+
 function renderTrendIcon(trend) {
   const normalized = String(trend || "stable").toLowerCase();
   if (normalized === "up") {
@@ -640,58 +653,55 @@ function renderAllCharts(instancesRef, refs, chartSeries, ranges) {
   const distill = chartSeries?.distill_series || {};
   const prEpoch = chartSeries?.precision_recall || {};
 
-  const capLoss = minPositiveLen(
-    epochsAll.length,
-    (trainLoss.box_loss || []).length,
-    (trainLoss.cls_loss || []).length,
-    (trainLoss.dfl_loss || []).length
-  ) || epochsAll.length;
+  // ✅ 改进：移除过于严格的长度限制，允许数据缺失
+  // 前：使用 minPositiveLen 强制所有数据长度相同，导致缺任何一个就整个图表无法显示
+  // 后：直接使用 epochs 长度，缺失的数据点保留为 null
+
+  const capLoss = epochsAll.length;
   const eLoss = epochsAll.slice(0, capLoss);
   const startLoss = epochStartIndex(r.loss, eLoss.length);
   const epochsLoss = eLoss.slice(startLoss);
-  const boxLoss = (trainLoss.box_loss || []).slice(0, capLoss).slice(startLoss);
-  const clsLoss = (trainLoss.cls_loss || []).slice(0, capLoss).slice(startLoss);
-  const dflLoss = (trainLoss.dfl_loss || []).slice(0, capLoss).slice(startLoss);
+  const boxLoss = padToLength((trainLoss.box_loss || []).slice(0, capLoss), capLoss).slice(startLoss);
+  const clsLoss = padToLength((trainLoss.cls_loss || []).slice(0, capLoss), capLoss).slice(startLoss);
+  const dflLoss = padToLength((trainLoss.dfl_loss || []).slice(0, capLoss), capLoss).slice(startLoss);
 
-  const capMap = minPositiveLen(
-    epochsAll.length,
-    (mapSeries.map50 || []).length,
-    (mapSeries.map50_95 || []).length,
-    (prEpoch.precision || []).length,
-    (prEpoch.recall || []).length
-  ) || epochsAll.length;
+  const capMap = epochsAll.length;
   const eMap = epochsAll.slice(0, capMap);
   const startMap = epochStartIndex(r.map, eMap.length);
   const epochsMap = eMap.slice(startMap);
-  const map50 = (mapSeries.map50 || []).slice(0, capMap).slice(startMap);
-  const map5095 = (mapSeries.map50_95 || []).slice(0, capMap).slice(startMap);
-  const prPrec = (prEpoch.precision || []).slice(0, capMap).slice(startMap);
-  const prRec = (prEpoch.recall || []).slice(0, capMap).slice(startMap);
+  const map50 = padToLength((mapSeries.map50 || []).slice(0, capMap), capMap).slice(startMap);
+  const map5095 = padToLength((mapSeries.map50_95 || []).slice(0, capMap), capMap).slice(startMap);
+  const prPrec = padToLength((prEpoch.precision || []).slice(0, capMap), capMap).slice(startMap);
+  const prRec = padToLength((prEpoch.recall || []).slice(0, capMap), capMap).slice(startMap);
 
-  const capLr = minPositiveLen(
-    epochsAll.length,
-    (lrSeries.pg0 || []).length,
-    (lrSeries.pg1 || []).length,
-    (lrSeries.pg2 || []).length
-  ) || epochsAll.length;
+  const capLr = epochsAll.length;
   const eLr = epochsAll.slice(0, capLr);
   const startLr = epochStartIndex(r.lr, eLr.length);
   const epochsLr = eLr.slice(startLr);
-  const lr0 = (lrSeries.pg0 || []).slice(0, capLr).slice(startLr);
-  const lr1 = (lrSeries.pg1 || []).slice(0, capLr).slice(startLr);
-  const lr2 = (lrSeries.pg2 || []).slice(0, capLr).slice(startLr);
+  const lr0 = padToLength((lrSeries.pg0 || []).slice(0, capLr), capLr).slice(startLr);
+  const lr1 = padToLength((lrSeries.pg1 || []).slice(0, capLr), capLr).slice(startLr);
+  const lr2 = padToLength((lrSeries.pg2 || []).slice(0, capLr), capLr).slice(startLr);
 
+  // ✅ 蒸馏指标改进：允许部分缺失
   const dLenA = (distill.alpha || []).length;
   const dLenT = (distill.temperature || []).length;
   const dLenK = (distill.kd_loss || []).length;
-  const dMax = Math.max(dLenA, dLenT, dLenK);
-  const capDistill = dMax ? Math.min(epochsAll.length, dMax) : 0;
-  const eDistill = epochsAll.slice(0, capDistill);
-  const startDistill = epochStartIndex(r.distill, eDistill.length);
-  const epochsDistill = eDistill.slice(startDistill);
-  const dAlpha = (distill.alpha || []).slice(0, capDistill).slice(startDistill);
-  const dTemp = (distill.temperature || []).slice(0, capDistill).slice(startDistill);
-  const dKd = (distill.kd_loss || []).slice(0, capDistill).slice(startDistill);
+  const dMax = Math.max(dLenA, dLenT, dLenK, 0);
+  const capDistill = dMax > 0 ? Math.min(epochsAll.length, dMax) : 0;
+  
+  let epochsDistill = [];
+  let dAlpha = [];
+  let dTemp = [];
+  let dKd = [];
+  
+  if (capDistill > 0) {
+    const eDistill = epochsAll.slice(0, capDistill);
+    const startDistill = epochStartIndex(r.distill, eDistill.length);
+    epochsDistill = eDistill.slice(startDistill);
+    dAlpha = padToLength((distill.alpha || []).slice(0, capDistill), capDistill).slice(startDistill);
+    dTemp = padToLength((distill.temperature || []).slice(0, capDistill), capDistill).slice(startDistill);
+    dKd = padToLength((distill.kd_loss || []).slice(0, capDistill), capDistill).slice(startDistill);
+  }
 
   const cls = compactClassSeries(chartSeries?.class_performance || {});
   const clsLabelsFull = cls.labels?.length ? cls.labels : ["Overall"];
@@ -715,11 +725,21 @@ function renderAllCharts(instancesRef, refs, chartSeries, ranges) {
     { label: "LR pg2", data: lr2, color: "#7D5260" }
   ], { scales: { y: { type: "logarithmic" } } });
 
-  renderLineChart(instancesRef, refs.distillRef.current, "distill", epochsDistill, [
-    { label: "Alpha", data: fillGaps(dAlpha), color: "#6750A4" },
-    { label: "Temperature T", data: fillGaps(dTemp), color: "#B3261E" },
-    { label: "KD Loss", data: fillGaps(dKd), color: "#F57C00" }
-  ]);
+  // ✅ 蒸馏图表改进：即使数据不完整也可以显示
+  if (epochsDistill.length > 0) {
+    renderLineChart(instancesRef, refs.distillRef.current, "distill", epochsDistill, [
+      { label: "Alpha", data: fillGaps(dAlpha), color: "#6750A4" },
+      { label: "Temperature T", data: fillGaps(dTemp), color: "#B3261E" },
+      { label: "KD Loss", data: fillGaps(dKd), color: "#F57C00" }
+    ]);
+  } else {
+    // 清空蒸馏图表
+    const distillChart = instancesRef.current?.distill;
+    if (distillChart) {
+      distillChart.destroy();
+      delete instancesRef.current.distill;
+    }
+  }
 
   renderBarChart(instancesRef, refs.classRef.current, "class", clsLabelsFull, [
     { label: "mAP", data: cls.map || [0], backgroundColor: "#6750A4AA", borderColor: "#6750A4" },

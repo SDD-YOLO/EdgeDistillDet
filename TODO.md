@@ -15,40 +15,59 @@ temperature: 蒸馏温度 (推荐 2~8)alpha: 软标签损失权重 (推荐 0.3~0
 [x]补全模块测试，将项目中的所有的代码的模块化进行到底，确保代码的最高可复用程度
 [x]installer脚本中添加一个如果没有python就下载python的逻辑，如果有python就升级python的逻辑，如果有python但是版本不符合就升级python的逻辑，确保安装的python版本是3.10+
 
-[ ]前端的指标因为过滤的规则过于严格而无法显示的bug
-[ ]高级参数设置的界面中有一些参数和既定的流程冲突或者冗余
-[ ]后端数据链路的 4 个关键缺陷
-[ ]1.  results.csv  扫描路径硬编码
-文件： web/services/backend_metrics.py:44 
-python
-runs_dir = BASE_DIR / 'runs'
+[x]前端的指标因为过滤的规则过于严格而无法显示的bug
+   - 修复: web/src/features/metrics/MetricsPanel.jsx 中的 renderAllCharts 函数
+   - 改进: 移除了 minPositiveLen 的严格限制，改为使用 padToLength 补充缺失数据
+   - 结果: 即使某个指标缺失，其他指标仍可正常显示
 
-后端只扫描  runs/  目录，但你的训练配置（ output.project ）可能设置为  runs/detect 、 my_experiments  等其他路径。此时训练产出的  results.csv  不在扫描范围内，前端就永远找不到数据源。
-[ ]2. 蒸馏指标列与 Ultralytics 存在"覆写竞争"
-文件： core/distillation/adaptive_kd_trainer.py:778-827 
-蒸馏指标（alpha、temperature、kd_loss）是通过回调  _on_fit_epoch_end  注入到  results.csv  的。但这里存在两个问题：
- 
-Ultralytics 的  final_eval()  会在训练结束时覆写整个  results.csv ，之前注入的蒸馏列可能被清空。
- 
- _append_csv  使用  'w'  模式重写整个 CSV 文件，如果在训练过程中有并发读写，文件可能损坏。
-虽然代码在  _on_train_end （第 959 行）设置了"安全网"来重新补全蒸馏数据，但如果训练被用户手动停止或异常中断，这个安全网不会执行。
+[x]高级参数设置的界面中有一些参数和既定的流程冲突或者冗余
+   - 修复: web/src/features/training/TrainingPanel.jsx 中的 renderAdvancedField 函数
+   - 改进: 对 resume 模式应用更精细的参数限制
+   - 添加: RESUME_UNLOCKED_PARAMS 白名单，允许在 resume 模式下修改特定参数（如 time, patience 等）
+   - 添加: tooltip 提示用户哪些参数在 resume 模式下被禁用
 
-[ ]3.  distill_log.json  回退机制失效
-文件： web/services/backend_common.py:560-573 
-python
-has_distill_columns = any(col.startswith('distill/') for col in (columns or []))
-distill_log_fallback = _load_distill_log_json(run_dir) if not has_distill_columns else []
+[x]后端数据链路的 4 个关键缺陷
+   [x]1. results.csv 扫描路径硬编码
+      - 修复: web/services/backend_metrics.py 中添加 _get_candidate_runs_directories() 函数
+      - 改进: 支持多路径扫描（runs/, runs/detect/, 自定义目录等）
+      - 支持: EDGE_RUNS_DIRS 环境变量指定自定义扫描路径
+      - 结果: 训练结果不再受硬编码路径限制
 
-这里的逻辑有缺陷：当 CSV 中有空列名但值为空时（例如 Ultralytics 覆写保留了列名但清空了值）， has_distill_columns  为  True ，导致系统不会加载  distill_log.json  作为备用数据。结果蒸馏图表没有任何数据点。
-[ ]4. CSV 列名严格匹配，版本兼容性差
-文件： web/services/backend_common.py:584-599 
-python
-chart['map_series']['map50'].append(_as_float(row.get('metrics/mAP50(B)')) or 0)
-chart['lr_series']['pg0'].append(_as_float(row.get('lr/pg0')) or 0)
+   [x]2. 蒸馏指标列与 Ultralytics 存在"覆写竞争"
+      - 修复: core/distillation/adaptive_kd_trainer.py 中的 _on_fit_epoch_end 方法
+      - 改进: 添加 _save_distill_log_json() 备用持久化机制
+      - 改进: 增强 _on_train_end 中的安全网逻辑，更好地处理异常中断情况
+      - 结果: 蒸馏指标即使 Ultralytics 覆写 CSV 也能恢复
 
-这些列名（如  metrics/mAP50(B) 、 lr/pg0 ）是硬编码的。如果 Ultralytics 版本升级导致列名变化（例如去掉括号、改变大小写），所有指标都会读取为  0  而不是真实值。此时图表会显示为全零直线，看起来就像"没数据"。
+   [x]3. distill_log.json 回退机制失效
+      - 修复: web/services/backend_common.py 中的 _build_metric_series 函数
+      - 改进: 改进了 distill_log_fallback 的加载逻辑，只在真正缺失数据时才加载
+      - 改进: 允许数据为 None，而不是强制转换为 0
+      - 结果: 蒸馏数据可靠地从备用源恢复
 
-[ ]TraingingPanel拆解模块
+   [x]4. CSV 列名严格匹配，版本兼容性差
+      - 修复: web/services/backend_common.py 中添加列名动态探测机制
+      - 改进: 添加 _resolve_column_name() 和 _METRIC_COLUMN_ALIASES 映射表
+      - 支持: 多个 YOLO 版本的列名变体（如 mAP50 vs mAP50(B)）
+      - 结果: 自动适应不同 Ultralytics 版本的列名差异
+
+[x]TrainingPanel 拆解模块
+   - 创建: 4 个专用自定义 Hooks
+     * useTrainingState - 训练状态管理
+     * useExportState - 导出状态管理  
+     * useInferenceState - 推理状态管理
+     * useResumeState - 断点续训状态管理
+   - 创建: web/src/features/training/hooks/ 目录
+   - 创建: REFACTORING_GUIDE.md 详细优化指南
+   - 结果: 为 TrainingPanel 进一步拆解奠定基础，遵循单一职责原则
+
+[x]TraingingPanel拆解模块
+     - 创建: 4 个视图容器组件
+         * TrainingViewContainer - 训练页主布局
+         * ExportViewContainer - 导出页容器
+         * DisplayViewContainer - 推理页容器
+         * AdvancedViewContainer - 高级参数页容器
+     - 结果: TrainingPanel 的 JSX 视图分支已从主文件中抽离，便于继续分层拆解
 
 EdgeDistillDet 底层框架优化分析报告
 

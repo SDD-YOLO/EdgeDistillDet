@@ -3,7 +3,7 @@ core/distillation/adaptive_kd_trainer.py
 ==========================================
 自适应知识蒸馏训练器（AdaptiveKDTrainer）— v4 内存优化版
 
-核心设计原则（v4）：
+核心设计原则（v4）:
   1. 复用 ultralytics 外层已计算的学生预测，消除双重前向传播（显存 -50%）
   2. resume 时使用基础权重创建 YOLO 对象，避免双重加载
   3. 绝不修改 model 对象的持久化状态
@@ -683,59 +683,74 @@ class AdaptiveKDTrainer(DetectionTrainer):
         # 批次进度已在 get_loss() 中按间隔输出，此处不再重复
         pass
 
+    def _save_distill_log_json(self):
+        """将蒸馏日志持久化到 distill_log.json（作为备用数据源）"""
+        sd = getattr(self, 'save_dir', None)
+        if not sd or not self._distill_log:
+            return
+        try:
+            log_path = Path(sd) / 'distill_log.json'
+            with open(log_path, 'w', encoding='utf-8') as f:
+                json.dump(self._distill_log, f, indent=2, ensure_ascii=False)
+            logger.debug(f"[DISTILL_LOG] 已保存 {len(self._distill_log)} 条蒸馏日志到 {log_path}")
+        except Exception as e:
+            logger.warning(f"[DISTILL_LOG] 保存 distill_log.json 失败: {e}")
+
     def _on_fit_epoch_end(self, trainer):
-        """注入蒸馏指标到 results.csv"""
+        """注入蒸馏指标到 results.csv（同时保存备用 distill_log.json）"""
         epoch = trainer.epoch
         display_epoch = epoch + 1
-        print(f"[DIAG_CSV] _on_fit_epoch_end called epoch={display_epoch}")  # ← 添加
         
         entry = next((e for e in reversed(self._distill_log) if e["epoch"] == display_epoch), None)
         if entry is None and self._distill_log:
             entry = self._distill_log[-1]
         if not entry:
-            print(f"[DIAG_CSV] 无 entry，跳过")  # ← 添加
             return
         
         av, tv, kv = entry['alpha'], entry['temperature'], entry['kd_loss']
-        print(f"[DIAG_CSV] entry found: alpha={av} temp={tv} kd_loss={kv}")  # ← 添加
         
-        # 注入 metrics
+        # 1. 尝试注入到 trainer.metrics（会被 ultralytics 写入 CSV）
         for target in [getattr(trainer, 'metrics', None), getattr(trainer, 'results_dict', None)]:
             if isinstance(target, dict):
                 try:
                     target['distill/alpha'] = av
                     target['distill/temperature'] = tv
                     target['distill/kd_loss'] = kv
-                    print(f"[DIAG_CSV] 已注入 metrics")  # ← 添加
                 except Exception as e:
-                    print(f"[DIAG_CSV] 注入 metrics 失败: {e}")  # ← 添加
+                    logger.debug(f"[DISTILL] 注入 metrics 失败: {e}")
         
+        # 2. 同时写入 CSV（增加成功概率）
         self._append_csv(display_epoch, av, tv, kv)
+        
+        # 3. 持久化备用 distill_log.json
+        self._save_distill_log_json()
 
     def _append_csv(self, epoch, a, t, k):
+        """安全地追加蒸馏指标到 results.csv"""
         sd = getattr(self, 'save_dir', None)
-        print(f"[DIAG_CSV] _append_csv called save_dir={sd}")  # ← 添加
         if not sd:
-            print(f"[DIAG_CSV] save_dir 为空，跳过")  # ← 添加
             return
         
         p = Path(sd) / 'results.csv'
-        print(f"[DIAG_CSV] CSV 路径: {p}, exists={p.exists()}")  # ← 添加
         if not p.exists():
-            print(f"[DIAG_CSV] results.csv 不存在，跳过")  # ← 添加
             return
         
         try:
-            rows = []; fn = []
+            rows = []
+            fn = []
+            
+            # 原子读操作
             with open(p, 'r', encoding='utf-8', newline='') as f:
-                r = _c.DictReader(f); fn = list(r.fieldnames or []); rows = list(r)
+                r = _c.DictReader(f)
+                fn = list(r.fieldnames or [])
+                rows = list(r)
             
-            print(f"[DIAG_CSV] 原始列: {fn}, 行数: {len(rows)}")  # ← 添加
-            
+            # 确保蒸馏列存在
             for c in ['distill/alpha', 'distill/temperature', 'distill/kd_loss']:
                 if c not in fn:
                     fn.append(c)
             
+            # 匹配指定 epoch 的行
             matched = False
             for row in rows:
                 try:
@@ -749,15 +764,16 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 except (ValueError, TypeError, KeyError):
                     continue
             
-            print(f"[DIAG_CSV] 匹配到行: {matched}")  # ← 添加
-            
-            with open(p, 'w', encoding='utf-8', newline='') as f:
-                _c.DictWriter(f, fn).writeheader()
-                _c.DictWriter(f, fn).writerows(rows)
-            print(f"[DIAG_CSV] CSV 写入成功")  # ← 添加
+            # 原子写操作
+            if matched:
+                with open(p, 'w', encoding='utf-8', newline='') as f:
+                    writer = _c.DictWriter(f, fn)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                logger.debug(f"[DISTILL_CSV] 已更新 epoch {int(epoch)} 的蒸馏数据")
                 
         except Exception as e:
-            print(f"[DIAG_CSV] CSV 追加失败: {type(e).__name__}: {e}")  # ← 改为 print
+            logger.debug(f"[DISTILL_CSV] 追加蒸馏数据失败: {e}")
     
     def _on_val_end(self, trainer):
         """验证结束后：提取并缓存每类别的性能指标（AP / Precision / Recall）"""
@@ -891,38 +907,53 @@ class AdaptiveKDTrainer(DetectionTrainer):
 
     def _on_train_end(self, trainer):
         """
-        安全网回调：在训练完全结束后（final_eval 之后）重新写入所有蒸馏数据。
+        【安全网回调】训练完全结束后重新写入所有蒸馏数据。
         
-        问题：ultralytics 的 final_eval() 会覆写 results.csv，
-              导致 _on_fit_epoch_end 写入的最后一轮蒸馏数据被清空。
-        解决：训练结束后遍历 _distill_log，确保每一轮的 distill 列都完整写入。
+        处理流程：
+        1. 持久化蒸馏日志到 distill_log.json
+        2. 修复 results.csv 中的蒸馏列（恢复被 final_eval 覆写的数据）
+        3. 处理异常中断的情况
         """
         if not self._distill_log:
+            logger.info("[TRAIN_END] 无蒸馏日志，跳过")
             return
         
         sd = getattr(self, 'save_dir', None)
         if not sd:
+            logger.warning("[TRAIN_END] save_dir 为空")
             return
+        
+        # 1. 首先保存备用 distill_log.json
+        self._save_distill_log_json()
+        
+        # 2. 修复 results.csv
         p = Path(sd) / 'results.csv'
         if not p.exists():
+            logger.warning(f"[TRAIN_END] results.csv 不存在: {p}")
             return
         
         try:
             rows = []
             fn = []
+            
+            # 读取 CSV
             with open(p, 'r', encoding='utf-8', newline='') as f:
                 reader = _c.DictReader(f)
                 fn = list(reader.fieldnames or [])
                 rows = list(reader)
             
-            # 确保 distill 列存在
-            for c in ['distill/alpha', 'distill/temperature', 'distill/kd_loss']:
+            logger.info(f"[TRAIN_END] 读取 results.csv: {len(rows)} 行, {len(fn)} 列")
+            
+            # 确保蒸馏列存在
+            distill_cols = ['distill/alpha', 'distill/temperature', 'distill/kd_loss']
+            for c in distill_cols:
                 if c not in fn:
                     fn.append(c)
             
-            # 用 _distill_log 中的数据补全每一行
+            # 用蒸馏日志补全 CSV
             epoch_to_distill = {entry['epoch']: entry for entry in self._distill_log}
             written_count = 0
+            missing_epochs = set()
             
             for row in rows:
                 try:
@@ -930,37 +961,38 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 except (ValueError, TypeError):
                     continue
                 
-                if ep in epoch_to_distill:
-                    de = epoch_to_distill[ep]
-                elif ep - 1 in epoch_to_distill:
-                    de = epoch_to_distill[ep - 1]
-                elif ep + 1 in epoch_to_distill:
-                    de = epoch_to_distill[ep + 1]
-                else:
-                    de = None
+                # 首先精确匹配，再尝试 ±1 偏移（处理 0-based vs 1-based 差异）
+                de = epoch_to_distill.get(ep) or epoch_to_distill.get(ep - 1) or epoch_to_distill.get(ep + 1)
                 
                 if de is not None:
                     row['distill/alpha'] = de['alpha']
                     row['distill/temperature'] = de['temperature']
                     row['distill/kd_loss'] = de['kd_loss']
                     written_count += 1
+                else:
+                    missing_epochs.add(ep)
             
+            # 原子写操作
             with open(p, 'w', encoding='utf-8', newline='') as f:
                 writer = _c.DictWriter(f, fn)
                 writer.writeheader()
                 writer.writerows(rows)
             
             logger.info(
-                f"[TRAIN_END] 蒸馏数据安全网: 已补全 {written_count}/{len(rows)} 行 "
-                f"(总日志条目: {len(self._distill_log)})"
+                f"[TRAIN_END] CSV 修复完成: {written_count}/{len(rows)} 行已补全蒸馏数据 "
+                f"(缺失 {len(missing_epochs)} 轮: {sorted(missing_epochs)[:5]}...)"
             )
             
         except Exception as e:
-            logger.warning(f"[TRAIN_END] CSV 安全网写入失败: {e}")
+            logger.error(f"[TRAIN_END] CSV 修复失败: {type(e).__name__}: {e}")
+            # 即使 CSV 修复失败，distill_log.json 备用文件已保存，Web 端可以加载备用数据
+            logger.info("[TRAIN_END] 备用数据已保存到 distill_log.json，可通过该文件恢复")
 
-        # 最终兜底：如果 _on_val_end 没有成功生成 per_class_metrics.json，
-        # 在训练结束后通过模型验证生成
-        self._ensure_per_class_metrics(trainer)
+        # 3. 最终兜底：确保 per_class_metrics.json 已存在
+        try:
+            self._ensure_per_class_metrics(trainer)
+        except Exception as e:
+            logger.warning(f"[TRAIN_END] 生成 per_class_metrics.json 失败: {e}")
 
     def _ensure_per_class_metrics(self, trainer):
         """训练结束时确保 per_class_metrics.json 已存在，否则用模型验证生成。"""

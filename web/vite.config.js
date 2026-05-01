@@ -5,6 +5,11 @@ import react from "@vitejs/plugin-react";
 export default defineConfig(({ command }) => ({
   base: command === "build" ? "/static/dist/" : "/",
   plugins: [react()],
+  test: {
+    environment: "jsdom",
+    clearMocks: true,
+    restoreMocks: true
+  },
   // 开发时前端在 5173，API 在 FastAPI（默认 127.0.0.1:5000），用代理避免跨域
   server: {
     port: 5173,

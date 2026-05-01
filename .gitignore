@@ -26,6 +26,7 @@ debug-*.log
 .cursor/
 .agent_state/
 runs/
+data/metrics_cache.sqlite3
 
 # IDE
 .idea/
