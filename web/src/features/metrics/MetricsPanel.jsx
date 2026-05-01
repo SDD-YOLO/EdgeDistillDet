@@ -17,6 +17,7 @@ import { Button } from "../../components/ui/button";
 import { EpochRangeHint } from "./components/EpochRangeHint";
 import { OverviewCard } from "./components/OverviewCard";
 import { useMetricsData } from "./hooks/useMetricsData";
+import { useMetricsUiStore } from "../../stores/metricsUiStore";
 
 Chart.register(
   BarController,
@@ -84,13 +85,20 @@ function renderTrendIcon(trend) {
 }
 
 function MetricsPanel({ toast, active }) {
-  const [chartType, setChartType] = useState("all");
-  const [rangeLoss, setRangeLoss] = useState("all");
-  const [rangeMap, setRangeMap] = useState("all");
-  const [rangeLr, setRangeLr] = useState("all");
-  const [rangeDistill, setRangeDistill] = useState("all");
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const [refreshLeft, setRefreshLeft] = useState(30);
+  const chartType = useMetricsUiStore((state) => state.chartType);
+  const rangeLoss = useMetricsUiStore((state) => state.rangeLoss);
+  const rangeMap = useMetricsUiStore((state) => state.rangeMap);
+  const rangeLr = useMetricsUiStore((state) => state.rangeLr);
+  const rangeDistill = useMetricsUiStore((state) => state.rangeDistill);
+  const autoRefresh = useMetricsUiStore((state) => state.autoRefresh);
+  const refreshLeft = useMetricsUiStore((state) => state.refreshLeft);
+  const setChartType = useMetricsUiStore((state) => state.setChartType);
+  const setRangeLoss = useMetricsUiStore((state) => state.setRangeLoss);
+  const setRangeMap = useMetricsUiStore((state) => state.setRangeMap);
+  const setRangeLr = useMetricsUiStore((state) => state.setRangeLr);
+  const setRangeDistill = useMetricsUiStore((state) => state.setRangeDistill);
+  const setAutoRefresh = useMetricsUiStore((state) => state.setAutoRefresh);
+  const setRefreshLeft = useMetricsUiStore((state) => state.setRefreshLeft);
   const [themeMode, setThemeMode] = useState(() => document.documentElement.getAttribute("data-theme") || "light");
 
   const lossRef = useRef(null);
@@ -111,7 +119,7 @@ function MetricsPanel({ toast, active }) {
     rawSeriesRef,
     refreshSources,
     loadMetricsData
-  } = useMetricsData({ toast });
+  } = useMetricsData({ toast, autoRefresh });
 
   useEffect(() => {
     if (!active || !rawSeriesRef.current) return;
@@ -156,47 +164,19 @@ function MetricsPanel({ toast, active }) {
   }, []);
 
   useEffect(() => {
-    if (!autoRefresh || !source) return undefined;
+    if (!autoRefresh || !source) {
+      setRefreshLeft(30);
+      return undefined;
+    }
     setRefreshLeft(30);
-    let tick = null;
-    let reload = null;
-
-    const clearTimers = () => {
-      if (tick != null) window.clearInterval(tick);
-      if (reload != null) window.clearInterval(reload);
-      tick = null;
-      reload = null;
-    };
-
-    const startAutoRefreshTimers = () => {
-      clearTimers();
+    const tick = window.setInterval(() => {
       if (document.hidden) return;
-      tick = window.setInterval(() => {
-        setRefreshLeft((prev) => {
-          if (prev <= 1) return 30;
-          return prev - 1;
-        });
-      }, 1000);
-      reload = window.setInterval(() => {
-        loadMetricsData(source, true);
-      }, 30000);
-    };
-
-    const onVisibilityForMetrics = () => {
-      if (!document.hidden) {
-        loadMetricsData(source, true);
-        setRefreshLeft(30);
-      }
-      startAutoRefreshTimers();
-    };
-
-    document.addEventListener("visibilitychange", onVisibilityForMetrics);
-    startAutoRefreshTimers();
+      setRefreshLeft((prev) => (prev <= 1 ? 30 : prev - 1));
+    }, 1000);
     return () => {
-      document.removeEventListener("visibilitychange", onVisibilityForMetrics);
-      clearTimers();
+      window.clearInterval(tick);
     };
-  }, [autoRefresh, source]);
+  }, [autoRefresh, source, setRefreshLeft]);
 
   useEffect(() => () => {
     Object.values(chartInstances.current).forEach((chart) => chart.destroy());

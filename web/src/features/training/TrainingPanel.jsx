@@ -99,7 +99,6 @@ function TrainingPanel({ toast, active, view = "training" }) {
   const datasetSource = form.training?.dataset_api?.source || (form.training?.dataset_api?.enabled ? "api" : "path");
   const useDatasetApi = isRemoteApi && datasetSource === "api";
   const isResumeMode = mode === "resume";
-  const selectedResumeCandidate = resumeCandidates[selectedResumeIndex];
   const isResumeLocked = isResumeMode && Boolean(selectedResumeCandidate);
   const isResumeConfigLocked = isResumeMode;
   const advancedSectionCards = [

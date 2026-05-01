@@ -28,6 +28,10 @@ debug-*.log
 runs/
 data/metrics_cache.sqlite3
 
+# Model weights
+*.pt
+models/
+
 # IDE
 .idea/
 .vscode/

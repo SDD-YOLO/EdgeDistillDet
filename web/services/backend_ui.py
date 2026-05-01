@@ -41,14 +41,6 @@ def index():
         html
     )
 
-    # 为 dist 前端资源追加版本号，避免浏览器长期缓存旧 app.js（界面已更新仍看到旧 DOM）
-    _dist_css = STATIC_DIR / 'dist' / 'app.css'
-    _dist_js = STATIC_DIR / 'dist' / 'app.js'
-    _v_css = int(_dist_css.stat().st_mtime) if _dist_css.is_file() else 0
-    _v_js = int(_dist_js.stat().st_mtime) if _dist_js.is_file() else 0
-    html = html.replace('href="/static/dist/app.css"', f'href="/static/dist/app.css?v={_v_css}"')
-    html = html.replace('src="/static/dist/app.js"', f'src="/static/dist/app.js?v={_v_js}"')
-
     return HTMLResponse(
         content=html,
         headers={'Cache-Control': 'no-store'},

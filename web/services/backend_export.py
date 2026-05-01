@@ -11,18 +11,12 @@ from pathlib import Path
 
 from fastapi.responses import JSONResponse
 
+from core.logging import get_logger
 from web.core.paths import BASE_DIR
 from web.services.backend_common import _error
 from web.services.backend_train_runtime import _kill_process_tree
-import logging
-import traceback
 
-# 配置日志写入文件
-logging.basicConfig(
-    filename='backend_export.log',
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logger = get_logger(__name__)
 
 SUPPORTED_EXPORT_FORMATS = {"onnx", "torchscript"}
 
@@ -117,7 +111,7 @@ def _read_process_output(proc: subprocess.Popen) -> None:
                 line = buffer.rstrip("\r\n")
                 buffer = ""
                 if line:
-                    logging.debug('export stdout line: %r', line)
+                    logger.debug(f'export stdout line: {line!r}')
                     _append_log(line)
                     clean_line = _strip_ansi(line).strip()
                     if clean_line.startswith('INFO: 导出完成:'):
@@ -138,11 +132,11 @@ def _read_process_output(proc: subprocess.Popen) -> None:
                             pass
         if buffer:
             line = buffer
-            logging.debug('export stdout final partial: %r', line)
+            logger.debug(f'export stdout final partial: {line!r}')
             _append_log(line)
     except Exception as exc:
         _append_log(f'WARNING: 读取导出子进程输出时出错: {exc}')
-        logging.exception('读取导出子进程输出时异常')
+        logger.exception('读取导出子进程输出时异常')
     finally:
         with _export_lock:
             _export_status['running'] = False
@@ -152,7 +146,7 @@ def _read_process_output(proc: subprocess.Popen) -> None:
             global _export_process
             _export_process = None
             _append_log(f'INFO: 导出子进程已退出，exit_code={proc.returncode}')
-            logging.debug('export process exited, returncode=%s', proc.returncode)
+            logger.info(f'导出任务结束 | returncode={proc.returncode}')
             
             # 清理临时文件
             try:
@@ -160,7 +154,7 @@ def _read_process_output(proc: subprocess.Popen) -> None:
                     if isinstance(arg, str) and arg.endswith('.json') and 'tmp' in arg.lower():
                         os.unlink(arg)
             except Exception:
-                logging.exception('清理临时文件时异常')
+                logger.exception('清理临时文件时异常')
 
 def _build_command(payload: dict) -> list[str]:
     script = BASE_DIR / 'scripts' / 'export_model.py'
@@ -220,6 +214,7 @@ def start_export(payload: dict):
         _export_status['pid'] = proc.pid
         _export_process = proc
         _append_log(f'INFO: 导出子进程已启动，PID={proc.pid}')
+        logger.info(f'导出任务已启动 | pid={proc.pid} format={payload.get("format")} export_path={resolved_path}')
         thread = threading.Thread(target=_read_process_output, args=(proc,), daemon=True)
         thread.start()
 

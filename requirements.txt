@@ -18,6 +18,7 @@ pyyaml==6.0.2
 tqdm==4.67.1
 fastapi==0.115.6
 pydantic==2.10.6
+pydantic-settings==2.7.1
 uvicorn[standard]==0.32.1
 requests==2.32.3
 psutil==6.1.1
@@ -29,23 +30,9 @@ wandb==0.19.8
 langgraph==0.2.76
 langchain-core==0.3.33
 
-# === 可选：模型导出 ===
-tensorflow==2.16.1
-# tensorflowjs>=4.7.0,<5.0.0  # 与 packaging>=23.2 冲突，暂移除
+# Optional heavy runtimes (moved to pyproject optional-dependencies)
+# Install extras when needed, e.g. `pip install -e .[tf]`, `pip install -e .[edge]`, `pip install -e .[ml]`
 
-# CoreML
-coremltools==8.2
-
-# OpenVINO / NNCF
-openvino==2024.6.0
-nncf==2.19.0
-
-# 其他转换工具
-scikit-learn==1.6.1
-x2paddle==1.6.0
-MNN==3.5.0
-ncnn
-pnnx==20260409
 
 -e .
 
@@ -54,3 +41,6 @@ pnnx==20260409
 
 # Optional model conversion dependencies for ONNX/CoreML/TFLite/SavedModel and other Ultralytics export targets
 # Install with: pip install -r requirements-export.txt
+
+# Development / linting (install via extras or dev requirements)
+# pip install ruff mypy black pre-commit

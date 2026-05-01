@@ -7,6 +7,16 @@ Web API 的请求模型定义，供路由层复用。
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from typing import Any, Generic, TypeVar
+
+T = TypeVar("T")
+
+
+class ResponseModel(BaseModel, Generic[T]):
+    ok: bool = True
+    data: T | None = None
+    error: str | None = None
+    meta: dict = Field(default_factory=dict)
 
 
 class SaveConfigRequest(BaseModel):

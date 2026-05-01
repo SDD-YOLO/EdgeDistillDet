@@ -4,15 +4,15 @@ scripts/visualize_dataset.py
 数据集分析与可视化脚本（CLI 入口）
 """
 
-import logging
+from core.logging import get_logger
 from utils.dataset_analyzer import DatasetAnalyzer
 from utils.visualization import DatasetVisualizer
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] — %(message)s")
+logger = get_logger(__name__)
 
 
 def run_dataset_analysis(dataset_root: str, output_dir: str = "outputs/figures"):
+    logger.info(f'Dataset analysis started | dataset_root={dataset_root} output_dir={output_dir}')
     # 1. 统计分析
     analyzer = DatasetAnalyzer(dataset_root, sample_limit=2000)
     report = analyzer.run()

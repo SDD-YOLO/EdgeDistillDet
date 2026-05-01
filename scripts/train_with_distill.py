@@ -25,11 +25,14 @@ from typing import Any, Dict, Optional
 import yaml
 from ultralytics import YOLO
 
+from core.logging import get_logger
 from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer, _scatter_pr_from_ultralytics_box
 from core.distillation.common import w_feat_to_scalar
 from utils import expand_env_vars
 from utils.device_detect import detect_best_device, setup_device_for_trainer
 from utils.gpu_runtime import cleanup_gpu_resources
+
+logger = get_logger(__name__)
 
 # 训练期 DataLoader 始终 0 workers，避免多进程复制数据集与「像两个训练同时跑」的内存形态
 _TRAIN_LOADER_WORKERS = 0
@@ -117,17 +120,8 @@ def _apply_web_friendly_tqdm_output() -> None:
 
 
 def _print_banner(root: Path) -> None:
-    """与 main.py 一致的 ASCII BANNER（Web 子进程不再经过 main.py 时仍打印）。"""
-    root_s = str(root.resolve())
-    if root_s not in sys.path:
-        sys.path.insert(0, root_s)
-    try:
-        import main as edge_main
-
-        print(getattr(edge_main, "BANNER", "").rstrip(), flush=True)
-    except Exception:
-        print("EdgeDistillDet — 蒸馏训练", flush=True)
-    print("", flush=True)
+    """记录训练入口的简洁启动信息。"""
+    logger.info(f'EdgeDistillDet training started | root={root.resolve()}')
 
 
 def _project_root(config_path: Path) -> Path:
@@ -431,7 +425,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     except Exception as e:
         msg = str(e).lower()
         if resume_path and ("nothing to resume" in msg or "finished, nothing to resume" in msg):
-            print("[RESUME] 检测到 checkpoint 已训练完成，自动切换为新训练模式并重建学生模型。", flush=True)
+            logger.warning('检测到 checkpoint 已训练完成，自动切换为新训练模式并重建学生模型')
             train_args.pop("resume", None)
             student_model = YOLO(student_weight)
             results = student_model.train(

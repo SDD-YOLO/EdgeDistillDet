@@ -1,9 +1,9 @@
 import { apiRequest } from "./client";
 
-export function fetchMetricsList() {
-  return apiRequest("/api/metrics");
+export function fetchMetricsList(options = {}) {
+  return apiRequest("/api/metrics", options);
 }
 
-export function fetchMetricsBySource(sourcePath) {
-  return apiRequest(`/api/metrics?source=${encodeURIComponent(sourcePath)}`);
+export function fetchMetricsBySource(sourcePath, options = {}) {
+  return apiRequest(`/api/metrics?source=${encodeURIComponent(sourcePath)}`, options);
 }

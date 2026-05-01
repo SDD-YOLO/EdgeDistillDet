@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Activity, Bot, Moon, Settings2, Sun } from "lucide-react";
 import newLogoDark from "../static/new_logo-dark.png";
 import newLogoLight from "../static/new_logo-light.png";
-import AgentPanel from "./features/agent/AgentPanel";
-import MetricsPanel from "./features/metrics/MetricsPanel";
-import TrainingPanel from "./features/training/TrainingPanel";
 import { Button } from "./components/ui/button";
 import { useToast } from "./hooks/useToast";
+
+const TrainingPanel = lazy(() => import("./features/training/TrainingPanel"));
+const MetricsPanel = lazy(() => import("./features/metrics/MetricsPanel"));
+const AgentPanel = lazy(() => import("./features/agent/AgentPanel"));
 
 function App() {
   const [activeTab, setActiveTab] = useState("training");
@@ -90,11 +91,13 @@ function App() {
             </div>
           </header>
 
-          <div className="tab-panels console-panels">
-            <TrainingPanel toast={push} active={activeTab === "training" || activeTab === "advanced" || activeTab === "display" || activeTab === "export"} view={activeTab} />
-            <MetricsPanel toast={push} active={activeTab === "metrics"} />
-            <AgentPanel toast={push} active={activeTab === "agent"} />
-          </div>
+          <Suspense fallback={<div className="tab-panels console-panels"><div className="panel-loading">正在加载面板...</div></div>}>
+            <div className="tab-panels console-panels">
+              <TrainingPanel toast={push} active={activeTab === "training" || activeTab === "advanced" || activeTab === "display" || activeTab === "export"} view={activeTab} />
+              <MetricsPanel toast={push} active={activeTab === "metrics"} />
+              <AgentPanel toast={push} active={activeTab === "agent"} />
+            </div>
+          </Suspense>
         </main>
       </div>
 

@@ -10,16 +10,18 @@
 from __future__ import annotations
 
 import os
+from typing import List
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def get_bind_host() -> str:
-    h = os.environ.get("EDGE_BACKEND_HOST", "127.0.0.1").strip()
-    return h or "127.0.0.1"
+    return settings.host
 
 
 def get_bind_port() -> int:
-    raw = os.environ.get("EDGE_BACKEND_PORT", os.environ.get("EDGE_FLASK_PORT", "5000"))
-    return int(raw)
+    return settings.port
 
 
 def get_cors_middleware_kwargs() -> dict:
@@ -28,28 +30,46 @@ def get_cors_middleware_kwargs() -> dict:
 
     默认允许本机页面与 Vite 开发服务器（5173）访问 API；生产构建由同源 /static 提供，通常无需额外 CORS。
     """
-    raw = os.environ.get("EDGE_CORS_ORIGINS", "").strip()
-    if raw == "*":
+    # Delegate to AppSettings implementation so behavior is centralized and testable.
+    return settings.get_cors_middleware_kwargs()
+
+
+class AppSettings(BaseSettings):
+    host: str = Field("127.0.0.1", env="BACKEND_HOST")
+    port: int = Field(5000, env="BACKEND_PORT")
+    # Comma-separated list or single '*' for wildcard; parsed by helper below.
+    cors_origins: str | None = Field(None, env="CORS_ORIGINS")
+    frontend_dev_port: int = Field(5173, env="FRONTEND_DEV_PORT")
+
+    model_config = SettingsConfigDict(env_prefix="EDGE_", env_file=".env")
+
+    def get_cors_middleware_kwargs(self) -> dict:
+        raw = (self.cors_origins or "").strip()
+        if raw == "*":
+            return {
+                "allow_origins": ["*"],
+                "allow_credentials": False,
+                "allow_methods": ["*"],
+                "allow_headers": ["*"],
+            }
+        if raw:
+            origins = [x.strip() for x in raw.split(",") if x.strip()]
+        else:
+            backend_port = str(self.port)
+            frontend_port = str(self.frontend_dev_port)
+            origins = [
+                f"http://127.0.0.1:{backend_port}",
+                f"http://localhost:{backend_port}",
+                f"http://127.0.0.1:{frontend_port}",
+                f"http://localhost:{frontend_port}",
+            ]
         return {
-            "allow_origins": ["*"],
-            "allow_credentials": False,
+            "allow_origins": origins,
+            "allow_credentials": True,
             "allow_methods": ["*"],
             "allow_headers": ["*"],
         }
-    if raw:
-        origins = [x.strip() for x in raw.split(",") if x.strip()]
-    else:
-        backend_port = os.environ.get("EDGE_BACKEND_PORT", os.environ.get("EDGE_FLASK_PORT", "5000")).strip() or "5000"
-        frontend_port = os.environ.get("EDGE_FRONTEND_DEV_PORT", "5173").strip() or "5173"
-        origins = [
-            f"http://127.0.0.1:{backend_port}",
-            f"http://localhost:{backend_port}",
-            f"http://127.0.0.1:{frontend_port}",
-            f"http://localhost:{frontend_port}",
-        ]
-    return {
-        "allow_origins": origins,
-        "allow_credentials": True,
-        "allow_methods": ["*"],
-        "allow_headers": ["*"],
-    }
+
+
+# Singleton settings instance for app imports
+settings = AppSettings()

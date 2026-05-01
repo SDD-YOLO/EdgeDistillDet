@@ -9,7 +9,6 @@ core/distillation/adaptive_kd_trainer.py
   3. 绝不修改 model 对象的持久化状态
   4. 教师模型启用梯度检查点 + 积极显存回收
 """
-
 import os
 import gc
 import json
@@ -22,19 +21,13 @@ import weakref
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
-
 import torch
 from ultralytics import YOLO
 from ultralytics.models.yolo.detect.train import DetectionTrainer, DEFAULT_CFG
-
 from core.distillation.common import safe_scalar, w_feat_to_scalar
-from core.distillation.loss_functions import (
-    CompositiveDistillLoss,
-    CosineTemperatureScheduler,
-)
-
-logger = logging.getLogger("DistillTrain")
-
+from core.distillation.loss_functions import CompositiveDistillLoss, CosineTemperatureScheduler
+from core.logging import get_logger
+logger = logging.getLogger('DistillTrain')
 
 def _scatter_pr_from_ultralytics_box(box, nc: int):
     """
@@ -43,46 +36,34 @@ def _scatter_pr_from_ultralytics_box(box, nc: int):
     不能与 range(nc) 的全局类别下标混用。
     """
     import numpy as _np
-
     out_p = [None] * nc
     out_r = [None] * nc
     ap_idx = getattr(box, 'ap_class_index', None)
     p_arr = getattr(box, 'p', None)
     r_arr = getattr(box, 'r', None)
     if ap_idx is None or p_arr is None or r_arr is None:
-        return out_p, out_r
+        return (out_p, out_r)
     p_arr = _np.asarray(p_arr).ravel()
     r_arr = _np.asarray(r_arr).ravel()
     for j, cid in enumerate(ap_idx):
         cid = int(cid)
-        if not (0 <= cid < nc):
+        if not 0 <= cid < nc:
             continue
         if j < len(p_arr):
             pv = p_arr[j]
-            if pv is not None and not (isinstance(pv, (float, _np.floating)) and _np.isnan(pv)):
+            if pv is not None and (not (isinstance(pv, (float, _np.floating)) and _np.isnan(pv))):
                 out_p[cid] = float(pv)
         if j < len(r_arr):
             rv = r_arr[j]
-            if rv is not None and not (isinstance(rv, (float, _np.floating)) and _np.isnan(rv)):
+            if rv is not None and (not (isinstance(rv, (float, _np.floating)) and _np.isnan(rv))):
                 out_r[cid] = float(rv)
-    return out_p, out_r
-
-
-# 【断点续训修复】使用普通 dict 而非 WeakKeyDictionary！
-# 原因：ultralytics 在 resume_training() 时可能用 checkpoint 替换 self.model，
-#       WeakKeyDictionary 会自动清除旧模型引用，导致新模型无法找到 trainer。
-#       普通字典确保断点续训后 _distill_model_loss 仍能正确路由到 trainer。
+    return (out_p, out_r)
 _KD_TRAINERS: dict = {}
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Alpha 自适应调度器
-# ═══════════════════════════════════════════════════════════════════════════════
 class AdaptiveAlphaScheduler:
     """动态调节蒸馏权重 alpha"""
-    
-    def __init__(self, alpha_init=0.5, alpha_min=0.2, alpha_max=0.8,
-                 lr_alpha=0.05, ema_decay=0.9, delta_target=0.01):
+
+    def __init__(self, alpha_init=0.5, alpha_min=0.2, alpha_max=0.8, lr_alpha=0.05, ema_decay=0.9, delta_target=0.01):
         self.alpha = alpha_init
         self.alpha_min = alpha_min
         self.alpha_max = alpha_max
@@ -91,24 +72,23 @@ class AdaptiveAlphaScheduler:
         self.delta_target = delta_target
         self._ema_loss = None
         self._prev_ema = None
-    
+
     @property
-    def current_alpha(self): return self.alpha
-    
-    def update(self, task_loss):
-        v = safe_scalar(task_loss)
-        self._ema_loss = v if self._ema_loss is None else self.ema_decay * self._ema_loss + (1-self.ema_decay)*v
-        if self._prev_ema is not None:
-            d = (self._prev_ema - self._ema_loss)/(self._prev_ema + 1e-8)
-            self.alpha = max(self.alpha_min, min(self.alpha_max, self.alpha + self.lr_alpha*(self.delta_target-d)))
-        self._prev_ema = self._ema_loss
+    def current_alpha(self):
         return self.alpha
 
+    def update(self, task_loss):
+        v = safe_scalar(task_loss)
+        self._ema_loss = v if self._ema_loss is None else self.ema_decay * self._ema_loss + (1 - self.ema_decay) * v
+        if self._prev_ema is not None:
+            d = (self._prev_ema - self._ema_loss) / (self._prev_ema + 1e-08)
+            self.alpha = max(self.alpha_min, min(self.alpha_max, self.alpha + self.lr_alpha * (self.delta_target - d)))
+        self._prev_ema = self._ema_loss
+        return self.alpha
 
 def _safe_scalar(value):
     """兼容旧调用点，内部委托到共享实现。"""
     return safe_scalar(value)
-
 
 def _format_progress_bar(completed, total, width=24):
     if total <= 0:
@@ -122,21 +102,14 @@ def _resolve_original_model_loss(model):
     """
     解析 DetectionModel 的真实原始 loss 函数。
     """
-    current_loss = getattr(model, "loss", None)
+    current_loss = getattr(model, 'loss', None)
     if current_loss is None:
         return None
-    
-    # 直接从 type 上获取备份的原始 loss
-    original_fn = getattr(type(model), "_distill_original_loss", None)
+    original_fn = getattr(type(model), '_distill_original_loss', None)
     if original_fn is not None:
         return original_fn.__get__(model, type(model)) if hasattr(original_fn, '__get__') else original_fn
-    
-    # 没有备份，就返回当前的（首次 setup 时）
     return current_loss
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 主训练器 — v3: 纯 get_loss 重写，零模型污染
-# ═══════════════════════════════════════════════════════════════════════════════
 class AdaptiveKDTrainer(DetectionTrainer):
     """
     自适应知识蒸馏训练器 — v3 零污染版
@@ -147,33 +120,23 @@ class AdaptiveKDTrainer(DetectionTrainer):
       - 原始 loss 函数保存在 trainer._orig_loss 上
       - 无需注册表、无需 MethodType 绑定、无需 monkey-patch
     """
-    
     _kd_class_params = None
-    
+
     @classmethod
-    def set_kd_params(cls, teacher_path="", alpha_init=0.5, T_max=6.0, T_min=1.5,
-                      warm_epochs=5, w_kd=0.5, w_focal=0.3, w_feat=0.0,
-                      scale_boost=2.0, focal_gamma=2.0, **extra_kwargs):
-        cls._kd_class_params = {
-            "teacher_path": teacher_path, "alpha_init": alpha_init, "T_max": T_max,
-            "T_min": T_min, "warm_epochs": warm_epochs, "w_kd": w_kd, "w_focal": w_focal,
-            "w_feat": w_feat, "scale_boost": scale_boost, "focal_gamma": focal_gamma,
-        }
+    def set_kd_params(cls, teacher_path='', alpha_init=0.5, T_max=6.0, T_min=1.5, warm_epochs=5, w_kd=0.5, w_focal=0.3, w_feat=0.0, scale_boost=2.0, focal_gamma=2.0, **extra_kwargs):
+        cls._kd_class_params = {'teacher_path': teacher_path, 'alpha_init': alpha_init, 'T_max': T_max, 'T_min': T_min, 'warm_epochs': warm_epochs, 'w_kd': w_kd, 'w_focal': w_focal, 'w_feat': w_feat, 'scale_boost': scale_boost, 'focal_gamma': focal_gamma}
         if extra_kwargs:
             cls._kd_class_params.update(extra_kwargs)
-    
+
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
-        if overrides and "trainer" in overrides:
-            del overrides["trainer"]
-        
+        if overrides and 'trainer' in overrides:
+            del overrides['trainer']
         super().__init__(cfg, overrides, _callbacks)
-        
-        # 蒸馏组件
         self.teacher_model = None
         self._distill_loss = None
         self._temp_scheduler = None
         self._alpha_scheduler = None
-        self._teacher_path = ""
+        self._teacher_path = ''
         self._warm_epochs = 5
         self._w_kd = 0.5
         self._w_focal = 0.3
@@ -187,120 +150,96 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._orig_loss = None
         self._accum_task_loss = []
         self._accum_kd_loss = []
-        
-        # 【关键】Epoch 统计
         self._epoch_task_loss = 0.0
         self._epoch_kd_loss = 0.0
         self._batch_count = 0
         self._distill_log = []
         self._last_log_batch = 0
-        
-        # 加载蒸馏组件
         self._setup_distill_from_class_params()
         import types
         self.criterion = types.MethodType(AdaptiveKDTrainer.criterion, self)
-        logger.info("[INIT] criterion() 已重新绑定到蒸馏方法")
+        logger.info('[INIT] criterion() 已重新绑定到蒸馏方法')
 
     def _setup_distill_from_class_params(self):
         """从类参数加载教师模型和蒸馏组件"""
         kd = AdaptiveKDTrainer._kd_class_params
         if not kd:
             return
-        
-        teacher_path = str(kd.get("teacher_path", "")).strip()
+        teacher_path = str(kd.get('teacher_path', '')).strip()
         if not teacher_path or not os.path.exists(teacher_path):
             return
-        
         self._teacher_path = teacher_path
-        self._warm_epochs = int(kd.get("warm_epochs", 5))
-        self._w_kd = float(kd.get("w_kd", 0.5))
-        self._w_focal = float(kd.get("w_focal", 0.3))
-        self._w_feat = w_feat_to_scalar(kd.get("w_feat", 0.0))
-        self._T_max = float(kd.get("T_max", 6.0))
-        self._T_min = float(kd.get("T_min", 1.5))
-        self._alpha_init = float(kd.get("alpha_init", 0.5))
-        self._scale_boost = float(kd.get("scale_boost", 2.0))
-        self._focal_gamma = float(kd.get("focal_gamma", 2.0))
-        
-        print(f"[INIT] 蒸馏参数 | teacher={os.path.basename(self._teacher_path)} | "
-            f"α={self._alpha_init} T=[{self._T_max},{self._T_min}]")
-        
+        self._warm_epochs = int(kd.get('warm_epochs', 5))
+        self._w_kd = float(kd.get('w_kd', 0.5))
+        self._w_focal = float(kd.get('w_focal', 0.3))
+        self._w_feat = w_feat_to_scalar(kd.get('w_feat', 0.0))
+        self._T_max = float(kd.get('T_max', 6.0))
+        self._T_min = float(kd.get('T_min', 1.5))
+        self._alpha_init = float(kd.get('alpha_init', 0.5))
+        self._scale_boost = float(kd.get('scale_boost', 2.0))
+        self._focal_gamma = float(kd.get('focal_gamma', 2.0))
+        logger.info(f'[INIT] 蒸馏参数 | teacher={os.path.basename(self._teacher_path)} | α={self._alpha_init} T=[{self._T_max},{self._T_min}]')
         self._load_teacher()
         self._init_distill()
-        print("[INIT] 蒸馏损失函数 + 调度器 就绪 ✓")
-    
+        logger.info('[INIT] 蒸馏损失函数 + 调度器 就绪 ✓')
+
     def setup_model(self):
         ckpt = super().setup_model()
-        logger.info("[INIT] 检测模型就绪")
-        
-        # 【关键】保存原始 loss 函数引用
+        logger.info('[INIT] 检测模型就绪')
         self._orig_loss = _resolve_original_model_loss(self.model)
         if self._orig_loss is None:
-            logger.error("[FATAL] 找不到 model.loss!")
-        
-        # 如果 _setup_distill_from_class_params 已加载，不再重复
+            logger.error('[FATAL] 找不到 model.loss!')
         if self.teacher_model is not None:
-            logger.info("[INIT] 蒸馏组件已在 __init__ 中加载，跳过重复初始化")
+            logger.info('[INIT] 蒸馏组件已在 __init__ 中加载，跳过重复初始化')
         elif self._teacher_path and os.path.exists(self._teacher_path):
-            # 兜底：如果 __init__ 中未加载（如 teacher_path 当时不存在），在这里补加载
-            logger.info(f"[INIT] 补加载教师模型: {os.path.basename(self._teacher_path)}")
+            logger.info(f'[INIT] 补加载教师模型: {os.path.basename(self._teacher_path)}')
             self._load_teacher()
             self._init_distill()
-        
         return ckpt
 
     def _load_teacher(self):
-        # 【修复】空路径时直接返回，不报错
         if not self._teacher_path:
-            logger.info("[TEACHER] 教师路径为空，跳过加载")
+            logger.info('[TEACHER] 教师路径为空，跳过加载')
             return
         if not os.path.exists(self._teacher_path):
-            raise FileNotFoundError(f"教师模型不存在: {self._teacher_path}")
-        
-        logger.info(f"加载教师模型: {self._teacher_path}")
+            raise FileNotFoundError(f'教师模型不存在: {self._teacher_path}')
+        logger.info(f'加载教师模型: {self._teacher_path}')
         buf = io.StringIO()
         with redirect_stdout(buf), redirect_stderr(buf):
             teacher = YOLO(self._teacher_path, verbose=False)
-        
         teacher_model = teacher.model.to(self.device).eval()
         del teacher
-        
         for p in teacher_model.parameters():
             p.requires_grad = False
-        
-        # 【修复】梯度检查点可能不兼容所有模型，改为可选
         try:
             teacher_model.gradient_checkpointing_enable()
-            logger.info("教师模型已启用梯度检查点")
+            logger.info('教师模型已启用梯度检查点')
         except Exception:
             pass
-        
         self.teacher_model = teacher_model
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        logger.info("教师模型就绪 ✓ (显存已优化)")
-    
+        logger.info('教师模型就绪 ✓ (显存已优化)')
+
     def _init_distill(self):
-        total_epochs = self.args.epochs if hasattr(self.args, "epochs") else 150
+        total_epochs = self.args.epochs if hasattr(self.args, 'epochs') else 150
         self._alpha_scheduler = AdaptiveAlphaScheduler(alpha_init=self._alpha_init)
         self._temp_scheduler = CosineTemperatureScheduler(T_max=self._T_max, T_min=self._T_min, total_epochs=total_epochs)
-        self._distill_loss = CompositiveDistillLoss(w_kd=self._w_kd, w_focal=self._w_focal, w_feat=self._w_feat,
-                                                     temperature=self._T_max, scale_boost=self._scale_boost, focal_gamma=self._focal_gamma).to(self.device)
-        logger.info(f"蒸馏组件就绪 | T:[{self._T_max}→{self._T_min}] α:{self._alpha_init} warm:{self._warm_epochs}")
-        
-        self.add_callback("on_train_epoch_start", self._on_epoch_start)
-        self.add_callback("on_train_epoch_end", self._on_epoch_end)
-        self.add_callback("on_train_batch_end", self._on_train_batch_end)
-        self.add_callback("on_fit_epoch_end", self._on_fit_epoch_end)
-        self.add_callback("on_val_end", self._on_val_end)
-        self.add_callback("on_train_end", self._on_train_end)  # 安全网：确保最终CSV完整
-        logger.info("AdaptiveKDTrainer callbacks registered: on_train_epoch_start, on_train_epoch_end, on_train_batch_end, on_fit_epoch_end, on_val_end, on_train_end")
+        self._distill_loss = CompositiveDistillLoss(w_kd=self._w_kd, w_focal=self._w_focal, w_feat=self._w_feat, temperature=self._T_max, scale_boost=self._scale_boost, focal_gamma=self._focal_gamma).to(self.device)
+        logger.info(f'蒸馏组件就绪 | T:[{self._T_max}→{self._T_min}] α:{self._alpha_init} warm:{self._warm_epochs}')
+        self.add_callback('on_train_epoch_start', self._on_epoch_start)
+        self.add_callback('on_train_epoch_end', self._on_epoch_end)
+        self.add_callback('on_train_batch_end', self._on_train_batch_end)
+        self.add_callback('on_fit_epoch_end', self._on_fit_epoch_end)
+        self.add_callback('on_val_end', self._on_val_end)
+        self.add_callback('on_train_end', self._on_train_end)
+        logger.info('AdaptiveKDTrainer callbacks registered: on_train_epoch_start, on_train_epoch_end, on_train_batch_end, on_fit_epoch_end, on_val_end, on_train_end')
 
     def _distill_state_path(self) -> Path | None:
-        sd = getattr(self, "save_dir", None)
+        sd = getattr(self, 'save_dir', None)
         if sd:
-            return Path(sd) / "distill_state.json"
+            return Path(sd) / 'distill_state.json'
         return None
 
     def _save_distill_state(self, epoch: int) -> None:
@@ -311,7 +250,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
         current_temp = None
         if self._distill_log:
             try:
-                last_kd = float(self._distill_log[-1].get("kd_loss"))
+                last_kd = float(self._distill_log[-1].get('kd_loss'))
             except Exception:
                 last_kd = None
         if self._temp_scheduler is not None:
@@ -319,41 +258,27 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 current_temp = float(self._temp_scheduler.current_temperature)
             except Exception:
                 current_temp = None
-        payload = {
-            "epoch": int(epoch),
-            "alpha_scheduler": {
-                "alpha": float(self._alpha_scheduler.alpha),
-                "alpha_min": float(self._alpha_scheduler.alpha_min),
-                "alpha_max": float(self._alpha_scheduler.alpha_max),
-                "lr_alpha": float(self._alpha_scheduler.lr_alpha),
-                "ema_decay": float(self._alpha_scheduler.ema_decay),
-                "delta_target": float(self._alpha_scheduler.delta_target),
-                "ema_loss": None if self._alpha_scheduler._ema_loss is None else float(self._alpha_scheduler._ema_loss),
-                "prev_ema": None if self._alpha_scheduler._prev_ema is None else float(self._alpha_scheduler._prev_ema),
-            },
-            "last_kd_loss": last_kd,
-            "temperature": current_temp,
-        }
+        payload = {'epoch': int(epoch), 'alpha_scheduler': {'alpha': float(self._alpha_scheduler.alpha), 'alpha_min': float(self._alpha_scheduler.alpha_min), 'alpha_max': float(self._alpha_scheduler.alpha_max), 'lr_alpha': float(self._alpha_scheduler.lr_alpha), 'ema_decay': float(self._alpha_scheduler.ema_decay), 'delta_target': float(self._alpha_scheduler.delta_target), 'ema_loss': None if self._alpha_scheduler._ema_loss is None else float(self._alpha_scheduler._ema_loss), 'prev_ema': None if self._alpha_scheduler._prev_ema is None else float(self._alpha_scheduler._prev_ema)}, 'last_kd_loss': last_kd, 'temperature': current_temp}
         try:
             state_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(state_path, "w", encoding="utf-8") as f:
+            with open(state_path, 'w', encoding='utf-8') as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            logger.debug(f"[DISTILL_STATE] 保存失败: {e}")
+            logger.debug(f'[DISTILL_STATE] 保存失败: {e}')
 
     def _restore_alpha_from_results_csv(self) -> float | None:
-        sd = getattr(self, "save_dir", None)
+        sd = getattr(self, 'save_dir', None)
         if not sd:
             return None
-        csv_path = Path(sd) / "results.csv"
+        csv_path = Path(sd) / 'results.csv'
         if not csv_path.exists():
             return None
         last_alpha = None
         try:
-            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            with open(csv_path, 'r', encoding='utf-8', newline='') as f:
                 reader = _c.DictReader(f)
                 for row in reader:
-                    raw = row.get("distill/alpha")
+                    raw = row.get('distill/alpha')
                     if raw is None:
                         continue
                     text = str(raw).strip()
@@ -368,15 +293,15 @@ class AdaptiveKDTrainer(DetectionTrainer):
         return last_alpha
 
     def _restore_distill_baseline_from_results_csv(self) -> dict | None:
-        sd = getattr(self, "save_dir", None)
+        sd = getattr(self, 'save_dir', None)
         if not sd:
             return None
-        csv_path = Path(sd) / "results.csv"
+        csv_path = Path(sd) / 'results.csv'
         if not csv_path.exists():
             return None
         last = None
         try:
-            with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            with open(csv_path, 'r', encoding='utf-8', newline='') as f:
                 reader = _c.DictReader(f)
                 for row in reader:
                     last = row
@@ -398,16 +323,10 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 return int(float(text)) if text else None
             except Exception:
                 return None
-
-        return {
-            "epoch": _safe_int(last.get("epoch")),
-            "alpha": _safe_float(last.get("distill/alpha")),
-            "kd_loss": _safe_float(last.get("distill/kd_loss")),
-            "temperature": _safe_float(last.get("distill/temperature")),
-        }
+        return {'epoch': _safe_int(last.get('epoch')), 'alpha': _safe_float(last.get('distill/alpha')), 'kd_loss': _safe_float(last.get('distill/kd_loss')), 'temperature': _safe_float(last.get('distill/temperature'))}
 
     def _restore_distill_state_if_needed(self) -> None:
-        if not bool(getattr(self.args, "resume", False)):
+        if not bool(getattr(self.args, 'resume', False)):
             return
         if self._alpha_scheduler is None:
             return
@@ -417,75 +336,69 @@ class AdaptiveKDTrainer(DetectionTrainer):
         state_path = self._distill_state_path()
         if state_path is not None and state_path.exists():
             try:
-                disk = json.loads(state_path.read_text(encoding="utf-8"))
-                alpha_state = (disk or {}).get("alpha_scheduler", {}) or {}
-                alpha = alpha_state.get("alpha")
+                disk = json.loads(state_path.read_text(encoding='utf-8'))
+                alpha_state = (disk or {}).get('alpha_scheduler', {}) or {}
+                alpha = alpha_state.get('alpha')
                 if alpha is not None:
                     self._alpha_scheduler.alpha = float(alpha)
-                    self._alpha_scheduler._ema_loss = alpha_state.get("ema_loss")
-                    self._alpha_scheduler._prev_ema = alpha_state.get("prev_ema")
+                    self._alpha_scheduler._ema_loss = alpha_state.get('ema_loss')
+                    self._alpha_scheduler._prev_ema = alpha_state.get('prev_ema')
                     restored_alpha = float(self._alpha_scheduler.alpha)
-                    restored_from = "distill_state.json"
-                saved_temp = (disk or {}).get("temperature")
+                    restored_from = 'distill_state.json'
+                saved_temp = (disk or {}).get('temperature')
                 if self._temp_scheduler is not None and saved_temp is not None:
                     try:
                         self._temp_scheduler._current_T = float(saved_temp)
-                        restored_temp_from = "distill_state.json"
+                        restored_temp_from = 'distill_state.json'
                     except Exception:
                         pass
                 try:
-                    self._resume_prev_kd_loss = float((disk or {}).get("last_kd_loss"))
+                    self._resume_prev_kd_loss = float((disk or {}).get('last_kd_loss'))
                 except Exception:
                     self._resume_prev_kd_loss = None
                 try:
-                    self._resume_prev_epoch = int((disk or {}).get("epoch"))
+                    self._resume_prev_epoch = int((disk or {}).get('epoch'))
                 except Exception:
                     self._resume_prev_epoch = None
             except Exception as e:
-                logger.debug(f"[DISTILL_STATE] 读取状态失败: {e}")
+                logger.debug(f'[DISTILL_STATE] 读取状态失败: {e}')
         if restored_alpha is None:
             csv_baseline = self._restore_distill_baseline_from_results_csv()
-            csv_alpha = csv_baseline.get("alpha") if isinstance(csv_baseline, dict) else None
+            csv_alpha = csv_baseline.get('alpha') if isinstance(csv_baseline, dict) else None
             if csv_alpha is not None:
                 self._alpha_scheduler.alpha = float(csv_alpha)
                 restored_alpha = float(self._alpha_scheduler.alpha)
-                restored_from = "results.csv"
+                restored_from = 'results.csv'
             if isinstance(csv_baseline, dict):
-                if self._resume_prev_kd_loss is None and csv_baseline.get("kd_loss") is not None:
-                    self._resume_prev_kd_loss = float(csv_baseline["kd_loss"])
-                if self._resume_prev_epoch is None and csv_baseline.get("epoch") is not None:
-                    self._resume_prev_epoch = int(csv_baseline["epoch"])
-                if self._temp_scheduler is not None and csv_baseline.get("temperature") is not None:
+                if self._resume_prev_kd_loss is None and csv_baseline.get('kd_loss') is not None:
+                    self._resume_prev_kd_loss = float(csv_baseline['kd_loss'])
+                if self._resume_prev_epoch is None and csv_baseline.get('epoch') is not None:
+                    self._resume_prev_epoch = int(csv_baseline['epoch'])
+                if self._temp_scheduler is not None and csv_baseline.get('temperature') is not None:
                     try:
-                        self._temp_scheduler._current_T = float(csv_baseline["temperature"])
-                        restored_temp_from = "results.csv"
+                        self._temp_scheduler._current_T = float(csv_baseline['temperature'])
+                        restored_temp_from = 'results.csv'
                     except Exception:
                         pass
         else:
-            # 兼容旧版 state：若缺少 last_kd_loss，回退从 results.csv 获取续训边界基线
             if self._resume_prev_kd_loss is None or self._resume_prev_epoch is None:
                 csv_baseline = self._restore_distill_baseline_from_results_csv()
                 if isinstance(csv_baseline, dict):
-                    if self._resume_prev_kd_loss is None and csv_baseline.get("kd_loss") is not None:
-                        self._resume_prev_kd_loss = float(csv_baseline["kd_loss"])
-                    if self._resume_prev_epoch is None and csv_baseline.get("epoch") is not None:
-                        self._resume_prev_epoch = int(csv_baseline["epoch"])
-            # 即使 alpha/kd 基线完整，旧版 state 也可能没有 temperature，需独立回退。
+                    if self._resume_prev_kd_loss is None and csv_baseline.get('kd_loss') is not None:
+                        self._resume_prev_kd_loss = float(csv_baseline['kd_loss'])
+                    if self._resume_prev_epoch is None and csv_baseline.get('epoch') is not None:
+                        self._resume_prev_epoch = int(csv_baseline['epoch'])
             if self._temp_scheduler is not None and restored_temp_from is None:
                 csv_baseline = self._restore_distill_baseline_from_results_csv()
-                if isinstance(csv_baseline, dict) and csv_baseline.get("temperature") is not None:
+                if isinstance(csv_baseline, dict) and csv_baseline.get('temperature') is not None:
                     try:
-                        self._temp_scheduler._current_T = float(csv_baseline["temperature"])
-                        restored_temp_from = "results.csv"
+                        self._temp_scheduler._current_T = float(csv_baseline['temperature'])
+                        restored_temp_from = 'results.csv'
                     except Exception:
                         pass
         if restored_alpha is not None:
-            logger.info(f"[RESUME_ALPHA] 恢复 alpha={restored_alpha:.6f} 来源={restored_from}")
-    
-    # ══════════════════════════════════════════════════════════════════════════
-    # 可选：兼容旧版 ultralytics 的 get_loss 扩展点
-    # 当前训练流程实际通过 DetectionModel.loss 注入蒸馏损失
-    # ══════════════════════════════════════════════════════════════════════════
+            logger.info(f'[RESUME_ALPHA] 恢复 alpha={restored_alpha:.6f} 来源={restored_from}')
+
     def get_loss(self, batch, preds=None):
         """
         兼容层：将 get_loss 调用转发到 criterion()。
@@ -501,94 +414,57 @@ class AdaptiveKDTrainer(DetectionTrainer):
         重写 criterion() —— ultralytics 8.4.19 训练循环的实际调用路径。
         在标准检测损失基础上注入蒸馏损失。
         """
-        # 初始化 compute_loss
         if not hasattr(self, 'compute_loss') or self.compute_loss is None:
             _ = super().criterion(preds, batch)
-        
-        # 计算标准检测损失
         loss_task, loss_items = self.compute_loss(preds, batch)
-        
-        # 如果没有教师模型，直接返回
         if getattr(self, 'teacher_model', None) is None:
-            return loss_task, loss_items
-        
+            return (loss_task, loss_items)
         epoch = getattr(self, 'epoch', 0)
         warm_phase = epoch < self._warm_epochs
-        
-        # 累加损失（添加异常保护）
         try:
             self._epoch_task_loss += loss_task.item() if hasattr(loss_task, 'item') else float(loss_task)
             self._batch_count += 1
         except Exception as e:
-            logger.warning(f"[CRITERION] 累加损失失败: {e}")
-        
-        # Warm-up 阶段
+            logger.warning(f'[CRITERION] 累加损失失败: {e}')
         if warm_phase:
-            return loss_task, loss_items
-        
-        # 蒸馏阶段
+            return (loss_task, loss_items)
         if not self._distill_entered:
             self._distill_entered = True
-            logger.info(f"[DISTILL] 进入蒸馏阶段 epoch={epoch}")
-        
-        # 教师模型前向
+            logger.info(f'[DISTILL] 进入蒸馏阶段 epoch={epoch}')
         img = batch['img']
         device_type = img.device.type
         with torch.no_grad():
             with torch.amp.autocast(device_type, enabled=False):
                 teacher_preds = self.teacher_model(img.float())
-        
-        # 蒸馏损失
         num_classes = getattr(self.model, 'nc', 80)
         current_temp = self._temp_scheduler.current_temperature
-        loss_distill, _ = self._distill_loss(
-            student_preds=preds,
-            teacher_preds=teacher_preds,
-            num_classes=num_classes,
-            temperature=current_temp,
-        )
-        
-        # 累加蒸馏损失
+        loss_distill, _ = self._distill_loss(student_preds=preds, teacher_preds=teacher_preds, num_classes=num_classes, temperature=current_temp)
         try:
             self._epoch_kd_loss += loss_distill.item() if hasattr(loss_distill, 'item') else float(loss_distill)
         except Exception as e:
-            logger.warning(f"[CRITERION] 累加蒸馏损失失败: {e}")
-        
+            logger.warning(f'[CRITERION] 累加蒸馏损失失败: {e}')
         del teacher_preds
         if device_type == 'cuda':
             torch.cuda.empty_cache()
-        
-        # 加权组合
         alpha = self._alpha_scheduler.current_alpha
         total_loss = (1 - alpha) * loss_task + alpha * loss_distill
-        
-        return total_loss, loss_items
-
+        return (total_loss, loss_items)
 
     def _setup_train(self):
         """重写 setup_train：全程锁定 workers=0"""
         self.args.workers = 0
         super()._setup_train()
         self.args.workers = 0
-        
-        # 【删除】以下所有检查代码——它会消耗 DataLoader 的第一个 batch！
-        # for attr in ('dataloader', 'train_dataloader', ...):
-        #     loader = getattr(self, attr, None)
-        #     if loader is not None:
-        #         first_batch = next(iter(loader))  # ← 这一行会消耗 batch！
-        #         ...
-        
-        logger.info("[INIT 6/6] 数据集加载完成 ✓ | ...")
+        logger.info('[INIT 6/6] 数据集加载完成 ✓ | ...')
 
- 
     def _accumulate_losses(self, task_loss=None, kd_loss=None):
         """累加损失并递增 batch 计数"""
         if task_loss is not None:
             self._epoch_task_loss += task_loss.item() if hasattr(task_loss, 'item') else float(task_loss)
         if kd_loss is not None:
             self._epoch_kd_loss += kd_loss.item() if hasattr(kd_loss, 'item') else float(kd_loss)
-        self._batch_count += 1  # ← 确保这行存在！
-    
+        self._batch_count += 1
+
     def _get_epoch_info(self):
         total_epochs = getattr(self.args, 'epochs', 0) if hasattr(self, 'args') else 0
         batch_size = getattr(self.args, 'batch', 0) if hasattr(self, 'args') else 0
@@ -604,83 +480,45 @@ class AdaptiveKDTrainer(DetectionTrainer):
         if total_batches is None:
             total_batches = getattr(self, '_known_total_batches', None)
         dataset_samples = total_batches * batch_size if total_batches is not None and batch_size else None
-        return total_epochs, batch_size, total_batches, dataset_samples
+        return (total_epochs, batch_size, total_batches, dataset_samples)
 
     def _on_epoch_start(self, trainer):
         epoch = trainer.epoch
         display_epoch = epoch + 1
         total_epochs, batch_size, total_batches, dataset_samples = self._get_epoch_info()
-        logger.info(
-            f"[EPOCH_START] epoch={display_epoch} total={total_epochs} "
-            f"batch_size={batch_size} total_batches={total_batches or 'unknown'} "
-            f"dataset_samples={dataset_samples if dataset_samples is not None else 'unknown'}"
-        )
+        logger.info(f"[EPOCH_START] epoch={display_epoch} total={total_epochs} batch_size={batch_size} total_batches={total_batches or 'unknown'} dataset_samples={(dataset_samples if dataset_samples is not None else 'unknown')}")
 
     def _on_epoch_end(self, trainer):
         epoch = trainer.epoch
         display_epoch = epoch + 1
         batch_count = self._batch_count
         total_epochs, batch_size, total_batches, dataset_samples = self._get_epoch_info()
-        
         if epoch >= self._warm_epochs:
             self._temp_scheduler.step(epoch)
-
         if batch_count > 0:
             try:
                 avg_t = self._epoch_task_loss / batch_count
                 avg_k = self._epoch_kd_loss / batch_count
             except Exception as e:
-                logger.warning(f"[EPOCH_END] 计算平均损失失败: {e}")
-                return  # 跳过本 epoch 的日志记录
-            
-            phase = "warm" if epoch < self._warm_epochs else "distill"
+                logger.warning(f'[EPOCH_END] 计算平均损失失败: {e}')
+                return
+            phase = 'warm' if epoch < self._warm_epochs else 'distill'
             alpha_val = round(self._alpha_scheduler.current_alpha, 4)
             temp_val = round(self._temp_scheduler.current_temperature, 4)
-            logger.info(
-                f"[EPOCH_PROGRESS] epoch={display_epoch} total={total_epochs} "
-                f"loss={avg_t:.4f} kd={avg_k:.4f} "
-                f"alpha={alpha_val} temp={temp_val} "
-                f"batches={batch_count}/{total_batches or 'unknown'} "
-                f"batch_size={batch_size} "
-                f"samples={batch_count * batch_size if batch_size else 'unknown'} "
-                f"dataset_samples={dataset_samples if dataset_samples is not None else 'unknown'} "
-                f"phase={phase}"
-            )
-            # logger 在部分运行环境不会输出到子进程 stdout，前端将收不到 alpha 进度；
-            # 同步 print 到 stdout，保证 /api/train/logs 能稳定拿到结构化进度行。
-            print(
-                f"[EPOCH_PROGRESS] epoch={display_epoch} total={total_epochs} "
-                f"loss={avg_t:.4f} kd={avg_k:.4f} "
-                f"alpha={alpha_val} temp={temp_val} "
-                f"batches={batch_count}/{total_batches or 'unknown'} "
-                f"batch_size={batch_size} "
-                f"samples={batch_count * batch_size if batch_size else 'unknown'} "
-                f"dataset_samples={dataset_samples if dataset_samples is not None else 'unknown'} "
-                f"phase={phase}",
-                flush=True,
-            )
-            self._distill_log.append({
-                "epoch": display_epoch,
-                "phase": phase,
-                "task_loss": round(avg_t, 6),
-                "kd_loss": round(avg_k, 6),
-                "alpha": round(self._alpha_scheduler.current_alpha, 6),
-                "temperature": round(self._temp_scheduler.current_temperature, 6),
-            })
+            logger.info(f"[EPOCH_PROGRESS] epoch={display_epoch} total={total_epochs} loss={avg_t:.4f} kd={avg_k:.4f} alpha={alpha_val} temp={temp_val} batches={batch_count}/{total_batches or 'unknown'} batch_size={batch_size} samples={(batch_count * batch_size if batch_size else 'unknown')} dataset_samples={(dataset_samples if dataset_samples is not None else 'unknown')} phase={phase}")
+            self._distill_log.append({'epoch': display_epoch, 'phase': phase, 'task_loss': round(avg_t, 6), 'kd_loss': round(avg_k, 6), 'alpha': round(self._alpha_scheduler.current_alpha, 6), 'temperature': round(self._temp_scheduler.current_temperature, 6)})
             if epoch >= self._warm_epochs:
                 self._alpha_scheduler.update(avg_t)
             self._save_distill_state(display_epoch)
             self._epoch_task_loss = 0.0
             self._epoch_kd_loss = 0.0
             self._batch_count = 0
-            # 每个 epoch 结束后积极清理显存，防止长时间训练后内存持续增长
             if torch.cuda.is_available():
                 gc.collect()
                 torch.cuda.empty_cache()
-                torch.cuda.reset_peak_memory_stats()  # 重置峰值统计以便监控每个epoch
+                torch.cuda.reset_peak_memory_stats()
 
     def _on_train_batch_end(self, trainer):
-        # 批次进度已在 get_loss() 中按间隔输出，此处不再重复
         pass
 
     def _save_distill_log_json(self):
@@ -692,24 +530,20 @@ class AdaptiveKDTrainer(DetectionTrainer):
             log_path = Path(sd) / 'distill_log.json'
             with open(log_path, 'w', encoding='utf-8') as f:
                 json.dump(self._distill_log, f, indent=2, ensure_ascii=False)
-            logger.debug(f"[DISTILL_LOG] 已保存 {len(self._distill_log)} 条蒸馏日志到 {log_path}")
+            logger.debug(f'[DISTILL_LOG] 已保存 {len(self._distill_log)} 条蒸馏日志到 {log_path}')
         except Exception as e:
-            logger.warning(f"[DISTILL_LOG] 保存 distill_log.json 失败: {e}")
+            logger.warning(f'[DISTILL_LOG] 保存 distill_log.json 失败: {e}')
 
     def _on_fit_epoch_end(self, trainer):
         """注入蒸馏指标到 results.csv（同时保存备用 distill_log.json）"""
         epoch = trainer.epoch
         display_epoch = epoch + 1
-        
-        entry = next((e for e in reversed(self._distill_log) if e["epoch"] == display_epoch), None)
+        entry = next((e for e in reversed(self._distill_log) if e['epoch'] == display_epoch), None)
         if entry is None and self._distill_log:
             entry = self._distill_log[-1]
         if not entry:
             return
-        
-        av, tv, kv = entry['alpha'], entry['temperature'], entry['kd_loss']
-        
-        # 1. 尝试注入到 trainer.metrics（会被 ultralytics 写入 CSV）
+        av, tv, kv = (entry['alpha'], entry['temperature'], entry['kd_loss'])
         for target in [getattr(trainer, 'metrics', None), getattr(trainer, 'results_dict', None)]:
             if isinstance(target, dict):
                 try:
@@ -717,12 +551,8 @@ class AdaptiveKDTrainer(DetectionTrainer):
                     target['distill/temperature'] = tv
                     target['distill/kd_loss'] = kv
                 except Exception as e:
-                    logger.debug(f"[DISTILL] 注入 metrics 失败: {e}")
-        
-        # 2. 同时写入 CSV（增加成功概率）
+                    logger.debug(f'[DISTILL] 注入 metrics 失败: {e}')
         self._append_csv(display_epoch, av, tv, kv)
-        
-        # 3. 持久化备用 distill_log.json
         self._save_distill_log_json()
 
     def _append_csv(self, epoch, a, t, k):
@@ -730,27 +560,19 @@ class AdaptiveKDTrainer(DetectionTrainer):
         sd = getattr(self, 'save_dir', None)
         if not sd:
             return
-        
         p = Path(sd) / 'results.csv'
         if not p.exists():
             return
-        
         try:
             rows = []
             fn = []
-            
-            # 原子读操作
             with open(p, 'r', encoding='utf-8', newline='') as f:
                 r = _c.DictReader(f)
                 fn = list(r.fieldnames or [])
                 rows = list(r)
-            
-            # 确保蒸馏列存在
             for c in ['distill/alpha', 'distill/temperature', 'distill/kd_loss']:
                 if c not in fn:
                     fn.append(c)
-            
-            # 匹配指定 epoch 的行
             matched = False
             for row in rows:
                 try:
@@ -763,91 +585,65 @@ class AdaptiveKDTrainer(DetectionTrainer):
                         break
                 except (ValueError, TypeError, KeyError):
                     continue
-            
-            # 原子写操作
             if matched:
                 with open(p, 'w', encoding='utf-8', newline='') as f:
                     writer = _c.DictWriter(f, fn)
                     writer.writeheader()
                     writer.writerows(rows)
-                logger.debug(f"[DISTILL_CSV] 已更新 epoch {int(epoch)} 的蒸馏数据")
-                
+                logger.debug(f'[DISTILL_CSV] 已更新 epoch {int(epoch)} 的蒸馏数据')
         except Exception as e:
-            logger.debug(f"[DISTILL_CSV] 追加蒸馏数据失败: {e}")
-    
+            logger.debug(f'[DISTILL_CSV] 追加蒸馏数据失败: {e}')
+
     def _on_val_end(self, trainer):
         """验证结束后：提取并缓存每类别的性能指标（AP / Precision / Recall）"""
         try:
-            # 多路径探测验证结果对象（兼容不同 ultralytics 版本）
             validator = getattr(trainer, 'validator', None)
             if validator is None:
-                logger.debug("[VAL] trainer.validator 为空，跳过")
+                logger.debug('[VAL] trainer.validator 为空，跳过')
                 return
-
-            # 尝试多种方式获取结果对象
             results = None
             for attr_name in ('results', 'final_results', 'stats'):
                 r = getattr(validator, attr_name, None) or getattr(trainer, f'validator_{attr_name}', None)
                 if r is not None:
                     results = r
                     break
-
             if results is None:
-                # 尝试直接从 trainer.metrics 获取
                 metrics_dict = getattr(trainer, 'metrics', None) or getattr(trainer, 'results_dict', None)
                 if isinstance(metrics_dict, dict):
                     self._try_save_per_class_from_metrics(metrics_dict, trainer)
                 return
-
             box = getattr(results, 'box', None)
             if box is None:
                 return
-
-            # 提取 per-class 数据 — ultralytics >= 8.2 Metric API
             class_names = getattr(results, 'names', {}) or {}
             nc = len(class_names) if class_names else getattr(box, 'nc', 0)
             if nc == 0:
                 return
-
             import numpy as _np
-
-            # maps 是 ndarray 属性（非方法），shape=(nc,)，包含全部类别的 mAP@50-95
             _maps = None
             if hasattr(box, 'maps') and box.maps is not None:
                 _m = _np.asarray(box.maps)
                 _maps = list(_m.flatten()) if _m.ndim > 1 else list(_m)
-
-            labels, map_list = [], []
+            labels, map_list = ([], [])
             for i in range(nc):
                 labels.append(class_names.get(i, f'class{i}'))
                 map_list.append(float(_maps[i]) if _maps and i < len(_maps) else None)
             prec_list, rec_list = _scatter_pr_from_ultralytics_box(box, nc)
-
-            output_data = {
-                'labels': labels,
-                'map': map_list,
-                'precision': prec_list,
-                'recall': rec_list,
-                'epoch': trainer.epoch + 1,
-                'generated_at': datetime.now().isoformat(),
-            }
-
+            output_data = {'labels': labels, 'map': map_list, 'precision': prec_list, 'recall': rec_list, 'epoch': trainer.epoch + 1, 'generated_at': datetime.now().isoformat()}
             sd = getattr(trainer, 'save_dir', None)
             if sd:
                 cache_path = Path(sd) / 'per_class_metrics.json'
                 with open(cache_path, 'w', encoding='utf-8') as f:
                     json.dump(output_data, f, indent=2, ensure_ascii=False)
-
         except Exception as e:
-            logger.debug(f"[VAL] 每类指标提取跳过: {e}")
+            logger.debug(f'[VAL] 每类指标提取跳过: {e}')
 
     def _try_save_per_class_from_metrics(self, metrics: dict, trainer):
         """从 metrics 字典中尝试提取每类指标（兜底路径）"""
         try:
-            # 检查是否有按类别前缀的列，如 class0_ap, cls_0_precision 等
             class_metrics: dict[int, dict[str, float]] = {}
             for key in metrics.keys():
-                match = re.search(r'(?i)(?:class|cls)[\s_/\\-]*(\d+)', str(key))
+                match = re.search('(?i)(?:class|cls)[\\s_/\\\\-]*(\\d+)', str(key))
                 if not match:
                     continue
                 idx = int(match.group(1))
@@ -866,11 +662,8 @@ class AdaptiveKDTrainer(DetectionTrainer):
                     except (TypeError, ValueError):
                         metric_val = None
                     class_metrics.setdefault(idx, {})[metric_type] = metric_val
-
             if not class_metrics:
                 return
-
-            # 获取类别名
             data_cfg_path = getattr(getattr(trainer, 'args', None), 'data', None)
             names = {}
             if data_cfg_path:
@@ -880,8 +673,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 if dp.exists():
                     cfg_data = _yml.safe_load(dp.read_text(encoding='utf-8'))
                     names = cfg_data.get('names') or {}
-
-            labels, map_l, prec_l, rec_l = [], [], [], []
+            labels, map_l, prec_l, rec_l = ([], [], [], [])
             for idx in sorted(class_metrics.keys()):
                 cm = class_metrics[idx]
                 labels.append(names.get(idx, f'class{idx}') if isinstance(names, dict) else f'class{idx}')
@@ -891,19 +683,14 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 map_l.append(map_val)
                 prec_l.append(prec_val)
                 rec_l.append(rec_val)
-
-            output = {
-                'labels': labels, 'map': map_l, 'precision': prec_l, 'recall': rec_l,
-                'epoch': getattr(trainer, 'epoch', -1) + 1,
-                'generated_at': datetime.now().isoformat(), 'source': 'metrics_dict_fallback',
-            }
+            output = {'labels': labels, 'map': map_l, 'precision': prec_l, 'recall': rec_l, 'epoch': getattr(trainer, 'epoch', -1) + 1, 'generated_at': datetime.now().isoformat(), 'source': 'metrics_dict_fallback'}
             sd = getattr(trainer, 'save_dir', None)
             if sd:
                 cache_path = Path(sd) / 'per_class_metrics.json'
                 with open(cache_path, 'w', encoding='utf-8') as f:
                     json.dump(output, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            logger.debug(f"[VAL] metrics_dict 兜底提取失败: {e}")
+            logger.debug(f'[VAL] metrics_dict 兜底提取失败: {e}')
 
     def _on_train_end(self, trainer):
         """
@@ -915,55 +702,38 @@ class AdaptiveKDTrainer(DetectionTrainer):
         3. 处理异常中断的情况
         """
         if not self._distill_log:
-            logger.info("[TRAIN_END] 无蒸馏日志，跳过")
+            logger.info('[TRAIN_END] 无蒸馏日志，跳过')
             return
-        
         sd = getattr(self, 'save_dir', None)
         if not sd:
-            logger.warning("[TRAIN_END] save_dir 为空")
+            logger.warning('[TRAIN_END] save_dir 为空')
             return
-        
-        # 1. 首先保存备用 distill_log.json
         self._save_distill_log_json()
-        
-        # 2. 修复 results.csv
         p = Path(sd) / 'results.csv'
         if not p.exists():
-            logger.warning(f"[TRAIN_END] results.csv 不存在: {p}")
+            logger.warning(f'[TRAIN_END] results.csv 不存在: {p}')
             return
-        
         try:
             rows = []
             fn = []
-            
-            # 读取 CSV
             with open(p, 'r', encoding='utf-8', newline='') as f:
                 reader = _c.DictReader(f)
                 fn = list(reader.fieldnames or [])
                 rows = list(reader)
-            
-            logger.info(f"[TRAIN_END] 读取 results.csv: {len(rows)} 行, {len(fn)} 列")
-            
-            # 确保蒸馏列存在
+            logger.info(f'[TRAIN_END] 读取 results.csv: {len(rows)} 行, {len(fn)} 列')
             distill_cols = ['distill/alpha', 'distill/temperature', 'distill/kd_loss']
             for c in distill_cols:
                 if c not in fn:
                     fn.append(c)
-            
-            # 用蒸馏日志补全 CSV
             epoch_to_distill = {entry['epoch']: entry for entry in self._distill_log}
             written_count = 0
             missing_epochs = set()
-            
             for row in rows:
                 try:
                     ep = int(float(row.get('epoch', '-1')))
                 except (ValueError, TypeError):
                     continue
-                
-                # 首先精确匹配，再尝试 ±1 偏移（处理 0-based vs 1-based 差异）
                 de = epoch_to_distill.get(ep) or epoch_to_distill.get(ep - 1) or epoch_to_distill.get(ep + 1)
-                
                 if de is not None:
                     row['distill/alpha'] = de['alpha']
                     row['distill/temperature'] = de['temperature']
@@ -971,28 +741,18 @@ class AdaptiveKDTrainer(DetectionTrainer):
                     written_count += 1
                 else:
                     missing_epochs.add(ep)
-            
-            # 原子写操作
             with open(p, 'w', encoding='utf-8', newline='') as f:
                 writer = _c.DictWriter(f, fn)
                 writer.writeheader()
                 writer.writerows(rows)
-            
-            logger.info(
-                f"[TRAIN_END] CSV 修复完成: {written_count}/{len(rows)} 行已补全蒸馏数据 "
-                f"(缺失 {len(missing_epochs)} 轮: {sorted(missing_epochs)[:5]}...)"
-            )
-            
+            logger.info(f'[TRAIN_END] CSV 修复完成: {written_count}/{len(rows)} 行已补全蒸馏数据 (缺失 {len(missing_epochs)} 轮: {sorted(missing_epochs)[:5]}...)')
         except Exception as e:
-            logger.error(f"[TRAIN_END] CSV 修复失败: {type(e).__name__}: {e}")
-            # 即使 CSV 修复失败，distill_log.json 备用文件已保存，Web 端可以加载备用数据
-            logger.info("[TRAIN_END] 备用数据已保存到 distill_log.json，可通过该文件恢复")
-
-        # 3. 最终兜底：确保 per_class_metrics.json 已存在
+            logger.error(f'[TRAIN_END] CSV 修复失败: {type(e).__name__}: {e}')
+            logger.info('[TRAIN_END] 备用数据已保存到 distill_log.json，可通过该文件恢复')
         try:
             self._ensure_per_class_metrics(trainer)
         except Exception as e:
-            logger.warning(f"[TRAIN_END] 生成 per_class_metrics.json 失败: {e}")
+            logger.warning(f'[TRAIN_END] 生成 per_class_metrics.json 失败: {e}')
 
     def _ensure_per_class_metrics(self, trainer):
         """训练结束时确保 per_class_metrics.json 已存在，否则用模型验证生成。"""
@@ -1001,103 +761,72 @@ class AdaptiveKDTrainer(DetectionTrainer):
             return
         cache_path = Path(sd) / 'per_class_metrics.json'
         if cache_path.exists():
-            logger.info("[TRAIN_END] per_class_metrics.json 已存在，跳过生成")
+            logger.info('[TRAIN_END] per_class_metrics.json 已存在，跳过生成')
             return
-
-        # 查找模型权重
-        weight_candidates = [
-            Path(sd) / 'weights' / 'best.pt',
-            Path(sd) / 'weights' / 'last.pt',
-            Path(sd) / 'best.pt',
-            Path(sd) / 'last.pt',
-        ]
+        weight_candidates = [Path(sd) / 'weights' / 'best.pt', Path(sd) / 'weights' / 'last.pt', Path(sd) / 'best.pt', Path(sd) / 'last.pt']
         model_path = None
         for candidate in weight_candidates:
             if candidate.exists():
                 model_path = candidate
                 break
-
         if model_path is None or not model_path.exists():
-            # 尝试从 args.yaml 获取数据集配置来验证当前模型
             try:
                 import io as _io
                 from contextlib import redirect_stdout as _rs, redirect_stderr as _rse
                 from ultralytics import YOLO
-
                 data_cfg = getattr(getattr(trainer, 'args', None), 'data', None)
                 if not data_cfg:
                     return
                 imgsz = getattr(getattr(trainer, 'args', None), 'imgsz', 640)
-
                 buf = _io.StringIO()
                 with _rs(buf), _rse(buf):
                     eval_model = YOLO(str(self.model))
-                    eval_results = eval_model.val(
-                        data=data_cfg,
-                        imgsz=imgsz,
-                        verbose=False,
-                    )
-
+                    eval_results = eval_model.val(data=data_cfg, imgsz=imgsz, verbose=False)
                 self._extract_and_save_per_class(eval_results, sd)
             except Exception as e:
-                logger.warning(f"[TRAIN_END] 兜底每类指标生成失败: {e}")
+                logger.warning(f'[TRAIN_END] 兜底每类指标生成失败: {e}')
             return
-
-        # 有权重文件时直接加载验证
         try:
             import io as _io2
             from contextlib import redirect_stdout as _rs2, redirect_stderr as _rse2
             from ultralytics import YOLO as _YOLO
-
             data_cfg = getattr(getattr(trainer, 'args', None), 'data', None)
             if not data_cfg:
                 return
             imgsz = getattr(getattr(trainer, 'args', None), 'imgsz', 640)
-
             buf = _io2.StringIO()
             with _rs2(buf), _rse2(buf):
                 m = _YOLO(str(model_path))
                 results = m.val(data=data_cfg, imgsz=imgsz, verbose=False)
-
             self._extract_and_save_per_class(results, sd)
             del m
         except Exception as e:
-            logger.warning(f"[TRAIN_END] 权重文件验证生成每类指标失败: {e}")
+            logger.warning(f'[TRAIN_END] 权重文件验证生成每类指标失败: {e}')
 
     def _extract_and_save_per_class(self, val_results, save_dir):
         """从 YOLO 验证结果中提取每类指标并保存"""
         box = getattr(val_results, 'box', None)
         if box is None:
             return
-
         class_names = getattr(val_results, 'names', {}) or {}
         nc = len(class_names) if class_names else getattr(box, 'nc', 0)
         if nc == 0:
             return
-
         import numpy as _np
-
-        # maps 是 ndarray 属性（非方法），shape=(nc,)
         _maps = None
         if hasattr(box, 'maps') and box.maps is not None:
             _m = _np.asarray(box.maps)
             _maps = list(_m.flatten()) if _m.ndim > 1 else list(_m)
-
-        labels, map_l = [], []
+        labels, map_l = ([], [])
         for i in range(nc):
             labels.append(class_names.get(i, f'class{i}'))
             map_l.append(float(_maps[i]) if _maps and i < len(_maps) else None)
         prec_l, rec_l = _scatter_pr_from_ultralytics_box(box, nc)
-
-        output = {
-            'labels': labels, 'map': map_l, 'precision': prec_l, 'recall': rec_l,
-            'source': 'train_end_fallback',
-            'generated_at': datetime.now().isoformat(),
-        }
+        output = {'labels': labels, 'map': map_l, 'precision': prec_l, 'recall': rec_l, 'source': 'train_end_fallback', 'generated_at': datetime.now().isoformat()}
         cache_path = Path(save_dir) / 'per_class_metrics.json'
         with open(cache_path, 'w', encoding='utf-8') as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
-        logger.info(f"[TRAIN_END] 每类指标已生成: {cache_path} ({nc} 个类别)")
+        logger.info(f'[TRAIN_END] 每类指标已生成: {cache_path} ({nc} 个类别)')
 
     def save_model(self, *args, **kwargs):
         if hasattr(self, '_class_loss_backup'):
@@ -1121,4 +850,5 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 type(self.model).loss = _distill_model_loss
                 type(self.model)._distill_original_loss = self._class_loss_backup
 
-    def get_distill_log(self): return self._distill_log
+    def get_distill_log(self):
+        return self._distill_log
