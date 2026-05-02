@@ -136,6 +136,7 @@ export function TrainingHyperparamsSection({
           disabled={running || isResumeConfigLocked}
         />
         <NumberField label="Batch Size" value={form.training.batch} step="1" onChange={(v) => setNested("training", "batch", v)} disabled={running || isResumeConfigLocked} />
+        <NumberField label="最大检测数 max_det" value={form.training.max_det ?? 300} step="1" onChange={(v) => setNested("training", "max_det", v)} disabled={running || isResumeConfigLocked} />
         <NumberField label="初始学习率 lr0" value={form.training.lr0} step="0.001" onChange={(v) => setNested("training", "lr0", v)} disabled={running || isResumeConfigLocked} />
         <NumberField label="最终学习率因子 lrf" value={form.training.lrf} step="0.01" onChange={(v) => setNested("training", "lrf", v)} disabled={running || isResumeConfigLocked} />
         <NumberField label="学习率预热轮数" value={form.training.warmup_epochs} step="0.5" onChange={(v) => setNested("training", "warmup_epochs", v)} disabled={running || isResumeConfigLocked} />

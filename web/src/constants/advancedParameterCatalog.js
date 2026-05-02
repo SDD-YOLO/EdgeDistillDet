@@ -7,6 +7,7 @@ export const BASIC_TRAINING_KEYS = new Set([
   "epochs",
   "imgsz",
   "batch",
+  "max_det",
   "lr0",
   "lrf",
   "warmup_epochs",

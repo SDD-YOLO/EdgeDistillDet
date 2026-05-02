@@ -110,6 +110,92 @@ def _resolve_original_model_loss(model):
         return original_fn.__get__(model, type(model)) if hasattr(original_fn, '__get__') else original_fn
     return current_loss
 
+
+def _move_detection_loss_to_device(loss_obj, device):
+    """把 Ultralytics 检测损失内部缓冲迁移到目标设备。"""
+    if loss_obj is None:
+        return None
+    try:
+        loss_obj.device = device
+    except Exception:
+        pass
+    proj = getattr(loss_obj, 'proj', None)
+    if hasattr(proj, 'to'):
+        try:
+            loss_obj.proj = proj.to(device)
+        except Exception:
+            pass
+    bbox_loss = getattr(loss_obj, 'bbox_loss', None)
+    if hasattr(bbox_loss, 'to'):
+        try:
+            loss_obj.bbox_loss = bbox_loss.to(device)
+        except Exception:
+            pass
+    return loss_obj
+
+
+def _resolve_trainer_device(trainer, model):
+    device = getattr(trainer, 'device', None)
+    if device is not None:
+        return device
+    try:
+        return next(model.parameters()).device
+    except Exception:
+        return torch.device('cpu')
+
+
+def _loss_to_float(value):
+    if value is None:
+        return 0.0
+    if hasattr(value, 'detach'):
+        value = value.detach()
+    if hasattr(value, 'numel') and value.numel() > 1:
+        value = value.sum()
+    if hasattr(value, 'item'):
+        return float(value.item())
+    return float(value)
+
+
+class _DistillCriterionProxy:
+    """将原始检测损失包装为蒸馏损失，同时保持原始接口行为。"""
+
+    def __init__(self, trainer, base_criterion):
+        self._trainer_ref = weakref.ref(trainer)
+        self._base_criterion = base_criterion
+
+    def __call__(self, preds, batch):
+        trainer_ref = getattr(self, '_trainer_ref', None)
+        trainer = trainer_ref() if callable(trainer_ref) else None
+        if trainer is None:
+            return self._base_criterion(preds, batch)
+        return trainer._criterion_impl(preds, batch, self._base_criterion)
+
+    def update(self, *args, **kwargs):
+        updater = getattr(self._base_criterion, 'update', None)
+        if callable(updater):
+            return updater(*args, **kwargs)
+        return None
+
+    def __getattr__(self, name):
+        try:
+            base_criterion = object.__getattribute__(self, '_base_criterion')
+        except AttributeError:
+            raise AttributeError(name) from None
+        if base_criterion is None:
+            raise AttributeError(name)
+        return getattr(base_criterion, name)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self._base_criterion!r})'
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state['_trainer_ref'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
 class AdaptiveKDTrainer(DetectionTrainer):
     """
     自适应知识蒸馏训练器 — v3 零污染版
@@ -118,7 +204,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
       - 不修改 model 对象任何属性 → pickle/EMA/deepcopy 全部兼容
       - 通过重写 get_loss() 注入蒸馏逻辑（ultralytics 官方扩展方式）
       - 原始 loss 函数保存在 trainer._orig_loss 上
-      - 无需注册表、无需 MethodType 绑定、无需 monkey-patch
+            - 通过 model.criterion 代理保持训练主路径稳定
     """
     _kd_class_params = None
 
@@ -148,6 +234,8 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._focal_gamma = 2.0
         self._distill_entered = False
         self._orig_loss = None
+        self._base_criterion = None
+        self._criterion_proxy = None
         self._accum_task_loss = []
         self._accum_kd_loss = []
         self._epoch_task_loss = 0.0
@@ -156,9 +244,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._distill_log = []
         self._last_log_batch = 0
         self._setup_distill_from_class_params()
-        import types
-        self.criterion = types.MethodType(AdaptiveKDTrainer.criterion, self)
-        logger.info('[INIT] criterion() 已重新绑定到蒸馏方法')
+        logger.info('[INIT] 蒸馏训练器初始化完成，等待模型就绪后绑定 model.criterion')
 
     def _setup_distill_from_class_params(self):
         """从类参数加载教师模型和蒸馏组件"""
@@ -189,13 +275,38 @@ class AdaptiveKDTrainer(DetectionTrainer):
         self._orig_loss = _resolve_original_model_loss(self.model)
         if self._orig_loss is None:
             logger.error('[FATAL] 找不到 model.loss!')
+        self._install_distill_criterion()
         if self.teacher_model is not None:
             logger.info('[INIT] 蒸馏组件已在 __init__ 中加载，跳过重复初始化')
         elif self._teacher_path and os.path.exists(self._teacher_path):
             logger.info(f'[INIT] 补加载教师模型: {os.path.basename(self._teacher_path)}')
             self._load_teacher()
             self._init_distill()
+            self._install_distill_criterion()
         return ckpt
+
+    def _install_distill_criterion(self):
+        """把模型自身的 criterion 包装成蒸馏代理，确保训练循环走真实调用路径。"""
+        model = getattr(self, 'model', None)
+        if model is None or getattr(self, 'teacher_model', None) is None:
+            return
+        if getattr(model, 'args', None) is None and getattr(self, 'args', None) is not None:
+            model.args = self.args
+        current = getattr(model, 'criterion', None)
+        if isinstance(current, _DistillCriterionProxy):
+            self._base_criterion = current._base_criterion
+            self._criterion_proxy = current
+            self.criterion = current
+            return
+        if current is None:
+            current = model.init_criterion()
+        current = _move_detection_loss_to_device(current, _resolve_trainer_device(self, model))
+        self._base_criterion = current
+        proxy = _DistillCriterionProxy(self, current)
+        model.criterion = proxy
+        self._criterion_proxy = proxy
+        self.criterion = proxy
+        logger.info('[INIT] model.criterion 已绑定到蒸馏代理')
 
     def _load_teacher(self):
         if not self._teacher_path:
@@ -401,28 +512,33 @@ class AdaptiveKDTrainer(DetectionTrainer):
 
     def get_loss(self, batch, preds=None):
         """
-        兼容层：将 get_loss 调用转发到 criterion()。
-        ultralytics 8.4.19 训练循环调用 criterion()，
+        兼容层：将 get_loss 调用转发到 model.loss().
+        ultralytics 训练循环最终走 model.loss(batch, preds)，
         但保留 get_loss() 以兼容其他扩展方式。
         """
         if preds is None:
             preds = self.model(batch['img'])
-        return self.criterion(preds, batch)
+        return self.model.loss(batch, preds)
 
-    def criterion(self, preds, batch):
-        """
-        重写 criterion() —— ultralytics 8.4.19 训练循环的实际调用路径。
-        在标准检测损失基础上注入蒸馏损失。
-        """
-        if not hasattr(self, 'compute_loss') or self.compute_loss is None:
-            _ = super().criterion(preds, batch)
-        loss_task, loss_items = self.compute_loss(preds, batch)
+    def _criterion_impl(self, preds, batch, base_criterion):
+        """执行标准检测损失 + 蒸馏损失，并维护 epoch 统计。"""
+        if base_criterion is None:
+            model = getattr(self, 'model', None)
+            if model is None:
+                raise RuntimeError('model 还未初始化，无法计算损失')
+            current = getattr(model, 'criterion', None)
+            if isinstance(current, _DistillCriterionProxy):
+                base_criterion = current._base_criterion
+            else:
+                base_criterion = current or model.init_criterion()
+            self._base_criterion = base_criterion
+        loss_task, loss_items = base_criterion(preds, batch)
         if getattr(self, 'teacher_model', None) is None:
             return (loss_task, loss_items)
         epoch = getattr(self, 'epoch', 0)
         warm_phase = epoch < self._warm_epochs
         try:
-            self._epoch_task_loss += loss_task.item() if hasattr(loss_task, 'item') else float(loss_task)
+            self._epoch_task_loss += _loss_to_float(loss_task)
             self._batch_count += 1
         except Exception as e:
             logger.warning(f'[CRITERION] 累加损失失败: {e}')
@@ -440,7 +556,7 @@ class AdaptiveKDTrainer(DetectionTrainer):
         current_temp = self._temp_scheduler.current_temperature
         loss_distill, _ = self._distill_loss(student_preds=preds, teacher_preds=teacher_preds, num_classes=num_classes, temperature=current_temp)
         try:
-            self._epoch_kd_loss += loss_distill.item() if hasattr(loss_distill, 'item') else float(loss_distill)
+            self._epoch_kd_loss += _loss_to_float(loss_distill)
         except Exception as e:
             logger.warning(f'[CRITERION] 累加蒸馏损失失败: {e}')
         del teacher_preds
@@ -449,6 +565,12 @@ class AdaptiveKDTrainer(DetectionTrainer):
         alpha = self._alpha_scheduler.current_alpha
         total_loss = (1 - alpha) * loss_task + alpha * loss_distill
         return (total_loss, loss_items)
+
+    def criterion(self, preds, batch):
+        """
+        兼容旧调用点：直接复用蒸馏代理的损失逻辑。
+        """
+        return self._criterion_impl(preds, batch, self._base_criterion)
 
     def _setup_train(self):
         """重写 setup_train：全程锁定 workers=0"""
@@ -552,7 +674,6 @@ class AdaptiveKDTrainer(DetectionTrainer):
                     target['distill/kd_loss'] = kv
                 except Exception as e:
                     logger.debug(f'[DISTILL] 注入 metrics 失败: {e}')
-        self._append_csv(display_epoch, av, tv, kv)
         self._save_distill_log_json()
 
     def _append_csv(self, epoch, a, t, k):

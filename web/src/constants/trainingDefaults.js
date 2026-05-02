@@ -37,6 +37,7 @@ export const DEFAULT_FORM = {
     batch: -1,
     lr0: 0.01,
     lrf: 0.1,
+    max_det: 300,
     warmup_epochs: 3,
     mosaic: 0.8,
     mixup: 0.1,

@@ -228,6 +228,12 @@ def _build_train_args(
         "compute_provider", "cloud_api", "dataset_api", "data_yaml",
     }
 
+    ignored_harmful = sorted([key for key in (train_cfg or {}).keys() if key in harmful_args])
+    if ignored_harmful:
+        logger.warning(
+            "training 中以下配置项在 train 阶段会被忽略: " + ", ".join(ignored_harmful)
+        )
+
     train_args: Dict[str, Any] = {
         "data": data_yaml,
         "epochs": int(train_cfg.get("epochs", 10)),
@@ -254,6 +260,18 @@ def _build_train_args(
 
     if resume_path is not None:
         train_args["resume"] = str(resume_path)
+
+    # Ultralytics 验证阶段需要 max_det>0；max_det=0 会导致 precision/recall/mAP 全部为 0
+    # 来自旧配置或 UI 传参与默认值冲突时，统一回退到安全值 300。
+    max_det_raw = train_args.get("max_det", 300)
+    try:
+        max_det = int(max_det_raw)
+    except (TypeError, ValueError):
+        max_det = 300
+    if max_det <= 0:
+        logger.warning(f"检测到无效 max_det={max_det_raw}，已回退为 300")
+        max_det = 300
+    train_args["max_det"] = max_det
 
     return train_args
 

@@ -4,7 +4,7 @@ distillation:
   alpha_init: 0.45
   T_max: 3.5
   T_min: 1.05
-  warm_epochs: 10
+  warm_epochs: 5
   w_kd: 0.7
   w_focal: 0.55
   w_feat: 0.9
@@ -74,9 +74,9 @@ training:
   compile: false
   val: true
   save_json: false
-  conf: 0
-  iou: 0
-  max_det: 0
+  conf: null
+  iou: 0.7
+  max_det: 300
   half: false
   dnn: false
   plots: false
@@ -138,7 +138,7 @@ training:
   nms: false
 output:
   project: runs
-  name: exp6
+  name: exp9
 wandb:
   enabled: false
   mode: online
