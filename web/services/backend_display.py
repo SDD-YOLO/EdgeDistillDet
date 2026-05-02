@@ -8,12 +8,16 @@ import threading
 import time
 import uuid
 from pathlib import Path
+import asyncio
+import base64
+import mimetypes
 
 from fastapi.responses import JSONResponse
 
 from web.core.paths import BASE_DIR
 from web.services.backend_common import _error
 from web.services.backend_train_runtime import _kill_process_tree
+from web.services.ws_manager import manager as ws_manager
 
 _display_process = None
 _display_lock = threading.RLock()
@@ -70,6 +74,63 @@ def _read_process_output(proc: subprocess.Popen) -> None:
             _display_process = None
 
 
+def _broadcast_message(msg: dict) -> None:
+    try:
+        task = getattr(ws_manager, '_task', None)
+        if task is None:
+            return
+        loop = task.get_loop()
+        asyncio.run_coroutine_threadsafe(ws_manager.broadcast(msg), loop)
+    except Exception:
+        return
+
+
+def _watch_output_dir(proc: subprocess.Popen, output_dir: Path) -> None:
+    try:
+        seen = set()
+        if not output_dir.exists():
+            return
+        # initialize
+        for p in output_dir.rglob('*'):
+            if p.is_file():
+                seen.add(str(p.resolve()))
+
+        while True:
+            if proc.poll() is not None:
+                break
+            try:
+                for p in output_dir.rglob('*'):
+                    if not p.is_file():
+                        continue
+                    rp = str(p.resolve())
+                    if rp in seen:
+                        continue
+                    seen.add(rp)
+                    rel = os.path.relpath(rp, str(BASE_DIR))
+                    msg = {
+                        'type': 'display_result',
+                        'path': rel.replace('\\', '/'),
+                        'timestamp': time.time(),
+                    }
+                    # if the file is an image, embed as data URL for immediate preview
+                    mime, _ = mimetypes.guess_type(rp)
+                    if mime and mime.startswith('image'):
+                        try:
+                            with open(rp, 'rb') as fh:
+                                data = fh.read()
+                            b64 = base64.b64encode(data).decode('ascii')
+                            msg['data_url'] = f"data:{mime};base64,{b64}"
+                        except Exception:
+                            pass
+                    _broadcast_message(msg)
+            except Exception:
+                pass
+            time.sleep(0.5)
+    finally:
+        # final broadcast that process finished
+        _broadcast_message({'type': 'display_finished', 'timestamp': time.time(), 'exit_code': proc.returncode})
+
+
 def _build_command(payload: dict) -> list[str]:
     script = BASE_DIR / 'scripts' / 'display_inference.py'
     return [sys.executable, '-u', str(script)]
@@ -121,6 +182,14 @@ def start_display(payload: dict):
             _display_status['output_dir'] = payload.get('output_dir')
         thread = threading.Thread(target=_read_process_output, args=(proc,), daemon=True)
         thread.start()
+        # start output watcher thread to notify websocket clients about new results
+        try:
+            out = _resolve_path(_display_status.get('output_dir'))
+            if out is not None:
+                watcher = threading.Thread(target=_watch_output_dir, args=(proc, out), daemon=True)
+                watcher.start()
+        except Exception:
+            pass
 
     return {'status': 'ok', 'message': '可视化推理已启动', 'pid': proc.pid}
 

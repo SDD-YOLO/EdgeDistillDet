@@ -1,8 +1,8 @@
 # COCO128 数据集配置
 # 直接使用 ultralytics 内置的 coco128.yaml（自动下载，格式保证正确）
-path: datasets\coco128
-train: images\train2017
-val: images\train2017
+path: datasets/coco128
+train: images/train2017
+val: images/train2017
 
 # COCO 80 类
 nc: 80

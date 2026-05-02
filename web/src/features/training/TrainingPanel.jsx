@@ -748,7 +748,8 @@ function TrainingPanel({ toast, active, view = "training" }) {
           value={String(value || "")}
           onChange={(next) => onChangeValue(next)}
           onBrowse={async () => {
-            const next = await pickLocalPath({ kind: "directory", title: "选择导出路径", initialPath: String(value || "") });
+            const title = param.key === "source" ? "选择推理数据路径" : "选择本地路径";
+            const next = await pickLocalPath({ kind: "directory", title, initialPath: String(value || "") });
             if (next) onChangeValue(next);
           }}
           disabled={disabled}

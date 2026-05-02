@@ -6,7 +6,7 @@ Web API 的请求模型定义，供路由层复用。
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
@@ -22,6 +22,10 @@ class ResponseModel(BaseModel, Generic[T]):
 class SaveConfigRequest(BaseModel):
     name: str = "distill_config.yaml"
     config: dict = Field(default_factory=dict)
+
+    # 注意：SaveConfigRequest 不做强制验证
+    # 目的：允许用户随时保存部分配置或草稿
+    # 完整验证在 TrainStartRequest 中进行
 
 
 class UploadConfigRequest(BaseModel):
@@ -154,3 +158,30 @@ class TrainStartRequest(BaseModel):
     mode: str = "distill"
     checkpoint: str | None = None
     allow_overwrite: bool = False
+
+    @model_validator(mode="after")
+    def validate_training_start(self) -> TrainStartRequest:
+        """
+        启动训练前的请求验证
+        
+        检查项：
+        1. config 不能为空
+        2. mode 必须是 'distill' 或 'resume'
+        
+        NOTE: 完整的配置一致性验证在 API 路由中执行
+        """
+        try:
+            # 基础字段验证
+            if not self.config or not isinstance(self.config, str):
+                raise ValueError("config 必须是非空字符串")
+            
+            if self.mode not in ("distill", "resume"):
+                raise ValueError(
+                    f"mode 必须是 'distill' 或 'resume'，当前值: {self.mode}"
+                )
+        except ValueError as e:
+            raise e
+        except Exception:
+            pass
+        
+        return self

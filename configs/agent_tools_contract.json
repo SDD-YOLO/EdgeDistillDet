@@ -81,7 +81,7 @@
     }
   ],
   "constraints": {
-    "allowed_patch_top_level": ["distillation", "training", "output"],
+    "allowed_patch_top_level": ["distillation", "training", "output", "wandb", "export_model", "predict", "advanced"],
     "approval_required_for_apply": true,
     "rollback_window_per_run": 5,
     "max_react_steps_default": 4

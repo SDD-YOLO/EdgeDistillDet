@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from web.core.paths import BASE_DIR, CONFIG_DIR
+from web.services.cache.csv_cache import load_csv_rows_range_cached
 
 _TEXT_FILE_PATTERNS = ("*.md", "*.txt", "*.yaml", "*.yml", "*.json", "*.py", "*.jsx", "*.js")
 _MAX_FILES_PER_PATTERN = 20
@@ -58,22 +59,13 @@ def _collect_training_candidates(run_id: str) -> list[dict[str, Any]]:
 
     results_path = BASE_DIR / "runs" / "detect" / "runs" / "distill" / str(run_id or "exp1") / "results.csv"
     if results_path.exists():
-        rows: list[dict[str, Any]] = []
-        try:
-            with results_path.open("r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    if isinstance(row, dict):
-                        rows.append(row)
-        except Exception:
-            rows = []
+        rows = load_csv_rows_range_cached(results_path, tail=8)
         if rows:
-            tail = rows[-8:]
             candidates.append(
                 {
                     "source": "training",
                     "path": str(results_path.relative_to(BASE_DIR)),
-                    "text": json.dumps(tail, ensure_ascii=False),
+                    "text": json.dumps(rows, ensure_ascii=False),
                 }
             )
     return candidates

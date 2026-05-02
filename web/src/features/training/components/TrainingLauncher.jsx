@@ -17,7 +17,7 @@ export function TrainingLauncher({
     <div className="launcher-left">
       <div className="launch-info">
         <div className="launch-header">
-          <h2><span className="material-icons">rocket_launch</span> 训练控制台</h2>
+          <h2><span className="material-icons">rocket_launch</span> 控制台</h2>
           <span className={`badge ${running ? "running" : "idle"}`}>{running ? "训练中" : "就绪"}</span>
         </div>
         <p className="launch-desc">配置参数后选择训练模式并启动训练任务</p>
@@ -39,7 +39,7 @@ export function TrainingLauncher({
           disabled={running || isResumeStartDisabled}
           title={isResumeStartDisabled ? "当前没有可用断点，无法开始断点续训" : ""}
         >
-          <span className="material-icons">play_arrow</span>开始训练
+          <span className="material-icons">play_arrow</span>开始运行
         </Button>
         <Button id="btn-stop-training" className="btn-stop" variant="destructive" onClick={onStopTraining} disabled={!running}>
           <span className="material-icons">stop</span>停止训练

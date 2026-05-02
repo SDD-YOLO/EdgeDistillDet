@@ -12,6 +12,7 @@ from web.services.backend_common import (
     _summarize_series,
 )
 from web.services.cache.result_manifest_cache import load_cached_metrics_index, store_metrics_index
+from web.services.cache.csv_cache import load_csv_summary_cached, load_csv_rows_cached
 from web.services.scan.results_discovery import describe_result_csv, discover_results_csvs, get_candidate_runs_directories
 
 
@@ -79,7 +80,8 @@ def get_metrics(source: str = ''):
         try:
             target = (BASE_DIR / selected_path).resolve()
             if target.exists() and target.is_file() and target.suffix == '.csv' and str(target).startswith(str(base_resolved)):
-                columns, rows = _load_csv_summary(target)
+                columns, _ = load_csv_summary_cached(target)
+                rows = load_csv_rows_cached(target)
                 if rows:
                     chart_series = _build_metric_series(rows, columns, target.parent)
                     summary_metrics = {}

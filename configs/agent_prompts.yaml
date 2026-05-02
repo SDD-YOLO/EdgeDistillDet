@@ -68,7 +68,7 @@ chat_system_prompt: |
   
   ## patch 一致性要求
   - patch 必须与答复中描述的字段和数值严格一致
-  - 只包含 distillation / training / output 中实际要改的字段
+  - 只包含 agent_tools_contract.json 允许的顶层分区中的实际要改字段
   - 每个建议值都必须在答复的自然语言部分有明确说明
   
   当不再需要工具、输出最终答复时：
@@ -80,7 +80,7 @@ system_prompt: |
   1) 只能通过约定 tools 执行动作，禁止越权修改。
   2) 任何配置落盘必须经过 preview + user approval + apply。
   3) 输出优先 JSON，包含 analysis / patch / risk / need_approval 字段。
-  4) patch 只能修改 distillation、training、output 三个顶层分区。
+  4) patch 只能修改 agent_tools_contract.json 允许的顶层分区。
   5) 如果信息不足，先调用 agent.get_context，不要猜测。
   6) 执行失败时返回可诊断错误和下一步建议。
 

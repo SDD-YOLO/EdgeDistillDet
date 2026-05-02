@@ -1,5 +1,5 @@
 # ============================================================
-# VisDrone 数据集配置示例
+# VisDrone 数据集配置示例（默认回退到仓库内 mini_test 样例，保证可直接加载）
 # configs/dataset_visdrone.yaml
 # ============================================================
 #
@@ -15,21 +15,13 @@
 #       ├── train/      # YOLO格式标注 (.txt)
 #       └── val/        # YOLO格式标注
 
-path: ${VISDRONE_ROOT:-./datasets/visdrone}  # 数据集根目录（相对项目根目录或绝对路径）
+path: ${VISDRONE_ROOT:-../datasets/mini_test}  # 数据集根目录（相对项目根目录或绝对路径）
 train: images/train        # 训练集图像目录（相对于 path）
 val: images/val            # 验证集图像目录（相对于 path）
-test: images/test          # 测试集（可选）
+test: images/val           # 测试集（可选，默认复用验证集样例）
 
-# VisDrone 类别定义 (10类)
-nc: 10
+# 默认样例仅用于开箱验证，因此使用仓库内 2 类样例
+nc: 2
 names:
-  - pedestrian        # 行人
-  - people            # 人群
-  - bicycle           # 自行车
   - car               # 小汽车
-  - van               # 面包车
-  - truck             # 卡车
-  - tricycle          # 三轮车
-  - awning-tricyle    # 遮阳三轮车
-  - bus               # 公交车
-  - motor            # 摩托车
+  - person            # 行人

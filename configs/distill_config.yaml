@@ -19,7 +19,7 @@ distillation:
   distill_loss_type: kl
   freeze_teacher: false
   distill_start_epoch: 0
-  distill_end_epoch: 150
+  distill_end_epoch: 10
   dynamic_alpha: false
   dynamic_temperature: false
   lambda_kd: 0.5
@@ -47,13 +47,14 @@ training:
   batch: 16
   lr0: 0.001
   lrf: 0.02
-  warmup_epochs: 20
+  max_det: 300
+  warmup_epochs: 3
   mosaic: 0.81
   mixup: 0.45
-  close_mosaic: 10
+  close_mosaic: 9
   amp: true
   task: detect
-  mode: train
+  mode: predict
   time: 0
   patience: 100
   save: true
@@ -76,7 +77,6 @@ training:
   save_json: false
   conf: null
   iou: 0.7
-  max_det: 300
   half: false
   dnn: false
   plots: false
@@ -126,7 +126,7 @@ training:
   mask_ratio: 4
   dropout: 0
   copy_paste_mode: mixup
-  export_path: D:/Personal_Files/Projects/Github/EdgeDistillDet
+  export_path: runs/exports/exp10.onnx
   format: onnx
   keras: false
   optimize: false
@@ -136,9 +136,10 @@ training:
   opset: 0
   workspace: 0
   nms: false
+  source: D:/Personal_Files/Projects/Github/EdgeDistillDet/configs
 output:
   project: runs
-  name: exp9
+  name: exp3
 wandb:
   enabled: false
   mode: online
@@ -150,7 +151,7 @@ wandb:
   tags: []
   notes: ''
 export_model:
-  export_path: D:/Personal_Files/Projects/Github/EdgeDistillDet
+  export_path: runs/exports/exp10.onnx
   format: onnx
   keras: false
   optimize: false
@@ -161,7 +162,7 @@ export_model:
   workspace: 0
   nms: false
   task: detect
-  mode: train
+  mode: predict
   time: 0
   patience: 100
   save: true
@@ -225,10 +226,11 @@ export_model:
   show_conf: true
   show_boxes: true
   line_width: 2
+  source: D:/Personal_Files/Projects/Github/EdgeDistillDet/configs
 advanced:
   training:
     task: detect
-    mode: train
+    mode: predict
     time: 0
     patience: 100
     save: true
@@ -292,6 +294,7 @@ advanced:
     show_conf: true
     show_boxes: true
     line_width: 2
+    source: D:/Personal_Files/Projects/Github/EdgeDistillDet/configs
   distillation:
     distill_mode: adaptive
     beta: 0
@@ -302,7 +305,7 @@ advanced:
     distill_loss_type: kl
     freeze_teacher: false
     distill_start_epoch: 0
-    distill_end_epoch: 150
+    distill_end_epoch: 10
     dynamic_alpha: false
     dynamic_temperature: false
     lambda_kd: 0.5

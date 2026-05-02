@@ -7,11 +7,11 @@ evaluation:
   # 待评估权重列表（支持多模型对比）
   # 可使用环境变量：EVAL_WEIGHT_1、EVAL_WEIGHT_2
   weight_paths:
-    - "${EVAL_WEIGHT_1:-weights/v5n_native.pt}"
-    - "${EVAL_WEIGHT_2:-weights/26n_ov5.pt}"
+    - "${EVAL_WEIGHT_1:-models/yolov8n.pt}"
+    - "${EVAL_WEIGHT_2:-models/yolov8m.pt}"
 
   # 可使用环境变量：EVAL_TEST_YAML
-  test_yaml:    "${EVAL_TEST_YAML:-configs/test_data.yaml}"
+  test_yaml:    "${EVAL_TEST_YAML:-configs/dataset_mini_test.yaml}"
   imgsz:        640
 
   # GPU 推理参数

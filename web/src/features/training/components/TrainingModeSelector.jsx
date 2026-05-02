@@ -11,7 +11,7 @@ export function TrainingModeSelector({
         <div className="mode-card">
           <span className="material-icons mode-icon">school</span>
           <div className="mode-text">
-            <strong>蒸馏训练</strong>
+            <strong>蒸馏训练与评估</strong>
             <span>知识蒸馏训练，训练完成后自动评估模型性能</span>
           </div>
         </div>

@@ -26,6 +26,7 @@ from web.schemas import (
     AgentToolExecuteRequest,
 )
 from web.services import backend_state, config_service
+from web.services.cache.csv_cache import load_csv_summary_cached, load_csv_rows_range_cached
 from web.services.backend_common import _error
 
 _ALLOWED_TOP_LEVEL = ("distillation", "training", "output", "wandb", "export_model", "predict", "advanced")
@@ -307,13 +308,10 @@ def _parse_results_csv(path: Path, tail: int) -> dict[str, Any]:
     """
     rows: list[dict[str, str]] = []
     try:
-        with path.open(newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            if reader.fieldnames is None:
-                return {"error": "CSV 无列头"}
-            columns = [c.strip() for c in reader.fieldnames]
-            for row in reader:
-                rows.append({k.strip(): v.strip() for k, v in row.items()})
+        columns, _ = load_csv_summary_cached(path)
+        if not columns:
+            return {"error": "CSV 无列头"}
+        rows = load_csv_rows_range_cached(path, tail=max(tail * 2, 100))
     except Exception as exc:
         return {"error": f"读取失败: {exc}"}
 

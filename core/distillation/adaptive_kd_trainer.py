@@ -27,6 +27,7 @@ from ultralytics.models.yolo.detect.train import DetectionTrainer, DEFAULT_CFG
 from core.distillation.common import safe_scalar, w_feat_to_scalar
 from core.distillation.loss_functions import CompositiveDistillLoss, CosineTemperatureScheduler
 from core.logging import get_logger
+from web.services.cache.csv_cache import invalidate_csv_rows
 logger = logging.getLogger('DistillTrain')
 
 def _scatter_pr_from_ultralytics_box(box, nc: int):
@@ -712,6 +713,11 @@ class AdaptiveKDTrainer(DetectionTrainer):
                     writer.writeheader()
                     writer.writerows(rows)
                 logger.debug(f'[DISTILL_CSV] 已更新 epoch {int(epoch)} 的蒸馏数据')
+                # 清除SQLite缓存，下次查询会从磁盘重新读取
+                try:
+                    invalidate_csv_rows(p)
+                except Exception:
+                    pass
         except Exception as e:
             logger.debug(f'[DISTILL_CSV] 追加蒸馏数据失败: {e}')
 
@@ -867,6 +873,11 @@ class AdaptiveKDTrainer(DetectionTrainer):
                 writer.writeheader()
                 writer.writerows(rows)
             logger.info(f'[TRAIN_END] CSV 修复完成: {written_count}/{len(rows)} 行已补全蒸馏数据 (缺失 {len(missing_epochs)} 轮: {sorted(missing_epochs)[:5]}...)')
+            # 清除SQLite缓存，下次查询会从磁盘重新读取
+            try:
+                invalidate_csv_rows(p)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f'[TRAIN_END] CSV 修复失败: {type(e).__name__}: {e}')
             logger.info('[TRAIN_END] 备用数据已保存到 distill_log.json，可通过该文件恢复')

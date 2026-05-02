@@ -137,7 +137,7 @@ export const DISPLAY_ADVANCED_SECTIONS = [
   {
     title: "推理与结果展示参数",
     params: [
-      { key: "source", label: "推理数据 source", type: "text" },
+      { key: "source", label: "推理数据 source", type: "path" },
       { key: "vid_stride", label: "视频步长 vid_stride", type: "number" },
       { key: "stream_buffer", label: "流缓冲 stream_buffer", type: "enum", options: boolOptions },
       { key: "visualize", label: "特征可视化 visualize", type: "enum", options: boolOptions },

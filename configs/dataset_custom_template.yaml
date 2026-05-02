@@ -7,10 +7,9 @@
 # 【步骤2】修改下面的路径和类别信息
 # 【步骤3】在 distill_config.yaml 中引用此文件
 
-# ====== 数据集根目录（改为你的实际路径或使用环境变量）======
-# 可使用相对路径（相对于项目根目录），如 ./datasets/your_dataset
-# 或设置环境变量 DATASET_ROOT
-path: ${DATASET_ROOT:-./datasets/your_dataset}
+# ====== 数据集根目录（默认回退到仓库内 mini_test 样例，确保可直接加载）======
+# 若要切换到自己的数据集，请设置环境变量 DATASET_ROOT
+path: ${DATASET_ROOT:-../datasets/mini_test}
 
 # ====== 图像目录（相对于 path）======
 train: images/train
@@ -20,5 +19,5 @@ test: images/test       # 可选
 # ====== 类别配置（根据你的数据集修改）======
 nc: 2                   # 类别数量
 names:
-  - target              # 目标类别1
-  - non-target          # 目标类别2（按需增减）
+  - car                 # 类别1
+  - person              # 类别2
