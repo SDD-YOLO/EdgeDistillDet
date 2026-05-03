@@ -14,10 +14,10 @@ path: ${DATASET_ROOT:-../datasets/mini_test}
 # ====== 图像目录（相对于 path）======
 train: images/train
 val: images/val
-test: images/test       # 可选
+test: images/test # 可选
 
 # ====== 类别配置（根据你的数据集修改）======
-nc: 2                   # 类别数量
+nc: 2 # 类别数量
 names:
-  - car                 # 类别1
-  - person              # 类别2
+  - car # 类别1
+  - person # 类别2

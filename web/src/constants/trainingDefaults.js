@@ -10,7 +10,7 @@ export const DEFAULT_FORM = {
     w_focal: 0.3,
     w_feat: 0,
     scale_boost: 2,
-    focal_gamma: 2
+    focal_gamma: 2,
   },
   training: {
     compute_provider: "local",
@@ -21,14 +21,14 @@ export const DEFAULT_FORM = {
       logs_path: "/train/logs",
       stop_path: "/train/stop",
       token: "",
-      poll_interval_sec: 3
+      poll_interval_sec: 3,
     },
     dataset_api: {
       enabled: false,
       source: "path",
       resolve_url: "",
       token: "",
-      dataset_name: ""
+      dataset_name: "",
     },
     data_yaml: "",
     device: "0",
@@ -42,11 +42,11 @@ export const DEFAULT_FORM = {
     mosaic: 0.8,
     mixup: 0.1,
     close_mosaic: 20,
-    amp: true
+    amp: true,
   },
   output: {
     project: "runs",
-    name: "exp1"
+    name: "exp1",
   },
   export_model: {
     export_path: "",
@@ -58,7 +58,7 @@ export const DEFAULT_FORM = {
     simplify: false,
     opset: 0,
     workspace: 0,
-    nms: false
+    nms: false,
   },
   wandb: {
     enabled: false,
@@ -69,28 +69,35 @@ export const DEFAULT_FORM = {
     group: "",
     job_type: "distill-train",
     tags: "",
-    notes: ""
-  }
+    notes: "",
+  },
 };
 
 export const COMPUTE_PRESETS = {
   local: {
     device: "0",
-    outputProject: "runs"
+    outputProject: "runs",
   },
   autodl: {
     device: "0",
-    outputProject: "/root/autodl-tmp/runs"
+    outputProject: "/root/autodl-tmp/runs",
   },
   colab: {
     device: "0",
-    outputProject: "/content/runs"
-  }
+    outputProject: "/content/runs",
+  },
 };
 
 export function inferComputeProviderFromConfig(config, fallback = "local") {
-  const explicitProvider = String(config?.training?.compute_provider || "").trim().toLowerCase();
-  if (explicitProvider === "autodl" || explicitProvider === "colab" || explicitProvider === "local" || explicitProvider === "remote_api") {
+  const explicitProvider = String(config?.training?.compute_provider || "")
+    .trim()
+    .toLowerCase();
+  if (
+    explicitProvider === "autodl" ||
+    explicitProvider === "colab" ||
+    explicitProvider === "local" ||
+    explicitProvider === "remote_api"
+  ) {
     return explicitProvider;
   }
 
@@ -98,7 +105,10 @@ export function inferComputeProviderFromConfig(config, fallback = "local") {
   const dataYaml = String(config?.training?.data_yaml || "").toLowerCase();
   const featureText = `${outputProject} ${dataYaml}`;
 
-  if (featureText.includes("/root/autodl-tmp") || featureText.includes("autodl")) {
+  if (
+    featureText.includes("/root/autodl-tmp") ||
+    featureText.includes("autodl")
+  ) {
     return "autodl";
   }
   if (featureText.includes("/content/") || featureText.includes("colab")) {

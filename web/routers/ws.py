@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from web.services.ws_manager import manager

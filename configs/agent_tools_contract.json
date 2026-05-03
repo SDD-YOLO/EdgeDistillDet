@@ -17,9 +17,20 @@
         "properties": {
           "run_id": { "type": "string" },
           "config_name": { "type": "string", "default": "distill_config.yaml" },
-          "run_path": { "type": "string", "description": "可选，results.csv 路径或其父目录" },
-          "tail": { "type": "integer", "default": 10, "description": "可选，返回最后 N 行指标原始数据" },
-          "runs_root": { "type": "string", "default": "runs", "description": "可选，扫描根目录" }
+          "run_path": {
+            "type": "string",
+            "description": "可选，results.csv 路径或其父目录"
+          },
+          "tail": {
+            "type": "integer",
+            "default": 10,
+            "description": "可选，返回最后 N 行指标原始数据"
+          },
+          "runs_root": {
+            "type": "string",
+            "default": "runs",
+            "description": "可选，扫描根目录"
+          }
         },
         "required": ["run_id"]
       }
@@ -81,7 +92,15 @@
     }
   ],
   "constraints": {
-    "allowed_patch_top_level": ["distillation", "training", "output", "wandb", "export_model", "predict", "advanced"],
+    "allowed_patch_top_level": [
+      "distillation",
+      "training",
+      "output",
+      "wandb",
+      "export_model",
+      "predict",
+      "advanced"
+    ],
     "approval_required_for_apply": true,
     "rollback_window_per_run": 5,
     "max_react_steps_default": 4

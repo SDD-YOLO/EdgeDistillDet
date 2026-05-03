@@ -4,6 +4,7 @@ This module provides a minimal `MetricsCallback` that can be plugged into a
 training loop (or Ultralytics callbacks) to push epoch metrics into the web
 UI via `web.services.metrics_pusher.push_metrics`.
 """
+
 from __future__ import annotations
 
 from typing import Any

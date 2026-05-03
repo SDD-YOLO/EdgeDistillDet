@@ -1,5 +1,9 @@
 import { useCallback, useRef, useState } from "react";
-import { startTrain, stopTrain, downloadTrainLogsBlob } from "../../../api/trainApi";
+import {
+  startTrain,
+  stopTrain,
+  downloadTrainLogsBlob,
+} from "../../../api/trainApi";
 
 /**
  * 自定义 Hook：管理训练的全生命周期状态
@@ -8,7 +12,12 @@ import { startTrain, stopTrain, downloadTrainLogsBlob } from "../../../api/train
 export function useTrainingState({ toast }) {
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
-  const [progress, setProgress] = useState({ current: 0, total: 0, elapsed: "--:--:--", expected: "--:--:--" });
+  const [progress, setProgress] = useState({
+    current: 0,
+    total: 0,
+    elapsed: "--:--:--",
+    expected: "--:--:--",
+  });
   const [autoScroll, setAutoScroll] = useState(true);
 
   const logOffsetRef = useRef(0);
@@ -22,21 +31,29 @@ export function useTrainingState({ toast }) {
     }
   };
 
-  const startTraining = useCallback(async (payload) => {
-    try {
-      await startTrain(payload);
-      setRunning(true);
-      setLogs([]);
-      logOffsetRef.current = 0;
-      setProgress({ current: 0, total: 0, elapsed: "--:--:--", expected: "--:--:--" });
-      startTimestampRef.current = Date.now();
-      lastServerRunningRef.current = true;
-      toast("训练已启动", "success");
-    } catch (error) {
-      setRunning(false);
-      toast(`训练启动失败: ${error.message}`, "error");
-    }
-  }, [toast]);
+  const startTraining = useCallback(
+    async (payload) => {
+      try {
+        await startTrain(payload);
+        setRunning(true);
+        setLogs([]);
+        logOffsetRef.current = 0;
+        setProgress({
+          current: 0,
+          total: 0,
+          elapsed: "--:--:--",
+          expected: "--:--:--",
+        });
+        startTimestampRef.current = Date.now();
+        lastServerRunningRef.current = true;
+        toast("训练已启动", "success");
+      } catch (error) {
+        setRunning(false);
+        toast(`训练启动失败: ${error.message}`, "error");
+      }
+    },
+    [toast],
+  );
 
   const stopTraining = useCallback(async () => {
     try {
@@ -54,7 +71,9 @@ export function useTrainingState({ toast }) {
       const blob = await downloadTrainLogsBlob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `training_logs_${new Date().toISOString().slice(0, 10)}.txt`;
+      link.download = `training_logs_${new Date()
+        .toISOString()
+        .slice(0, 10)}.txt`;
       link.click();
       toast("日志已下载", "success");
     } catch (error) {
@@ -78,6 +97,6 @@ export function useTrainingState({ toast }) {
     scrollLogsToBottom,
     startTraining,
     stopTraining,
-    downloadTrainLogs
+    downloadTrainLogs,
   };
 }

@@ -13,7 +13,7 @@ def safe_scalar(value) -> float:
     """安全标量转换，兼容标量/任意维度张量/异常值。"""
     if value is None:
         return 0.0
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
     try:
         import torch
@@ -21,7 +21,7 @@ def safe_scalar(value) -> float:
         torch = None
     if torch is not None and torch.is_tensor(value):
         if value.numel() == 0:
-          return 0.0
+            return 0.0
         if value.numel() == 1:
             return value.detach().item()
         return value.detach().mean().item()
@@ -39,9 +39,9 @@ def w_feat_to_scalar(v: Any) -> float:
         return 0.0
     if isinstance(v, bool):
         return 1.0 if v else 0.0
-    if isinstance(v, (int, float)):
+    if isinstance(v, int | float):
         return float(v)
-    if isinstance(v, (list, tuple)):
+    if isinstance(v, list | tuple):
         if not v:
             return 0.0
         return float(sum(float(x) for x in v) / len(v))

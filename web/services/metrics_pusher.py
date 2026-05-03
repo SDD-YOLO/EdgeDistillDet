@@ -3,21 +3,22 @@
 Writes a persisted JSONL record and attempts to broadcast to WebSocket manager
 in a non-blocking way so it is safe to call from synchronous training code.
 """
+
 from __future__ import annotations
 
 import asyncio
-import threading
 import json
-import time
 import logging
-from typing import Any, Dict
+import threading
+import time
+from typing import Any
 
 from web.services.ws_manager import manager as ws_manager
 
 LOG = logging.getLogger(__name__)
 
 
-def push_metrics(epoch: int, metrics: Dict[str, Any], training_id: str = "default") -> None:
+def push_metrics(epoch: int, metrics: dict[str, Any], training_id: str = "default") -> None:
     """Persist metrics and attempt to broadcast to connected WS clients.
 
     This function is intentionally fire-and-forget so it can be invoked from
@@ -51,6 +52,7 @@ def push_metrics(epoch: int, metrics: Dict[str, Any], training_id: str = "defaul
         if loop and loop.is_running():
             asyncio.create_task(ws_manager.broadcast(message))
         else:
+
             def _runner():
                 try:
                     asyncio.run(ws_manager.broadcast(message))

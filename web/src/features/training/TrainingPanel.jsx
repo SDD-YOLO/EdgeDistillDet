@@ -6,7 +6,11 @@ function TrainingPanel({ toast, active, view = "training" }) {
   const controller = useTrainingPanelController({ toast });
 
   return (
-    <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-training" aria-hidden={!active}>
+    <div
+      className={`tab-panel console-module-panel ${active ? "active" : ""}`}
+      id="panel-training"
+      aria-hidden={!active}
+    >
       <UnifiedConfigPanel
         groups={CONFIG_GROUPS}
         form={controller.form}
@@ -18,7 +22,12 @@ function TrainingPanel({ toast, active, view = "training" }) {
         isResumeMode={false}
         renderedHint={controller.renderedHint}
         runHint={controller.runHint}
-        onSave={() => controller.saveConfig().then(() => toast("配置已保存", "success")).catch((e) => toast(e.message, "error"))}
+        onSave={() =>
+          controller
+            .saveConfig()
+            .then(() => toast("配置已保存", "success"))
+            .catch((e) => toast(e.message, "error"))
+        }
         onLoad={controller.loadConfigFromFile}
         onReset={controller.resetForm}
         onStartTraining={controller.startTraining}
@@ -33,5 +42,5 @@ function TrainingPanel({ toast, active, view = "training" }) {
       />
     </div>
   );
-  }
+}
 export default TrainingPanel;

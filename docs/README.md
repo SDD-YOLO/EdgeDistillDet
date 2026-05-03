@@ -55,6 +55,7 @@ python web/app.py
 访问 http://127.0.0.1:5000
 
 开发模式（前后端热更新）：
+
 - 终端一：`python web/app.py`（后端）
 - 终端二：`cd web && npm run dev`（前端，端口 5173）
 
@@ -108,10 +109,10 @@ EdgeDistillDet/
 
 关键配置文件
 
-文件	用途	
-`configs/distill_config.yaml`	教师/学生模型、蒸馏参数、训练超参、输出目录	
-`configs/eval_config.yaml`	待评估权重列表、数据集、设备 batch 大小	
-`docs/PARAMETER_MAPPING.md`	前后端参数映射矩阵（含高级参数与续训锁定字段）	
+文件 用途
+`configs/distill_config.yaml` 教师/学生模型、蒸馏参数、训练超参、输出目录
+`configs/eval_config.yaml` 待评估权重列表、数据集、设备 batch 大小
+`docs/PARAMETER_MAPPING.md` 前后端参数映射矩阵（含高级参数与续训锁定字段）
 
 ---
 

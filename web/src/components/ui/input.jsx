@@ -5,7 +5,13 @@ function mergeClassNames(...parts) {
 }
 
 const Input = forwardRef(function Input({ className = "", ...props }, ref) {
-  return <input ref={ref} className={mergeClassNames("md-input", className)} {...props} />;
+  return (
+    <input
+      ref={ref}
+      className={mergeClassNames("md-input", className)}
+      {...props}
+    />
+  );
 });
 
 export { Input };

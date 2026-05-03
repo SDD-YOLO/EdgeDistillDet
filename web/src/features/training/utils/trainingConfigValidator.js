@@ -2,7 +2,7 @@
  * trainingConfigValidator.js
  * ===========================
  * 前端层：训练配置跨字段联动校验和自动修正
- * 
+ *
  * 职责：
  * 1. 验证配置的逻辑自洽性
  * 2. 自动修正明显的冲突（优先修正而非阻断）
@@ -17,8 +17,9 @@ export const TRAINING_CONFIG_RULES = {
   DISTILL_END_WITHIN_EPOCHS: {
     key: "distill_end_within_epochs",
     name: "蒸馏结束 epoch",
-    check: (form) => form.distillation?.distill_end_epoch <= form.training?.epochs,
-    message: (form) => 
+    check: (form) =>
+      form.distillation?.distill_end_epoch <= form.training?.epochs,
+    message: (form) =>
       `蒸馏结束 epoch (${form.distillation?.distill_end_epoch}) 超过总 epoch (${form.training?.epochs})，已自动修正`,
     fix: (form) => ({
       ...form,
@@ -26,64 +27,76 @@ export const TRAINING_CONFIG_RULES = {
         ...form.distillation,
         distill_end_epoch: Math.min(
           form.distillation?.distill_end_epoch || 150,
-          form.training?.epochs || 10
-        )
-      }
-    })
+          form.training?.epochs || 10,
+        ),
+      },
+    }),
   },
 
   // 蒸馏开始 epoch 必须小于蒸馏结束 epoch
   DISTILL_START_BEFORE_END: {
     key: "distill_start_before_end",
     name: "蒸馏时间段",
-    check: (form) => 
-      form.distillation?.distill_start_epoch < form.distillation?.distill_end_epoch,
-    message: (form) => 
+    check: (form) =>
+      form.distillation?.distill_start_epoch <
+      form.distillation?.distill_end_epoch,
+    message: (form) =>
       `蒸馏开始 epoch (${form.distillation?.distill_start_epoch}) 不小于结束 epoch (${form.distillation?.distill_end_epoch})，已自动修正`,
     fix: (form) => {
       const endEpoch = form.distillation?.distill_end_epoch || 10;
-      const startEpoch = Math.max(0, Math.min(form.distillation?.distill_start_epoch || 0, endEpoch - 1));
+      const startEpoch = Math.max(
+        0,
+        Math.min(form.distillation?.distill_start_epoch || 0, endEpoch - 1),
+      );
       return {
         ...form,
         distillation: {
           ...form.distillation,
           distill_start_epoch: startEpoch,
-          distill_end_epoch: Math.max(startEpoch + 1, endEpoch)
-        }
+          distill_end_epoch: Math.max(startEpoch + 1, endEpoch),
+        },
       };
-    }
+    },
   },
 
   // 预热 epoch 不能超过总 epoch
   WARMUP_WITHIN_EPOCHS: {
     key: "warmup_within_epochs",
     name: "预热 epoch",
-    check: (form) => (form.training?.warmup_epochs || 0) <= (form.training?.epochs || 10),
-    message: (form) => 
+    check: (form) =>
+      (form.training?.warmup_epochs || 0) <= (form.training?.epochs || 10),
+    message: (form) =>
       `预热 epoch (${form.training?.warmup_epochs}) 超过总 epoch (${form.training?.epochs})，已自动修正`,
     fix: (form) => ({
       ...form,
       training: {
         ...form.training,
-        warmup_epochs: Math.min(form.training?.warmup_epochs || 3, form.training?.epochs || 10)
-      }
-    })
+        warmup_epochs: Math.min(
+          form.training?.warmup_epochs || 3,
+          form.training?.epochs || 10,
+        ),
+      },
+    }),
   },
 
   // 关闭 mosaic epoch 不能超过总 epoch
   CLOSE_MOSAIC_WITHIN_EPOCHS: {
     key: "close_mosaic_within_epochs",
     name: "关闭 mosaic epoch",
-    check: (form) => (form.training?.close_mosaic || 0) <= (form.training?.epochs || 10),
-    message: (form) => 
+    check: (form) =>
+      (form.training?.close_mosaic || 0) <= (form.training?.epochs || 10),
+    message: (form) =>
       `关闭 mosaic epoch (${form.training?.close_mosaic}) 超过总 epoch (${form.training?.epochs})，已自动修正`,
     fix: (form) => ({
       ...form,
       training: {
         ...form.training,
-        close_mosaic: Math.min(form.training?.close_mosaic || 10, form.training?.epochs || 10)
-      }
-    })
+        close_mosaic: Math.min(
+          form.training?.close_mosaic || 10,
+          form.training?.epochs || 10,
+        ),
+      },
+    }),
   },
 
   // batch × imgsz 显存检查（经验阈值）
@@ -107,8 +120,8 @@ export const TRAINING_CONFIG_RULES = {
       const estimatedMemory = ((pixelCount * batch) / 1_000_000).toFixed(1);
       return `显存占用可能过高 (估算: ${estimatedMemory}M, batch=${batch}, imgsz=${imgsz})，建议降低 batch 或 imgsz`;
     },
-    fix: (form) => form // 警告不修正
-  }
+    fix: (form) => form, // 警告不修正
+  },
 };
 
 /**
@@ -127,14 +140,14 @@ export function validateTrainingConfig(form) {
   // 按规则顺序验证和修正
   Object.values(TRAINING_CONFIG_RULES).forEach((rule) => {
     const passed = rule.check(correctedForm);
-    
+
     if (!passed) {
       violations.push({
         key: rule.key,
         name: rule.name,
         message: rule.message(correctedForm),
         isWarning: rule.isWarning || false,
-        severity: rule.isWarning ? "warning" : "error"
+        severity: rule.isWarning ? "warning" : "error",
       });
 
       // 如果有修正函数，执行修正
@@ -157,11 +170,11 @@ export function formatViolationMessage(violations) {
     return null;
   }
 
-  const errors = violations.filter(v => !v.isWarning);
-  const warnings = violations.filter(v => v.isWarning);
+  const errors = violations.filter((v) => !v.isWarning);
+  const warnings = violations.filter((v) => v.isWarning);
 
   const parts = [];
-  
+
   if (errors.length > 0) {
     parts.push("校验提醒:");
     errors.forEach((v) => {
@@ -187,7 +200,7 @@ export function formatViolationMessage(violations) {
  */
 export function getViolationSeverity(violations) {
   if (!violations || violations.length === 0) return "success";
-  if (violations.some(v => !v.isWarning)) return "error";
+  if (violations.some((v) => !v.isWarning)) return "error";
   return "warning";
 }
 
@@ -198,7 +211,9 @@ export function getViolationSeverity(violations) {
  * @returns {Boolean}
  */
 export function checkRule(ruleKey, form) {
-  const rule = Object.values(TRAINING_CONFIG_RULES).find(r => r.key === ruleKey);
+  const rule = Object.values(TRAINING_CONFIG_RULES).find(
+    (r) => r.key === ruleKey,
+  );
   return rule ? rule.check(form) : true;
 }
 
@@ -209,6 +224,8 @@ export function checkRule(ruleKey, form) {
  * @returns {Object} 修正后的表单
  */
 export function applyRuleFix(ruleKey, form) {
-  const rule = Object.values(TRAINING_CONFIG_RULES).find(r => r.key === ruleKey);
+  const rule = Object.values(TRAINING_CONFIG_RULES).find(
+    (r) => r.key === ruleKey,
+  );
   return rule && rule.fix ? rule.fix(form) : form;
 }

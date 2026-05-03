@@ -8,7 +8,7 @@ export default defineConfig(({ command }) => ({
   test: {
     environment: "jsdom",
     clearMocks: true,
-    restoreMocks: true
+    restoreMocks: true,
   },
   // 开发时前端在 5173，API 在 FastAPI（默认 127.0.0.1:5000），用代理避免跨域
   server: {
@@ -34,8 +34,8 @@ export default defineConfig(({ command }) => ({
           }
           // Use hashed asset filenames to avoid stale font/icon caches.
           return "assets/[name]-[hash][extname]";
-        }
-      }
-    }
-  }
+        },
+      },
+    },
+  },
 }));

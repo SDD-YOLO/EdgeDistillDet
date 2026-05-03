@@ -16,5 +16,5 @@ export const useMetricsUiStore = create((set) => ({
   setRangeLr: (rangeLr) => set({ rangeLr }),
   setRangeDistill: (rangeDistill) => set({ rangeDistill }),
   setAutoRefresh: (autoRefresh) => set({ autoRefresh, refreshLeft: 30 }),
-  setRefreshLeft: (refreshLeft) => set({ refreshLeft })
+  setRefreshLeft: (refreshLeft) => set({ refreshLeft }),
 }));

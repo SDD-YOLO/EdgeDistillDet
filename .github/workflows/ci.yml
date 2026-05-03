@@ -60,4 +60,3 @@ jobs:
             exit 1
           fi
           echo "OK: web/static/dist 与构建产物一致。"
-

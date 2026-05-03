@@ -9,9 +9,6 @@
 
 from __future__ import annotations
 
-import os
-from typing import List
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

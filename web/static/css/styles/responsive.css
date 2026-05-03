@@ -3,124 +3,124 @@
 /* Auto-split from styles.css: responsive.css */
 
 @media (prefers-reduced-motion: reduce) {
-    html.theme-transition * {
-        transition-duration: 0.001ms !important;
-    }
+  html.theme-transition * {
+    transition-duration: 0.001ms !important;
+  }
 }
 
 @media (max-width: 1200px) {
-    :root {
-        --sidebar-width: 220px;
-    }
+  :root {
+    --sidebar-width: 220px;
+  }
 
-    .panel-grid {
-        grid-template-columns: 1fr;
-    }
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
 
-    .metrics-overview {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
+  .metrics-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 
-    .agent-layout {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
-    }
+  .agent-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
 
-    .launch-modes {
-        grid-template-columns: 1fr;
-    }
+  .launch-modes {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {
-    :root {
-        --content-padding: 14px;
-        --sidebar-width: 1fr;
-        --panel-gap: 14px;
-    }
+  :root {
+    --content-padding: 14px;
+    --sidebar-width: 1fr;
+    --panel-gap: 14px;
+  }
 
-    html,
-    body {
-        height: auto;
-        overflow: visible;
-    }
+  html,
+  body {
+    height: auto;
+    overflow: visible;
+  }
 
-    #root {
-        height: auto;
-        display: block;
-        min-height: 0;
-    }
+  #root {
+    height: auto;
+    display: block;
+    min-height: 0;
+  }
 
-    .console-shell {
-        flex: none;
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
-    }
+  .console-shell {
+    flex: none;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
 
-    .console-sidebar {
-        position: static;
-        height: auto;
-        border-right: none;
-        border-bottom: 1px solid var(--md-outline-variant);
-        gap: 10px;
-    }
+  .console-sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--md-outline-variant);
+    gap: 10px;
+  }
 
-    .sidebar-brand {
-        justify-content: space-between;
-    }
+  .sidebar-brand {
+    justify-content: space-between;
+  }
 
-    .sidebar-nav {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
+  .sidebar-nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 
-    .sidebar-nav-btn {
-        justify-content: center;
-        padding: 10px 8px;
-    }
+  .sidebar-nav-btn {
+    justify-content: center;
+    padding: 10px 8px;
+  }
 
-    .sidebar-nav-btn span:last-child {
-        display: none;
-    }
+  .sidebar-nav-btn span:last-child {
+    display: none;
+  }
 
-    .sidebar-bottom {
-        margin-top: 0;
-    }
+  .sidebar-bottom {
+    margin-top: 0;
+  }
 
-    .console-sidebar .theme-toggle {
-        justify-content: center;
-        width: 42px;
-        margin-left: auto;
-        padding: 0;
-        border-radius: 50%;
-    }
+  .console-sidebar .theme-toggle {
+    justify-content: center;
+    width: 42px;
+    margin-left: auto;
+    padding: 0;
+    border-radius: 50%;
+  }
 
-    .console-sidebar .theme-toggle-label {
-        display: none;
-    }
+  .console-sidebar .theme-toggle-label {
+    display: none;
+  }
 
-    .console-main {
-        padding-top: 10px;
-    }
+  .console-main {
+    padding-top: 10px;
+  }
 
-    .app-subtitle {
-        display: none;
-    }
+  .app-subtitle {
+    display: none;
+  }
 
-    .charts-grid,
-    .form-grid,
-    .form-row,
-    .advanced-params-grid {
-        grid-template-columns: 1fr;
-    }
+  .charts-grid,
+  .form-grid,
+  .form-row,
+  .advanced-params-grid {
+    grid-template-columns: 1fr;
+  }
 
-    .chart-card.wide {
-        grid-column: span 1;
-    }
+  .chart-card.wide {
+    grid-column: span 1;
+  }
 
-    .metrics-overview {
-        grid-template-columns: 1fr;
-    }
+  .metrics-overview {
+    grid-template-columns: 1fr;
+  }
 
-    .launch-actions {
-        width: 100%;
-    }
+  .launch-actions {
+    width: 100%;
+  }
 }

@@ -8,7 +8,13 @@ import yaml
 from web.services.backend_train import _validate_resume_locked_fields
 
 
-def _write_args_yaml(run_dir: Path, data: str = "datasets/a.yaml", device: str = "0", imgsz: int = 640, batch: int = 16):
+def _write_args_yaml(
+    run_dir: Path,
+    data: str = "datasets/a.yaml",
+    device: str = "0",
+    imgsz: int = 640,
+    batch: int = 16,
+):
     payload = {
         "project": str(run_dir.parent),
         "name": run_dir.name,
@@ -29,7 +35,12 @@ def test_resume_locked_fields_match_ok(tmp_path: Path):
     _write_args_yaml(run_dir)
 
     cfg = {
-        "training": {"data_yaml": "datasets/a.yaml", "device": "0", "imgsz": 640, "batch": 16},
+        "training": {
+            "data_yaml": "datasets/a.yaml",
+            "device": "0",
+            "imgsz": 640,
+            "batch": 16,
+        },
         "output": {"project": str(run_dir.parent), "name": run_dir.name},
     }
     _validate_resume_locked_fields(cfg, str(ckpt))
@@ -44,7 +55,12 @@ def test_resume_locked_fields_mismatch_raise(tmp_path: Path):
     _write_args_yaml(run_dir, data="datasets/a.yaml", device="0", imgsz=640, batch=16)
 
     cfg = {
-        "training": {"data_yaml": "datasets/b.yaml", "device": "cpu", "imgsz": 1280, "batch": 32},
+        "training": {
+            "data_yaml": "datasets/b.yaml",
+            "device": "cpu",
+            "imgsz": 1280,
+            "batch": 32,
+        },
         "output": {"project": str(run_dir.parent), "name": run_dir.name},
     }
     with pytest.raises(ValueError):

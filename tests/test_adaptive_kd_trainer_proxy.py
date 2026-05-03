@@ -4,7 +4,11 @@ import copy
 
 import torch
 
-from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer, _DistillCriterionProxy, _move_detection_loss_to_device
+from core.distillation.adaptive_kd_trainer import (
+    AdaptiveKDTrainer,
+    _DistillCriterionProxy,
+    _move_detection_loss_to_device,
+)
 
 
 class _DummyCriterion:
@@ -12,7 +16,7 @@ class _DummyCriterion:
         return torch.tensor(2.0), torch.tensor([1.0, 2.0])
 
     def update(self, *args, **kwargs):
-        return 'updated'
+        return "updated"
 
 
 class _DummyModel:
@@ -44,7 +48,7 @@ def test_distill_proxy_installs_on_model_and_counts_batches():
 
     assert isinstance(trainer.model.criterion, _DistillCriterionProxy)
 
-    batch = {'img': torch.zeros(1, 3, 8, 8)}
+    batch = {"img": torch.zeros(1, 3, 8, 8)}
     loss, loss_items = trainer.model.criterion(torch.zeros(1, 3), batch)
 
     assert torch.is_tensor(loss)
@@ -73,7 +77,7 @@ def test_distill_proxy_populates_missing_model_args():
 
     trainer._install_distill_criterion()
 
-    assert getattr(trainer.model, 'args', None) is trainer.args
+    assert getattr(trainer.model, "args", None) is trainer.args
     assert isinstance(trainer.model.criterion, _DistillCriterionProxy)
 
 
@@ -102,12 +106,12 @@ def test_distill_proxy_supports_deepcopy():
 
 
 def test_move_detection_loss_to_device_moves_proj_when_available():
-    loss_obj = type('LossObj', (), {})()
-    loss_obj.device = torch.device('cpu')
+    loss_obj = type("LossObj", (), {})()
+    loss_obj.device = torch.device("cpu")
     loss_obj.proj = torch.arange(4)
     loss_obj.bbox_loss = torch.nn.Identity()
 
-    moved = _move_detection_loss_to_device(loss_obj, torch.device('cpu'))
+    moved = _move_detection_loss_to_device(loss_obj, torch.device("cpu"))
 
-    assert moved.device == torch.device('cpu')
-    assert moved.proj.device.type == 'cpu'
+    assert moved.device == torch.device("cpu")
+    assert moved.proj.device.type == "cpu"

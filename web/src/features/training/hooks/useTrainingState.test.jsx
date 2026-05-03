@@ -1,12 +1,16 @@
 import { renderHook, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTrainingState } from "./useTrainingState";
-import { startTrain, stopTrain, downloadTrainLogsBlob } from "../../../api/trainApi";
+import {
+  startTrain,
+  stopTrain,
+  downloadTrainLogsBlob,
+} from "../../../api/trainApi";
 
 vi.mock("../../../api/trainApi", () => ({
   startTrain: vi.fn(),
   stopTrain: vi.fn(),
-  downloadTrainLogsBlob: vi.fn()
+  downloadTrainLogsBlob: vi.fn(),
 }));
 
 describe("useTrainingState", () => {
@@ -27,7 +31,12 @@ describe("useTrainingState", () => {
 
     act(() => {
       result.current.setLogs(["old log"]);
-      result.current.setProgress({ current: 2, total: 8, elapsed: "00:00:01", expected: "00:00:10" });
+      result.current.setProgress({
+        current: 2,
+        total: 8,
+        elapsed: "00:00:01",
+        expected: "00:00:10",
+      });
       result.current.logOffsetRef.current = 7;
     });
 
@@ -38,7 +47,12 @@ describe("useTrainingState", () => {
     expect(startTrain).toHaveBeenCalledWith({ config: "distill_config.yaml" });
     expect(result.current.running).toBe(true);
     expect(result.current.logs).toEqual([]);
-    expect(result.current.progress).toEqual({ current: 0, total: 0, elapsed: "--:--:--", expected: "--:--:--" });
+    expect(result.current.progress).toEqual({
+      current: 0,
+      total: 0,
+      elapsed: "--:--:--",
+      expected: "--:--:--",
+    });
     expect(result.current.logOffsetRef.current).toBe(0);
     expect(result.current.lastServerRunningRef.current).toBe(true);
     expect(result.current.startTimestampRef.current).toBe(Date.now());
@@ -66,13 +80,15 @@ describe("useTrainingState", () => {
   });
 
   it("downloads training logs with a dated filename", async () => {
-    downloadTrainLogsBlob.mockResolvedValueOnce(new Blob(["hello"], { type: "text/plain" }));
+    downloadTrainLogsBlob.mockResolvedValueOnce(
+      new Blob(["hello"], { type: "text/plain" }),
+    );
     const toast = vi.fn();
     const click = vi.fn();
     const anchor = { href: "", download: "", click };
     Object.defineProperty(URL, "createObjectURL", {
       value: vi.fn(() => "blob:mock"),
-      configurable: true
+      configurable: true,
     });
 
     const { result } = renderHook(() => useTrainingState({ toast }));

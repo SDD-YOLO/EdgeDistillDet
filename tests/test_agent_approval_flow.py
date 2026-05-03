@@ -15,7 +15,7 @@ def _write_yaml(path: Path, payload: dict):
 
 
 def _read_yaml(path: Path) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
@@ -28,7 +28,10 @@ def _prepare_agent_tmp(monkeypatch, tmp_path):
     monkeypatch.setattr(backend_agent, "_APPROVAL_TTL_SEC", 3600)
     _write_yaml(
         config_dir / "distill_config.yaml",
-        {"distillation": {"w_kd": 0.5, "temperature": 2.0}, "training": {"epochs": 100}},
+        {
+            "distillation": {"w_kd": 0.5, "temperature": 2.0},
+            "training": {"epochs": 100},
+        },
     )
     return config_dir, history_dir
 
@@ -81,11 +84,19 @@ def test_rollback_to_previous_version(monkeypatch, tmp_path):
 
     p1 = backend_agent._tool_preview_patch({"run_id": "r1", "patch": {"distillation": {"w_kd": 0.6}}})
     backend_agent._tool_apply_patch_with_approval(
-        {"run_id": "r1", "approval_token": p1["approval_token"], "request_hash": p1["request_hash"]}
+        {
+            "run_id": "r1",
+            "approval_token": p1["approval_token"],
+            "request_hash": p1["request_hash"],
+        }
     )
     p2 = backend_agent._tool_preview_patch({"run_id": "r1", "patch": {"distillation": {"w_kd": 0.7}}})
     backend_agent._tool_apply_patch_with_approval(
-        {"run_id": "r1", "approval_token": p2["approval_token"], "request_hash": p2["request_hash"]}
+        {
+            "run_id": "r1",
+            "approval_token": p2["approval_token"],
+            "request_hash": p2["request_hash"],
+        }
     )
     cfg = _read_yaml(config_dir / "distill_config.yaml")
     assert cfg["distillation"]["w_kd"] == 0.7
@@ -119,5 +130,3 @@ def test_preview_rejects_deprecated_fields(monkeypatch, tmp_path):
     assert out["status"] == "error"
     assert "deprecated" in out["error"]
     assert "training.workers" in out["deprecated_paths"]
-
-

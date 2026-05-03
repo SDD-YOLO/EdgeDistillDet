@@ -8,23 +8,28 @@ import { fetchResumeCandidates } from "../../../api/trainApi";
 export function useResumeState({ toast }) {
   const [resumeCandidates, setResumeCandidates] = useState([]);
   const [selectedResumeIndex, setSelectedResumeIndex] = useState(0);
-  
+
   const resumeListProjectRef = useRef("runs");
 
-  const refreshResumeCandidates = useCallback(async (project, autoSelect = true) => {
-    if (!project) return;
-    try {
-      resumeListProjectRef.current = project;
-      const data = await fetchResumeCandidates(project);
-      const candidates = Array.isArray(data.candidates) ? data.candidates : [];
-      setResumeCandidates(candidates);
-      if (autoSelect && candidates.length > 0) {
-        setSelectedResumeIndex(0);
+  const refreshResumeCandidates = useCallback(
+    async (project, autoSelect = true) => {
+      if (!project) return;
+      try {
+        resumeListProjectRef.current = project;
+        const data = await fetchResumeCandidates(project);
+        const candidates = Array.isArray(data.candidates)
+          ? data.candidates
+          : [];
+        setResumeCandidates(candidates);
+        if (autoSelect && candidates.length > 0) {
+          setSelectedResumeIndex(0);
+        }
+      } catch (error) {
+        toast(`刷新续训列表失败: ${error.message}`, "error");
       }
-    } catch (error) {
-      toast(`刷新续训列表失败: ${error.message}`, "error");
-    }
-  }, [toast]);
+    },
+    [toast],
+  );
 
   const selectedResumeCandidate = resumeCandidates[selectedResumeIndex];
 
@@ -35,6 +40,6 @@ export function useResumeState({ toast }) {
     setSelectedResumeIndex,
     selectedResumeCandidate,
     resumeListProjectRef,
-    refreshResumeCandidates
+    refreshResumeCandidates,
   };
 }

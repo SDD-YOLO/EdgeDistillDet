@@ -8,16 +8,19 @@ import { startDisplay, stopDisplay } from "../../../api/trainApi";
 export function useInferenceState({ toast }) {
   const [inferRunning, setInferRunning] = useState(false);
 
-  const startInference = useCallback(async (payload) => {
-    try {
-      await startDisplay(payload);
-      setInferRunning(true);
-      toast("推理已启动", "success");
-    } catch (error) {
-      setInferRunning(false);
-      toast(`推理启动失败: ${error.message}`, "error");
-    }
-  }, [toast]);
+  const startInference = useCallback(
+    async (payload) => {
+      try {
+        await startDisplay(payload);
+        setInferRunning(true);
+        toast("推理已启动", "success");
+      } catch (error) {
+        setInferRunning(false);
+        toast(`推理启动失败: ${error.message}`, "error");
+      }
+    },
+    [toast],
+  );
 
   const stopInference = useCallback(async () => {
     try {
@@ -33,6 +36,6 @@ export function useInferenceState({ toast }) {
     inferRunning,
     setInferRunning,
     startInference,
-    stopInference
+    stopInference,
   };
 }

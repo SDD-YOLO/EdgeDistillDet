@@ -2,10 +2,10 @@
  * useTrainingValidator.js
  * =======================
  * 集成配置验证到 React 组件中
- * 
+ *
  * 使用示例：
  * const { validateAndCorrect, showValidationToast } = useTrainingValidator({ toast });
- * 
+ *
  * // 在 setNested 之后调用
  * const newForm = validateAndCorrect(updatedForm);
  * setForm(newForm);
@@ -15,7 +15,7 @@ import { useCallback } from "react";
 import {
   validateTrainingConfig,
   formatViolationMessage,
-  getViolationSeverity
+  getViolationSeverity,
 } from "../utils/trainingConfigValidator";
 
 export function useTrainingValidator({ toast }) {
@@ -36,14 +36,18 @@ export function useTrainingValidator({ toast }) {
       const { form: correctedForm, violations } = validateTrainingConfig(form);
 
       // 是否有实际修正发生
-      const wasModified = JSON.stringify(form) !== JSON.stringify(correctedForm);
+      const wasModified =
+        JSON.stringify(form) !== JSON.stringify(correctedForm);
 
       if (showToast && violations.length > 0) {
         // 警告不显示（除非明确要求）
-        const errorsOnly = violations.filter(v => !v.isWarning);
-        const warningsOnly = violations.filter(v => v.isWarning);
+        const errorsOnly = violations.filter((v) => !v.isWarning);
+        const warningsOnly = violations.filter((v) => v.isWarning);
 
-        if (errorsOnly.length > 0 || (!silentWarnings && warningsOnly.length > 0)) {
+        if (
+          errorsOnly.length > 0 ||
+          (!silentWarnings && warningsOnly.length > 0)
+        ) {
           const toastSeverity = getViolationSeverity(violations);
           const message = formatViolationMessage(violations);
 
@@ -55,7 +59,7 @@ export function useTrainingValidator({ toast }) {
 
       return correctedForm;
     },
-    [toast]
+    [toast],
   );
 
   /**
@@ -81,7 +85,7 @@ export function useTrainingValidator({ toast }) {
 
       return violations;
     },
-    [toast]
+    [toast],
   );
 
   /**
@@ -96,6 +100,6 @@ export function useTrainingValidator({ toast }) {
   return {
     validateAndCorrect,
     checkAndNotify,
-    getViolations
+    getViolations,
   };
 }

@@ -5,7 +5,7 @@ import { startDisplay, stopDisplay } from "../../../api/trainApi";
 
 vi.mock("../../../api/trainApi", () => ({
   startDisplay: vi.fn(),
-  stopDisplay: vi.fn()
+  stopDisplay: vi.fn(),
 }));
 
 describe("useInferenceState", () => {

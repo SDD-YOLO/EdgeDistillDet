@@ -178,7 +178,9 @@ export function formatAgentTerminalOutput(reply, toolLogs) {
           : {};
 
       sections.push(`── ${i + 1}. ${name} ──`);
-      sections.push(`请求参数:\n${JSON.stringify({ tool: name, args }, null, 2)}`);
+      sections.push(
+        `请求参数:\n${JSON.stringify({ tool: name, args }, null, 2)}`,
+      );
 
       let resStr;
       try {
@@ -188,7 +190,9 @@ export function formatAgentTerminalOutput(reply, toolLogs) {
       }
 
       if (resStr.length > TERMINAL_TOOL_JSON_MAX) {
-        resStr = `${resStr.slice(0, TERMINAL_TOOL_JSON_MAX)}\n… (以下省略 ${resStr.length - TERMINAL_TOOL_JSON_MAX} 字符)`;
+        resStr = `${resStr.slice(0, TERMINAL_TOOL_JSON_MAX)}\n… (以下省略 ${
+          resStr.length - TERMINAL_TOOL_JSON_MAX
+        } 字符)`;
       }
 
       sections.push(`返回:\n${resStr}`, "");
@@ -203,7 +207,9 @@ export function formatAgentTerminalOutput(reply, toolLogs) {
   }
 
   if (!fences.length && !heuristicLines && toolLogs?.length) {
-    sections.unshift("【提示】模型未使用 Markdown 代码块给出 shell；下方为工具原始返回。");
+    sections.unshift(
+      "【提示】模型未使用 Markdown 代码块给出 shell；下方为工具原始返回。",
+    );
   }
 
   return sections.join("\n").trim();
@@ -229,12 +235,13 @@ export function softenAgentBubbleText(raw, streaming) {
   // 新增：提取 JSON 中的 reply 字段（处理多 JSON 拼接的情况）
   // 尝试找到第一个有效的 JSON 对象（含 reply 字段）
   const trimmed = t.trim();
-  
+
   // 使用非贪婪匹配，找到第一个完整的 JSON 对象
   // 匹配 { ... }，但避免跨对象匹配
-  const jsonMatches = trimmed.match(/\{[^{}]*("reply"[^{}]*)[^{}]*\}/g) || 
-                      trimmed.match(/\{[\s\S]*?"reply"[\s\S]*?\}(?=\s*\{|$)/);
-  
+  const jsonMatches =
+    trimmed.match(/\{[^{}]*("reply"[^{}]*)[^{}]*\}/g) ||
+    trimmed.match(/\{[\s\S]*?"reply"[\s\S]*?\}(?=\s*\{|$)/);
+
   if (jsonMatches && jsonMatches[0]) {
     try {
       const parsed = JSON.parse(jsonMatches[0]);
@@ -245,21 +252,23 @@ export function softenAgentBubbleText(raw, streaming) {
       // 尝试处理嵌套引号问题：把字符串中的 \n 先还原
       try {
         const cleaned = jsonMatches[0]
-          .replace(/\\n/g, '\n')
+          .replace(/\\n/g, "\n")
           .replace(/\\"/g, '"')
-          .replace(/\\\\/g, '\\');
+          .replace(/\\\\/g, "\\");
         const parsed = JSON.parse(cleaned);
         if (parsed && typeof parsed.reply === "string") {
           t = parsed.reply;
         }
       } catch (e2) {
         // 仍然失败，尝试提取 reply 字段的原始内容
-        const replyMatch = jsonMatches[0].match(/"reply"\s*:\s*"([\s\S]*?)"\s*,\s*"reasoning"/);
+        const replyMatch = jsonMatches[0].match(
+          /"reply"\s*:\s*"([\s\S]*?)"\s*,\s*"reasoning"/,
+        );
         if (replyMatch) {
           t = replyMatch[1]
-            .replace(/\\n/g, '\n')
+            .replace(/\\n/g, "\n")
             .replace(/\\"/g, '"')
-            .replace(/\\\\/g, '\\');
+            .replace(/\\\\/g, "\\");
         }
       }
     }

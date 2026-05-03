@@ -27,21 +27,21 @@ distillation:
 training:
   compute_provider: local
   cloud_api:
-    base_url: ''
+    base_url: ""
     submit_path: /train/start
     status_path: /train/status
     logs_path: /train/logs
     stop_path: /train/stop
-    token: ''
+    token: ""
     poll_interval_sec: 3
   dataset_api:
     enabled: false
     source: path
-    resolve_url: ''
-    token: ''
-    dataset_name: ''
+    resolve_url: ""
+    token: ""
+    dataset_name: ""
   data_yaml: configs/dataset_coco128.yaml
-  device: '0'
+  device: "0"
   epochs: 10
   imgsz: 640
   batch: 16
@@ -144,12 +144,12 @@ wandb:
   enabled: false
   mode: online
   project: edge-distilldet
-  entity: ''
-  name: ''
-  group: ''
+  entity: ""
+  name: ""
+  group: ""
   job_type: distill-train
   tags: []
-  notes: ''
+  notes: ""
 export_model:
   export_path: runs/exports/exp10.onnx
   format: onnx

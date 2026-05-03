@@ -10,7 +10,7 @@ def _expand_env_vars_str(value: str) -> str:
     def _replace(match: re.Match) -> str:
         name = match.group(1)
         default = match.group(2)
-        return os.environ.get(name, default if default is not None else '')
+        return os.environ.get(name, default if default is not None else "")
 
     value = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\:-([^}]*))?\}", _replace, value)
     return os.path.expandvars(value)

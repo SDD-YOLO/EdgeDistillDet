@@ -19,19 +19,31 @@ export function fetchTrainLogs({ offset = 0, limit = 120 } = {}) {
 }
 
 export function startTrain(body) {
-  return apiRequest("/api/train/start", { method: "POST", body: JSON.stringify(body) });
+  return apiRequest("/api/train/start", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function stopTrain() {
-  return apiRequest("/api/train/stop", { method: "POST", body: JSON.stringify({}) });
+  return apiRequest("/api/train/stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export function startDisplay(body) {
-  return apiRequest("/api/display/start", { method: "POST", body: JSON.stringify(body) });
+  return apiRequest("/api/display/start", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function stopDisplay() {
-  return apiRequest("/api/display/stop", { method: "POST", body: JSON.stringify({}) });
+  return apiRequest("/api/display/stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export function fetchDisplayStatus() {
@@ -44,11 +56,17 @@ export function fetchDisplayLogs({ offset = 0, limit = 120 } = {}) {
 }
 
 export function startExportModel(body) {
-  return apiRequest("/api/export/start", { method: "POST", body: JSON.stringify(body) });
+  return apiRequest("/api/export/start", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function stopExportModel() {
-  return apiRequest("/api/export/stop", { method: "POST", body: JSON.stringify({}) });
+  return apiRequest("/api/export/stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export function fetchExportStatus() {

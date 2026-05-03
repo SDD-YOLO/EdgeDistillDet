@@ -3,28 +3,32 @@
 /* Auto-split from styles.css: layout/agent-layout.css */
 
 .agent-note {
-    margin-top: 4px;
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    font-size: 11px;
-    line-height: 1.45;
-    color: var(--md-on-surface-variant);
-    border-radius: 10px;
-    padding: 8px 10px;
-    background: color-mix(in srgb, var(--md-secondary-container) 50%, transparent);
+  margin-top: 4px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--md-on-surface-variant);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: color-mix(
+    in srgb,
+    var(--md-secondary-container) 50%,
+    transparent
+  );
 }
 
 .agent-approval-in-chat .md-dialog-title {
-    font-size: 18px;
-    line-height: 24px;
-    margin: 0 0 8px;
+  font-size: 18px;
+  line-height: 24px;
+  margin: 0 0 8px;
 }
 
 /* Final answer content inside outer bubble */
 .agent-answer-content-outer {
-    font-size: 14px;
-    line-height: 1.6;
-    color: var(--md-on-surface);
-    padding-top: 4px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--md-on-surface);
+  padding-top: 4px;
 }

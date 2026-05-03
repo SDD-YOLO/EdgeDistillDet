@@ -1,5 +1,10 @@
 import { useCallback, useRef, useState } from "react";
-import { fetchExportStatus, fetchExportLogs, startExportModel, stopExportModel } from "../../../api/trainApi";
+import {
+  fetchExportStatus,
+  fetchExportLogs,
+  startExportModel,
+  stopExportModel,
+} from "../../../api/trainApi";
 
 /**
  * 自定义 Hook：管理模型导出的全生命周期状态
@@ -8,7 +13,11 @@ import { fetchExportStatus, fetchExportLogs, startExportModel, stopExportModel }
 export function useExportState({ toast }) {
   const [exportRunning, setExportRunning] = useState(false);
   const [exportLogs, setExportLogs] = useState([]);
-  const [exportStatus, setExportStatus] = useState({ running: false, pid: null, output_path: null });
+  const [exportStatus, setExportStatus] = useState({
+    running: false,
+    pid: null,
+    output_path: null,
+  });
   const [exportAutoScroll, setExportAutoScroll] = useState(true);
   const [exportWeightCandidates, setExportWeightCandidates] = useState([]);
   const [selectedExportWeightIndex, setSelectedExportWeightIndex] = useState(0);
@@ -27,19 +36,28 @@ export function useExportState({ toast }) {
     try {
       const [statusRes, logsRes] = await Promise.all([
         fetchExportStatus(),
-        fetchExportLogs({ offset: exportLogOffsetRef.current, limit: 120 })
+        fetchExportLogs({ offset: exportLogOffsetRef.current, limit: 120 }),
       ]);
 
       if (statusRes?.running) {
         setExportRunning(true);
-        setExportStatus({ running: true, pid: statusRes?.pid, output_path: statusRes?.output_path });
+        setExportStatus({
+          running: true,
+          pid: statusRes?.pid,
+          output_path: statusRes?.output_path,
+        });
       } else {
         setExportRunning(false);
-        setExportStatus({ running: false, pid: null, output_path: statusRes?.output_path });
+        setExportStatus({
+          running: false,
+          pid: null,
+          output_path: statusRes?.output_path,
+        });
       }
 
       if (logsRes?.logs && logsRes.logs.length > 0) {
-        exportLogOffsetRef.current = logsRes.offset || exportLogOffsetRef.current;
+        exportLogOffsetRef.current =
+          logsRes.offset || exportLogOffsetRef.current;
         setExportLogs((prev) => [...prev, ...logsRes.logs]);
       }
 
@@ -80,7 +98,9 @@ export function useExportState({ toast }) {
   };
 
   const downloadExportLogs = () => {
-    const blob = new Blob([exportLogs.join("\n")], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([exportLogs.join("\n")], {
+      type: "text/plain;charset=utf-8",
+    });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = `export_logs_${new Date().toISOString().slice(0, 10)}.txt`;
@@ -107,6 +127,6 @@ export function useExportState({ toast }) {
     startExport,
     stopExport,
     clearExportLogs,
-    downloadExportLogs
+    downloadExportLogs,
   };
 }

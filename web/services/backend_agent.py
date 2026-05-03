@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import csv
 import hashlib
 import json
 import os
@@ -13,11 +12,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi.responses import StreamingResponse
 import yaml
+from fastapi.responses import StreamingResponse
 
-from web.agent_graph.runtime import execute_tool_graph, invoke_model_graph, invoke_model_graph_stream
-from web.core.paths import AGENT_HISTORY_DIR, AGENT_STATE_DIR, CONFIG_DIR
+from web.agent_graph.runtime import (
+    execute_tool_graph,
+    invoke_model_graph,
+    invoke_model_graph_stream,
+)
+from web.core.paths import AGENT_HISTORY_DIR, CONFIG_DIR
 from web.schemas import (
     AgentModelInvokeRequest,
     AgentPatchApplyRequest,
@@ -26,10 +29,21 @@ from web.schemas import (
     AgentToolExecuteRequest,
 )
 from web.services import backend_state, config_service
-from web.services.cache.csv_cache import load_csv_summary_cached, load_csv_rows_range_cached
 from web.services.backend_common import _error
+from web.services.cache.csv_cache import (
+    load_csv_rows_range_cached,
+    load_csv_summary_cached,
+)
 
-_ALLOWED_TOP_LEVEL = ("distillation", "training", "output", "wandb", "export_model", "predict", "advanced")
+_ALLOWED_TOP_LEVEL = (
+    "distillation",
+    "training",
+    "output",
+    "wandb",
+    "export_model",
+    "predict",
+    "advanced",
+)
 _DEPRECATED_LEAF_PATHS = {
     "distillation.temperature",
     "distillation.schedule_type",
@@ -137,7 +151,7 @@ def _validate_w_feat_scalar_in_patch(patch: dict[str, Any]) -> str | None:
     if not isinstance(dist, dict) or "w_feat" not in dist:
         return None
     value = dist.get("w_feat")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return "distillation.w_feat must be a numeric scalar (int/float), arrays are not allowed"
     return None
 
@@ -178,7 +192,14 @@ def _leaf_config_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str
         in_after = path in aflat
         if in_before and in_after:
             if bflat[path] != aflat[path]:
-                rows.append({"path": path, "kind": "changed", "before": bflat[path], "after": aflat[path]})
+                rows.append(
+                    {
+                        "path": path,
+                        "kind": "changed",
+                        "before": bflat[path],
+                        "after": aflat[path],
+                    }
+                )
         elif in_before:
             rows.append({"path": path, "kind": "removed", "before": bflat[path], "after": None})
         else:
@@ -282,6 +303,7 @@ def _append_history(
 # training results collector — 内部实现（供 get_context 聚合）
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _try_float(value: str) -> float | None:
     try:
         return float(value)
@@ -384,10 +406,7 @@ def _collect_training_results(args: dict[str, Any]) -> dict[str, Any]:
     if not csvs:
         return {
             "status": "error",
-            "message": (
-                f"在 {runs_root} 下未找到任何 results.csv。"
-                "请确认训练已运行过，或通过 run_path 参数指定路径。"
-            ),
+            "message": (f"在 {runs_root} 下未找到任何 results.csv。请确认训练已运行过，或通过 run_path 参数指定路径。"),
         }
 
     runs_out = []
@@ -396,14 +415,16 @@ def _collect_training_results(args: dict[str, Any]) -> dict[str, Any]:
         if "error" in parsed:
             runs_out.append({"path": str(csv_path), "error": parsed["error"]})
         else:
-            runs_out.append({
-                "path": str(csv_path),
-                "epoch_count": parsed["epoch_count"],
-                "metric_cols": parsed["metric_cols"],
-                "latest": parsed["latest"],
-                "trend": parsed["trend"],
-                "tail_rows": parsed["tail_rows"],
-            })
+            runs_out.append(
+                {
+                    "path": str(csv_path),
+                    "epoch_count": parsed["epoch_count"],
+                    "metric_cols": parsed["metric_cols"],
+                    "latest": parsed["latest"],
+                    "trend": parsed["trend"],
+                    "tail_rows": parsed["tail_rows"],
+                }
+            )
 
     # 一句话摘要，供模型快速定位核心信息
     summary_parts = []
@@ -412,15 +433,12 @@ def _collect_training_results(args: dict[str, Any]) -> dict[str, Any]:
             summary_parts.append(f"{run['path']}: {run['error']}")
             continue
         ep = run["epoch_count"]
-        mAP_key = next((k for k in run["latest"] if "mAP50" in k and "(B)" in k), None)
-        mAP_key = mAP_key or next((k for k in run["latest"] if "mAP50" in k), None)
-        if mAP_key and run["latest"].get(mAP_key) is not None:
-            val = run["latest"][mAP_key]
-            best = run["trend"].get(mAP_key, {}).get("best", val)
-            summary_parts.append(
-                f"{run['path']}：已训练 {ep} epoch，"
-                f"最新 {mAP_key}={val:.4f}，历史最优={best:.4f}"
-            )
+        map_key = next((k for k in run["latest"] if "mAP50" in k and "(B)" in k), None)
+        map_key = map_key or next((k for k in run["latest"] if "mAP50" in k), None)
+        if map_key and run["latest"].get(map_key) is not None:
+            val = run["latest"][map_key]
+            best = run["trend"].get(map_key, {}).get("best", val)
+            summary_parts.append(f"{run['path']}：已训练 {ep} epoch，最新 {map_key}={val:.4f}，历史最优={best:.4f}")
         else:
             summary_parts.append(f"{run['path']}：已训练 {ep} epoch")
 
@@ -434,6 +452,7 @@ def _collect_training_results(args: dict[str, Any]) -> dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────────
 # 原有工具函数（不变）
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _tool_get_context(args: dict[str, Any]) -> dict[str, Any]:
     run_id = str(args.get("run_id") or "default")
@@ -475,7 +494,11 @@ def _tool_preview_patch(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "error", "error": scalar_error}
     deprecated = _collect_deprecated_leaf_paths(patch)
     if deprecated:
-        return {"status": "error", "error": f"patch contains deprecated fields: {deprecated}", "deprecated_paths": deprecated}
+        return {
+            "status": "error",
+            "error": f"patch contains deprecated fields: {deprecated}",
+            "deprecated_paths": deprecated,
+        }
     run_id = str(args.get("run_id") or "default")
     operator = str(args.get("operator") or "agent")
     reason = str(args.get("reason") or "agent.preview_patch")
@@ -587,7 +610,10 @@ def _tool_rollback_run_config(args: dict[str, Any]) -> dict[str, Any]:
                 target = item
                 break
         if target is None:
-            return {"status": "error", "error": f"target_version {target_version} not found"}
+            return {
+                "status": "error",
+                "error": f"target_version {target_version} not found",
+            }
     else:
         idx = max(0, len(rows) - 1 - max(1, steps))
         target = rows[idx]
@@ -617,11 +643,7 @@ def _execute_tool(tool: str, args: dict[str, Any], _state: dict[str, Any]) -> An
     if tool == "agent.preview_patch":
         patch = normalized_args.get("patch")
         if not isinstance(patch, dict):
-            candidate_patch = {
-                k: copy.deepcopy(v)
-                for k, v in normalized_args.items()
-                if k in _ALLOWED_TOP_LEVEL and isinstance(v, dict)
-            }
+            candidate_patch = {k: copy.deepcopy(v) for k, v in normalized_args.items() if k in _ALLOWED_TOP_LEVEL and isinstance(v, dict)}
             if candidate_patch:
                 normalized_args = {
                     "run_id": str(normalized_args.get("run_id") or "default"),
@@ -739,7 +761,11 @@ def agent_model_invoke_stream(payload: AgentModelInvokeRequest):
         return StreamingResponse(
             invoke_model_graph_stream(payload.model_dump()),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
         )
     except Exception as exc:
         return _error(f"agent model stream failed: {exc}", 500)

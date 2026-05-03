@@ -1,14 +1,19 @@
 import { apiRequest } from "./client";
 
-export function pickDialogPath({ kind = "file", title = "选择路径", initial_path = "", filters = [] } = {}) {
+export function pickDialogPath({
+  kind = "file",
+  title = "选择路径",
+  initial_path = "",
+  filters = [],
+} = {}) {
   return apiRequest("/api/dialog/pick", {
     method: "POST",
     body: JSON.stringify({
       kind,
       title,
       initial_path,
-      filters
-    })
+      filters,
+    }),
   });
 }
 
@@ -24,14 +29,14 @@ export function checkOutputPath(project) {
 export function saveDistillConfig(config) {
   return apiRequest("/api/config/save", {
     method: "POST",
-    body: JSON.stringify({ name: "distill_config.yaml", config })
+    body: JSON.stringify({ name: "distill_config.yaml", config }),
   });
 }
 
 export function uploadConfigFile({ content, name }) {
   return apiRequest("/api/config/upload", {
     method: "POST",
-    body: JSON.stringify({ content, name })
+    body: JSON.stringify({ content, name }),
   });
 }
 

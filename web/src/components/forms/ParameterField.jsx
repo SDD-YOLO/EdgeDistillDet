@@ -9,7 +9,14 @@ function normalizeValueForEnum(value) {
   return String(value);
 }
 
-export function ParameterField({ param, value, onChange, onBrowse, disabled = false, title = "" }) {
+export function ParameterField({
+  param,
+  value,
+  onChange,
+  onBrowse,
+  disabled = false,
+  title = "",
+}) {
   const fieldType = param?.type || "text";
   const label = param?.label || param?.key || "参数";
   if (fieldType === "enum") {

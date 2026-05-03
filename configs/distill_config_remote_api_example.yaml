@@ -73,11 +73,11 @@ export_model:
   opset: 0
   workspace: 0
   nms: false
-  save_dir: ''
+  save_dir: ""
 predict:
-  source: ''
+  source: ""
   output_dir: runs/inference_results/remote_api
-  device: '0'
+  device: "0"
   imgsz: 640
   conf: 0.25
   iou: 0.45

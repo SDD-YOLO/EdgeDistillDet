@@ -17,7 +17,9 @@ export default function ConfigNav({ groups, activeGroup, onNavigate }) {
                 <strong>{group.title}</strong>
                 <small>{group.description}</small>
               </span>
-              {group.priority === "high" ? <span className="config-nav-badge">必填</span> : null}
+              {group.priority === "high" ? (
+                <span className="config-nav-badge">必填</span>
+              ) : null}
             </button>
           );
         })}

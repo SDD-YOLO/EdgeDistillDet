@@ -42,12 +42,12 @@ dependencies = [
   "uvicorn[standard]==0.32.1",
   "requests>=2.31.0,<3",
   "psutil>=5.9.8,<7",
-  
+
   # === 日志 / LLM ===
   "wandb>=0.17.0,<1",
   "langgraph>=0.2.0,<1",
   "langchain-core>=0.3.0,<1",
-  
+
   # === 模型导出 / optional heavy runtimes ===
   # Note: heavyweight runtimes (TensorFlow, OpenVINO, CoreML, MNN, NNCN, etc.)
   # are available as optional dependencies (extras) to keep the base install small.
@@ -82,11 +82,15 @@ pythonpath = ["."]
 addopts = "-q"
 
 [tool.ruff]
-line-length = 88
-select = ["E", "F", "W", "I", "Q"]
-extend-ignore = ["E203"]
+target-version = "py311"
+line-length = 2000
 
-[tool.mypy]
-python_version = 3.10
-ignore_missing_imports = true
-strict = false
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+extend-ignore = ["N999"]
+
+#[tool.mypy]
+#python_version = "3.12"
+#explicit_package_bases = true
+#ignore_missing_imports = true
+#strict = false

@@ -1,6 +1,6 @@
 # 最小化、可维护的蒸馏训练配置模板
 # ============================================
-# 
+#
 # 本文件展示核心必需字段，其余字段自动取默认值
 # 使用说明：
 # 1. 根据场景调整下方参数
@@ -9,63 +9,63 @@
 
 # [核心蒸馏参数] ———————————————————————————————————————
 distillation:
-  student_weight: models/yolov8n.pt          # 学生模型权重
-  teacher_weight: models/yolov8m.pt          # 教师模型权重
-  
+  student_weight: models/yolov8n.pt # 学生模型权重
+  teacher_weight: models/yolov8m.pt # 教师模型权重
+
   # ⚠️ 蒸馏时间窗口：start < end ≤ epochs
-  distill_start_epoch: 0                      # 蒸馏开始 epoch
-  distill_end_epoch: 10                       # 蒸馏结束 epoch（必须 ≤ training.epochs）
-  
+  distill_start_epoch: 0 # 蒸馏开始 epoch
+  distill_end_epoch: 10 # 蒸馏结束 epoch（必须 ≤ training.epochs）
+
   # 蒸馏策略
-  distill_mode: adaptive                      # adaptive / fixed
-  w_kd: 0.7                                   # KD 损失权重 (0.0 ~ 1.0)
-  w_focal: 0.55                               # Focal KD 权重
-  w_feat: 0.9                                 # 特征对齐权重
-  T_max: 3.5                                  # 温度上限
-  T_min: 1.05                                 # 温度下限
+  distill_mode: adaptive # adaptive / fixed
+  w_kd: 0.7 # KD 损失权重 (0.0 ~ 1.0)
+  w_focal: 0.55 # Focal KD 权重
+  w_feat: 0.9 # 特征对齐权重
+  T_max: 3.5 # 温度上限
+  T_min: 1.05 # 温度下限
 
 # [核心训练参数] ———————————————————————————————————————
 training:
-  data_yaml: configs/dataset_coco128.yaml     # 数据集配置
-  device: '0'                                 # 设备 (单卡: '0', 多卡: '0,1,2')
-  
+  data_yaml: configs/dataset_coco128.yaml # 数据集配置
+  device: "0" # 设备 (单卡: '0', 多卡: '0,1,2')
+
   # ⚠️ 时间窗口：warmup_epochs ≤ epochs，close_mosaic ≤ epochs
-  epochs: 10                                  # 总训练 epoch
-  warmup_epochs: 3                            # 预热 epoch（≤ epochs）
-  close_mosaic: 9                             # 关闭 mosaic epoch（≤ epochs）
-  
+  epochs: 10 # 总训练 epoch
+  warmup_epochs: 3 # 预热 epoch（≤ epochs）
+  close_mosaic: 9 # 关闭 mosaic epoch（≤ epochs）
+
   # 内存/计算配置
-  batch: 16                                   # 批次大小（注意显存占用）
-  imgsz: 640                                  # 图像尺寸
-  
+  batch: 16 # 批次大小（注意显存占用）
+  imgsz: 640 # 图像尺寸
+
   # 优化参数
-  lr0: 0.001                                  # 初始学习率
-  optimizer: auto                             # auto / SGD / Adam
-  
+  lr0: 0.001 # 初始学习率
+  optimizer: auto # auto / SGD / Adam
+
   # 保存策略
-  save: true                                  # 是否保存检查点
-  save_period: -1                             # 保存间隔 (-1 仅保存最后一个)
+  save: true # 是否保存检查点
+  save_period: -1 # 保存间隔 (-1 仅保存最后一个)
 
 # [输出管理] ———————————————————————————————————————
 output:
-  project: runs                               # 输出项目目录
-  name: exp1                                  # 运行名称
+  project: runs # 输出项目目录
+  name: exp1 # 运行名称
 
 # [可选：W&B 集成] ———————————————————————————————————
 wandb:
-  enabled: false                              # 是否启用 W&B 记录
+  enabled: false # 是否启用 W&B 记录
   project: edge-distilldet
-  entity: ''                                  # W&B 团队名
+  entity: "" # W&B 团队名
 
 # [可选：导出配置] ———————————————————————————————————
 export_model:
-  format: onnx                                # onnx / tflite / torchscript
-  export_path: runs/exports/exp1.onnx         # 导出文件路径
-  optimize: false                             # 是否优化模型
+  format: onnx # onnx / tflite / torchscript
+  export_path: runs/exports/exp1.onnx # 导出文件路径
+  optimize: false # 是否优化模型
 
 # 验证规则说明
 # ==============
-# 
+#
 # ❌ 错误案例（会自动修正或提示）
 # ├─ distill_end_epoch (150) > epochs (10)          → 自动修正为 10
 # ├─ warmup_epochs (20) > epochs (10)               → 自动修正为 10

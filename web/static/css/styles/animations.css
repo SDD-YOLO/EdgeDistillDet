@@ -3,82 +3,180 @@
 /* Auto-split from styles.css: animations.css */
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes checkBounceIn {
-    0%   { transform: scale(0) rotate(-45deg); opacity: 0; }
-    50%  { transform: scale(1.25) rotate(10deg); opacity: 1; }
-    70%  { transform: scale(0.95) rotate(-3deg); }
-    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+  0% {
+    transform: scale(0) rotate(-45deg);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.25) rotate(10deg);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(0.95) rotate(-3deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
 }
 
 @keyframes successPulse {
-    0%   { box-shadow: 0 0 0 0 rgba(31, 122, 59, 0.55); }
-    20%  { box-shadow: 0 0 0 12px rgba(31, 122, 59, 0), 0 0 0 4px rgba(31, 122, 59, 0.3); }
-    40%  { box-shadow: 0 0 0 16px rgba(31, 122, 59, 0), 0 0 0 6px rgba(31, 122, 59, 0.15); }
-    60%  { box-shadow: 0 0 0 20px rgba(31, 122, 59, 0); }
-    100% { box-shadow: none; }
+  0% {
+    box-shadow: 0 0 0 0 rgba(31, 122, 59, 0.55);
+  }
+  20% {
+    box-shadow:
+      0 0 0 12px rgba(31, 122, 59, 0),
+      0 0 0 4px rgba(31, 122, 59, 0.3);
+  }
+  40% {
+    box-shadow:
+      0 0 0 16px rgba(31, 122, 59, 0),
+      0 0 0 6px rgba(31, 122, 59, 0.15);
+  }
+  60% {
+    box-shadow: 0 0 0 20px rgba(31, 122, 59, 0);
+  }
+  100% {
+    box-shadow: none;
+  }
 }
 
 @keyframes errorShake {
-    0%, 100% { transform: translateX(0); }
-    15%      { transform: translateX(-6px); }
-    30%      { transform: translateX(6px); }
-    45%      { transform: translateX(-4px); }
-    60%      { transform: translateX(4px); }
-    75%      { transform: translateX(-2px); }
-    90%      { transform: translateX(2px); }
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(-6px);
+  }
+  30% {
+    transform: translateX(6px);
+  }
+  45% {
+    transform: translateX(-4px);
+  }
+  60% {
+    transform: translateX(4px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+  90% {
+    transform: translateX(2px);
+  }
 }
 
 @keyframes numberFlashUp {
-    0%   { text-shadow: 0 0 8px rgba(31, 122, 59, 0.5); transform: translateY(-2px) scale(1.05); }
-    100% { text-shadow: none; transform: none; }
+  0% {
+    text-shadow: 0 0 8px rgba(31, 122, 59, 0.5);
+    transform: translateY(-2px) scale(1.05);
+  }
+  100% {
+    text-shadow: none;
+    transform: none;
+  }
 }
 
 @keyframes numberFlashDown {
-    0%   { text-shadow: 0 0 8px rgba(160, 95, 0, 0.5); transform: translateY(-2px) scale(1.05); }
-    100% { text-shadow: none; transform: none; }
+  0% {
+    text-shadow: 0 0 8px rgba(160, 95, 0, 0.5);
+    transform: translateY(-2px) scale(1.05);
+  }
+  100% {
+    text-shadow: none;
+    transform: none;
+  }
 }
 
 @keyframes celebrationFlash {
-    0%   { opacity: 0; }
-    15%  { opacity: 1; }
-    50%  { opacity: 0.6; }
-    100% { opacity: 0; }
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 @keyframes badgeRotate {
-    0%, 100% { transform: rotate(-8deg); }
-    50%      { transform: rotate(8deg); }
+  0%,
+  100% {
+    transform: rotate(-8deg);
+  }
+  50% {
+    transform: rotate(8deg);
+  }
 }
 
 @keyframes progressNearComplete {
-    0%, 100% { background-position: 0% 50%; }
-    50%      { background-position: 100% 50%; }
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
 }
 
 @keyframes wsPulse {
-    0%, 100% { box-shadow: 0 0 6px rgba(31,122,59,0.5); }
-    50%      { box-shadow: 0 0 12px rgba(31,122,59,0.3); }
+  0%,
+  100% {
+    box-shadow: 0 0 6px rgba(31, 122, 59, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(31, 122, 59, 0.3);
+  }
 }
 
 @keyframes wsBlink {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 @keyframes logLineSlideIn {
-    from { opacity: 0; transform: translateX(-8px); }
-    to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @keyframes toastSlideUp {
-    from { opacity: 0; transform: translateY(16px) scale(0.96); }
-    to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @keyframes modeCardSelect {
-    from { transform: scale(0.95); }
-    to   { transform: scale(1); }
+  from {
+    transform: scale(0.95);
+  }
+  to {
+    transform: scale(1);
+  }
 }

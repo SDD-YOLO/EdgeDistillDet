@@ -23,7 +23,7 @@ const CANONICAL_TOOL_NAMES = [
 ];
 
 const EXTRA_ALIAS_MAP = new Map([
-  ["previewpatch",      "agent.preview_patch"],
+  ["previewpatch", "agent.preview_patch"],
   ["agentpreviewpatch", "agent.preview_patch"],
 ]);
 
@@ -43,23 +43,33 @@ function buildAliasMap() {
 const ALIAS_MAP = buildAliasMap();
 
 function parseArgsCandidate(candidate) {
-  if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) return candidate;
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate))
+    return candidate;
   if (typeof candidate === "string") {
     try {
       const p = JSON.parse(candidate);
       if (p && typeof p === "object" && !Array.isArray(p)) return p;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   return {};
 }
 
 function toToolCall(parsed) {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return null;
   if (typeof parsed.tool === "string") {
-    return { tool: normalizeToolName(parsed.tool), args: parseArgsCandidate(parsed.args ?? parsed.arguments) };
+    return {
+      tool: normalizeToolName(parsed.tool),
+      args: parseArgsCandidate(parsed.args ?? parsed.arguments),
+    };
   }
   if (parsed.action === "tool_call" && typeof parsed.name === "string") {
-    return { tool: normalizeToolName(parsed.name), args: parseArgsCandidate(parsed.arguments ?? parsed.args) };
+    return {
+      tool: normalizeToolName(parsed.name),
+      args: parseArgsCandidate(parsed.arguments ?? parsed.args),
+    };
   }
   return null;
 }
@@ -79,7 +89,7 @@ export function normalizeToolName(name) {
   const raw = name.trim();
   if (!raw) return "";
   const lowered = raw.toLowerCase().replace(/[\s-]+/g, "_");
-  const compact  = lowered.replace(/[._]/g, "");
+  const compact = lowered.replace(/[._]/g, "");
   return ALIAS_MAP.get(lowered) ?? ALIAS_MAP.get(compact) ?? raw;
 }
 
@@ -103,7 +113,9 @@ export function extractToolCallFromText(text) {
     try {
       const tc = toToolCall(JSON.parse(candidate));
       if (tc) return tc;
-    } catch { /* continue */ }
+    } catch {
+      /* continue */
+    }
   }
 
   for (let i = 0; i < raw.length; i += 1) {
@@ -118,7 +130,9 @@ export function extractToolCallFromText(text) {
           try {
             const tc = toToolCall(JSON.parse(raw.slice(i, j + 1)));
             if (tc) return tc;
-          } catch { /* continue */ }
+          } catch {
+            /* continue */
+          }
           break;
         }
       }
@@ -153,7 +167,9 @@ export function scoreToolCallConfidence(text) {
     try {
       const tc = toToolCall(JSON.parse(raw));
       if (tc) return { confidence: 3, toolCall: tc };
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
   }
 
   // Level 3b：恰好是单个 fence block，内部是合法工具调用 JSON
@@ -162,7 +178,9 @@ export function scoreToolCallConfidence(text) {
     try {
       const tc = toToolCall(JSON.parse((singleFence[1] || "").trim()));
       if (tc) return { confidence: 3, toolCall: tc };
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
   }
 
   // Level 2：某个 fence block 中包含工具调用
@@ -170,7 +188,9 @@ export function scoreToolCallConfidence(text) {
     try {
       const tc = toToolCall(JSON.parse((m[1] || "").trim()));
       if (tc) return { confidence: 2, toolCall: tc };
-    } catch { /* continue */ }
+    } catch {
+      /* continue */
+    }
   }
 
   // Level 1：松散扫描

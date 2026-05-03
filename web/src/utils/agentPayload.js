@@ -21,7 +21,8 @@ function pieceTextFromContent(val) {
 /** 从 API 响应中同时取出正文与 reasoning（与后端 _extract_openai_reasoning_from_message 对齐） */
 export function extractReplyAndReasoningFromPayload(payload) {
   if (typeof payload === "string") return { reply: payload, reasoning: "" };
-  if (!payload || typeof payload !== "object") return { reply: String(payload ?? ""), reasoning: "" };
+  if (!payload || typeof payload !== "object")
+    return { reply: String(payload ?? ""), reasoning: "" };
   let reasoning = "";
   if (typeof payload.reasoning === "string" && payload.reasoning.trim()) {
     reasoning = payload.reasoning.trim();
@@ -38,7 +39,13 @@ export function extractReplyAndReasoningFromPayload(payload) {
   const fallback = payload.reply ?? payload.message ?? payload.output;
   if (typeof fallback === "string") return { reply: fallback, reasoning };
   if (fallback !== undefined && fallback !== null) {
-    return { reply: typeof fallback === "object" ? JSON.stringify(fallback, null, 2) : String(fallback), reasoning };
+    return {
+      reply:
+        typeof fallback === "object"
+          ? JSON.stringify(fallback, null, 2)
+          : String(fallback),
+      reasoning,
+    };
   }
   return { reply: JSON.stringify(payload, null, 2), reasoning };
 }
@@ -50,7 +57,7 @@ function splitEmbeddedReasoningFromReply(text) {
   const patterns = [
     /<think\b[^>]*>([\s\S]*?)<\/think>/gi,
     /<think\b[^>]*>([\s\S]*?)<\/redacted_thinking>/gi,
-    /<think>([\s\S]*?)<\/redacted_thinking>/gi
+    /<think>([\s\S]*?)<\/redacted_thinking>/gi,
   ];
   for (const re of patterns) {
     main = main.replace(re, () => "");
@@ -64,6 +71,8 @@ export function buildDisplayReplyAndReasoning(rawReply, reasoningFromApi) {
   const { main } = splitEmbeddedReasoningFromReply(rawReply);
   const sanitizedMain = sanitizeBlockedCommandHints(main);
   const apiReason =
-    typeof reasoningFromApi === "string" && reasoningFromApi.trim() ? reasoningFromApi.trim() : "";
+    typeof reasoningFromApi === "string" && reasoningFromApi.trim()
+      ? reasoningFromApi.trim()
+      : "";
   return { displayReply: sanitizedMain, displayReasoning: apiReason };
 }

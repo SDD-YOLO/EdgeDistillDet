@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from web.services import backend_common, backend_train
 
 

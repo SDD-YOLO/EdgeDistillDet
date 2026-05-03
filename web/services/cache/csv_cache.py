@@ -9,7 +9,6 @@ from threading import RLock
 from web.core.paths import BASE_DIR
 from web.services.io.csv_io import load_csv_summary_from_disk
 
-
 DB_PATH = BASE_DIR / "data" / "metrics_cache.sqlite3"
 _SCHEMA_LOCK = RLock()
 _SCHEMA_READY = False
@@ -128,7 +127,6 @@ def load_csv_summary_cached(path: Path):
     return columns, rows
 
 
-
 def load_csv_rows_cached(path: Path, max_rows: int | None = None) -> list[dict]:
     """
     从SQLite缓存读取CSV行数据
@@ -181,7 +179,12 @@ def load_csv_rows_cached(path: Path, max_rows: int | None = None) -> list[dict]:
                     INSERT INTO csv_rows_cache (path, mtime_ns, row_index, row_json)
                     VALUES (?, ?, ?, ?)
                     """,
-                    (str(normalized), signature[0], idx, json.dumps(row, ensure_ascii=False)),
+                    (
+                        str(normalized),
+                        signature[0],
+                        idx,
+                        json.dumps(row, ensure_ascii=False),
+                    ),
                 )
             conn.commit()
     except Exception:
@@ -258,7 +261,12 @@ def load_csv_rows_range_cached(path: Path, tail: int = 100) -> list[dict]:
                     INSERT INTO csv_rows_cache (path, mtime_ns, row_index, row_json)
                     VALUES (?, ?, ?, ?)
                     """,
-                    (str(normalized), signature[0], idx, json.dumps(row, ensure_ascii=False)),
+                    (
+                        str(normalized),
+                        signature[0],
+                        idx,
+                        json.dumps(row, ensure_ascii=False),
+                    ),
                 )
             conn.commit()
     except Exception:

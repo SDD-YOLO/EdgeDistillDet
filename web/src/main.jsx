@@ -19,9 +19,9 @@ const queryClient = new QueryClient({
     queries: {
       retry: 2,
       refetchOnWindowFocus: false,
-      staleTime: 10000
-    }
-  }
+      staleTime: 10000,
+    },
+  },
 });
 
 createRoot(document.getElementById("root")).render(
@@ -29,5 +29,5 @@ createRoot(document.getElementById("root")).render(
     <QueryClientProvider client={queryClient}>
       <App />
     </QueryClientProvider>
-  </React.StrictMode>
+  </React.StrictMode>,
 );

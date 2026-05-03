@@ -4,6 +4,7 @@ Use ``from core.logging import get_logger`` and call ``get_logger(__name__)``.
 This module configures a single readable console format for both stdlib logging
 and structlog-based loggers so terminal output stays consistent and detailed.
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,7 +26,10 @@ def _configure_structlog() -> None:
         structlog.processors.format_exc_info,
     ]
     structlog.configure(
-        processors=[*shared_processors, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        processors=[
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
@@ -42,7 +46,10 @@ def _configure_structlog() -> None:
         return f"{ts} [{level}] {logger_name} — {event}"
 
     formatter = structlog.stdlib.ProcessorFormatter(
-        processors=[structlog.stdlib.ProcessorFormatter.remove_processors_meta, _simple_renderer],
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            _simple_renderer,
+        ],
         foreign_pre_chain=shared_processors,
     )
 

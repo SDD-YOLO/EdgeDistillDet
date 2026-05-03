@@ -4,7 +4,7 @@ import {
   fetchDistillConfig,
   fetchRecentConfig,
   pickDialogPath,
-  saveDistillConfig
+  saveDistillConfig,
 } from "../../../api/configApi";
 import {
   fetchResumeCandidates,
@@ -16,7 +16,10 @@ import {
 } from "../../../api/trainApi";
 import { DISTILL_CONFIG_UPDATED_EVENT } from "../../../constants/distillConfigSync";
 import { DEFAULT_FORM } from "../../../constants/trainingDefaults";
-import { buildConfigPayload, mergeDistillConfigIntoForm } from "../utils/configManager";
+import {
+  buildConfigPayload,
+  mergeDistillConfigIntoForm,
+} from "../utils/configManager";
 import { useTrainingData } from "./useTrainingData";
 import { useTrainingState } from "./useTrainingState";
 import { useExportState } from "./useExportState";
@@ -27,16 +30,23 @@ function parseMetricsFromLogLines(lines, setProgress) {
   const last = Array.isArray(lines) ? lines.slice(-20) : [];
   last.forEach((line) => {
     const text = String(line);
-    const ep = text.match(/\[EPOCH_PROGRESS\]\s+epoch=(\d+)\s+total=(\d+)\s+loss=([\d.]+)\s+kd=([\d.]+)\s+alpha=([\d.]+)\s+temp=([\d.]+)/i);
+    const ep = text.match(
+      /\[EPOCH_PROGRESS\]\s+epoch=(\d+)\s+total=(\d+)\s+loss=([\d.]+)\s+kd=([\d.]+)\s+alpha=([\d.]+)\s+temp=([\d.]+)/i,
+    );
     if (ep) {
-      setProgress((prev) => ({ ...prev, current: Number(ep[1]), total: Number(ep[2]) }));
+      setProgress((prev) => ({
+        ...prev,
+        current: Number(ep[1]),
+        total: Number(ep[2]),
+      }));
     }
   });
 }
 
 export function useTrainingPanelController({ toast }) {
   const [form, setForm] = useState(DEFAULT_FORM);
-  const [runHint, setRunHint] = useState("将根据项目目录自动推荐可用运行名称。");
+  const [runHint, setRunHint] =
+    useState("将根据项目目录自动推荐可用运行名称。");
   const distillFileMtimeNsRef = useRef(0);
 
   const trainingState = useTrainingState({ toast });
@@ -45,39 +55,74 @@ export function useTrainingPanelController({ toast }) {
   const resumeState = useResumeState({ toast });
 
   const {
-    running, setRunning, logs, setLogs, progress, setProgress,
-    autoScroll, setAutoScroll, logOffsetRef, startTimestampRef,
-    lastServerRunningRef, logContainerRef, scrollLogsToBottom: trainingScrollToBottom
+    running,
+    setRunning,
+    logs,
+    setLogs,
+    progress,
+    setProgress,
+    autoScroll,
+    setAutoScroll,
+    logOffsetRef,
+    startTimestampRef,
+    lastServerRunningRef,
+    logContainerRef,
+    scrollLogsToBottom: trainingScrollToBottom,
   } = trainingState;
 
   const {
-    exportRunning, setExportRunning, exportAutoScroll, setExportAutoScroll,
-    exportLogs, setExportLogs, exportStatus, setExportStatus,
-    exportLogOffsetRef, exportLogContainerRef, pollExportStatusAndLogs
+    exportRunning,
+    setExportRunning,
+    exportAutoScroll,
+    setExportAutoScroll,
+    exportLogs,
+    setExportLogs,
+    exportStatus,
+    setExportStatus,
+    exportLogOffsetRef,
+    exportLogContainerRef,
+    pollExportStatusAndLogs,
   } = exportState;
 
   const { inferRunning, setInferRunning } = inferenceState;
 
-  const {
-    refreshResumeCandidates, resumeListProjectRef
-  } = resumeState;
+  const { refreshResumeCandidates, resumeListProjectRef } = resumeState;
 
-  const pickLocalPath = useCallback(async ({ kind = "file", title = "选择路径", initialPath = "", filters = [] } = {}) => {
-    const result = await pickDialogPath({
-      kind,
-      title,
-      initial_path: initialPath || "",
-      filters
-    });
-    return String(result?.path || "");
-  }, []);
+  const pickLocalPath = useCallback(
+    async ({
+      kind = "file",
+      title = "选择路径",
+      initialPath = "",
+      filters = [],
+    } = {}) => {
+      const result = await pickDialogPath({
+        kind,
+        title,
+        initial_path: initialPath || "",
+        filters,
+      });
+      return String(result?.path || "");
+    },
+    [],
+  );
 
-  const getValueByPath = useCallback((path) => {
-    if (!path) return "";
-    return String(path)
-      .split(".")
-      .reduce((acc, key) => (acc && Object.prototype.hasOwnProperty.call(acc, key) ? acc[key] : undefined), form) ?? "";
-  }, [form]);
+  const getValueByPath = useCallback(
+    (path) => {
+      if (!path) return "";
+      return (
+        String(path)
+          .split(".")
+          .reduce(
+            (acc, key) =>
+              acc && Object.prototype.hasOwnProperty.call(acc, key)
+                ? acc[key]
+                : undefined,
+            form,
+          ) ?? ""
+      );
+    },
+    [form],
+  );
 
   const setValueByPath = useCallback((path, value) => {
     if (!path) return;
@@ -87,7 +132,11 @@ export function useTrainingPanelController({ toast }) {
       let cursor = next;
       for (let index = 0; index < segments.length - 1; index += 1) {
         const key = segments[index];
-        if (cursor[key] === undefined || cursor[key] === null || typeof cursor[key] !== "object") {
+        if (
+          cursor[key] === undefined ||
+          cursor[key] === null ||
+          typeof cursor[key] !== "object"
+        ) {
           cursor[key] = {};
         }
         cursor = cursor[key];
@@ -114,8 +163,15 @@ export function useTrainingPanelController({ toast }) {
         distillFileMtimeNsRef.current = ev.detail.file_mtime_ns;
       }
     };
-    window.addEventListener(DISTILL_CONFIG_UPDATED_EVENT, onDistillConfigUpdated);
-    return () => window.removeEventListener(DISTILL_CONFIG_UPDATED_EVENT, onDistillConfigUpdated);
+    window.addEventListener(
+      DISTILL_CONFIG_UPDATED_EVENT,
+      onDistillConfigUpdated,
+    );
+    return () =>
+      window.removeEventListener(
+        DISTILL_CONFIG_UPDATED_EVENT,
+        onDistillConfigUpdated,
+      );
   }, []);
 
   const fetchDefaultConfig = useCallback(async () => {
@@ -152,7 +208,7 @@ export function useTrainingPanelController({ toast }) {
     lastServerRunningRef,
     startTimestampRef,
     logOffsetRef,
-    parseMetricsFromLogLines
+    parseMetricsFromLogLines,
   });
 
   useEffect(() => {
@@ -240,16 +296,27 @@ export function useTrainingPanelController({ toast }) {
   }, [inferRunning, setInferRunning, toast]);
 
   const normalizeExportString = useCallback((value, fallback) => {
-    const text = value === undefined || value === null ? String(fallback || "") : String(value);
+    const text =
+      value === undefined || value === null
+        ? String(fallback || "")
+        : String(value);
     const trimmed = text.trim();
     return trimmed === "" ? String(fallback || "").trim() : trimmed;
   }, []);
 
-  const exportPath = normalizeExportString(form.export_model?.export_path, form.advanced?.training?.export_path);
-  const exportFormat = normalizeExportString(form.export_model?.format, form.advanced?.training?.format).toLowerCase();
+  const exportPath = normalizeExportString(
+    form.export_model?.export_path,
+    form.advanced?.training?.export_path,
+  );
+  const exportFormat = normalizeExportString(
+    form.export_model?.format,
+    form.advanced?.training?.format,
+  ).toLowerCase();
   const exportWeight = String(form.distillation?.student_weight || "").trim();
   const supportedExportFormats = new Set(["onnx", "torchscript"]);
-  const isExportReady = Boolean(exportPath && exportWeight) && supportedExportFormats.has(exportFormat);
+  const isExportReady =
+    Boolean(exportPath && exportWeight) &&
+    supportedExportFormats.has(exportFormat);
 
   const startExport = useCallback(async () => {
     if (exportRunning) return;
@@ -271,22 +338,38 @@ export function useTrainingPanelController({ toast }) {
         export_path: exportPath,
         format: exportFormat,
         keras: form.export_model?.keras ?? form.advanced?.training?.keras,
-        optimize: form.export_model?.optimize ?? form.advanced?.training?.optimize,
+        optimize:
+          form.export_model?.optimize ?? form.advanced?.training?.optimize,
         int8: form.export_model?.int8 ?? form.advanced?.training?.int8,
         dynamic: form.export_model?.dynamic ?? form.advanced?.training?.dynamic,
-        simplify: form.export_model?.simplify ?? form.advanced?.training?.simplify,
+        simplify:
+          form.export_model?.simplify ?? form.advanced?.training?.simplify,
         opset: form.export_model?.opset ?? form.advanced?.training?.opset,
-        workspace: form.export_model?.workspace ?? form.advanced?.training?.workspace,
+        workspace:
+          form.export_model?.workspace ?? form.advanced?.training?.workspace,
         nms: form.export_model?.nms ?? form.advanced?.training?.nms,
       });
       setExportRunning(true);
       pollExportStatusAndLogs();
-      setExportLogs((prev) => [...prev, `导出任务已启动，PID=${res.pid || "unknown"}`]);
+      setExportLogs((prev) => [
+        ...prev,
+        `导出任务已启动，PID=${res.pid || "unknown"}`,
+      ]);
       toast("模型导出已开始", "success");
     } catch (error) {
       toast(error?.message || "启动模型导出失败", "error");
     }
-  }, [exportFormat, exportLogOffsetRef, exportPath, exportRunning, form, pollExportStatusAndLogs, setExportLogs, setExportRunning, toast]);
+  }, [
+    exportFormat,
+    exportLogOffsetRef,
+    exportPath,
+    exportRunning,
+    form,
+    pollExportStatusAndLogs,
+    setExportLogs,
+    setExportRunning,
+    toast,
+  ]);
 
   const stopExport = useCallback(async () => {
     if (!exportRunning) return;
@@ -301,7 +384,10 @@ export function useTrainingPanelController({ toast }) {
   }, [exportRunning, setExportLogs, setExportRunning, toast]);
 
   const renderedHint = runHint;
-  const progressPercent = progress.total > 0 ? Math.min(100, (progress.current / progress.total) * 100) : 0;
+  const progressPercent =
+    progress.total > 0
+      ? Math.min(100, (progress.current / progress.total) * 100)
+      : 0;
 
   const saveConfig = useCallback(async () => {
     const res = await saveDistillConfig(previewPayload);

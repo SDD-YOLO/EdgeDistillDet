@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import re
 from pathlib import Path
@@ -9,7 +8,16 @@ from typing import Any
 from web.core.paths import BASE_DIR, CONFIG_DIR
 from web.services.cache.csv_cache import load_csv_rows_range_cached
 
-_TEXT_FILE_PATTERNS = ("*.md", "*.txt", "*.yaml", "*.yml", "*.json", "*.py", "*.jsx", "*.js")
+_TEXT_FILE_PATTERNS = (
+    "*.md",
+    "*.txt",
+    "*.yaml",
+    "*.yml",
+    "*.json",
+    "*.py",
+    "*.jsx",
+    "*.js",
+)
 _MAX_FILES_PER_PATTERN = 20
 _MAX_FILE_CHARS = 6000
 
@@ -55,7 +63,13 @@ def _collect_training_candidates(run_id: str) -> list[dict[str, Any]]:
     if cfg_path.exists():
         text = _read_text_safe(cfg_path)
         if text:
-            candidates.append({"source": "training", "path": "configs/distill_config.yaml", "text": text[:_MAX_FILE_CHARS]})
+            candidates.append(
+                {
+                    "source": "training",
+                    "path": "configs/distill_config.yaml",
+                    "text": text[:_MAX_FILE_CHARS],
+                }
+            )
 
     results_path = BASE_DIR / "runs" / "detect" / "runs" / "distill" / str(run_id or "exp1") / "results.csv"
     if results_path.exists():

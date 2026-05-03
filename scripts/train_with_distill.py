@@ -19,24 +19,31 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 import yaml
 from ultralytics import YOLO
 
-from core.logging import get_logger
-from core.distillation.adaptive_kd_trainer import AdaptiveKDTrainer, _scatter_pr_from_ultralytics_box
+from core.distillation.adaptive_kd_trainer import (
+    AdaptiveKDTrainer,
+    _scatter_pr_from_ultralytics_box,
+)
 from core.distillation.common import w_feat_to_scalar
+from core.logging import get_logger
 from utils import expand_env_vars
-from utils.device_detect import detect_best_device, setup_device_for_trainer
+from utils.device_detect import setup_device_for_trainer
 from utils.gpu_runtime import cleanup_gpu_resources
 
 logger = get_logger(__name__)
 
 # 训练期 DataLoader 始终 0 workers，避免多进程复制数据集与「像两个训练同时跑」的内存形态
 _TRAIN_LOADER_WORKERS = 0
-_TRAINING_STRUCTURAL_KEYS = {"compute_provider", "cloud_api", "dataset_api", "data_yaml"}
+_TRAINING_STRUCTURAL_KEYS = {
+    "compute_provider",
+    "cloud_api",
+    "dataset_api",
+    "data_yaml",
+}
 
 
 def _flush_stdio():
@@ -121,17 +128,17 @@ def _apply_web_friendly_tqdm_output() -> None:
 
 def _print_banner(root: Path) -> None:
     """记录训练入口的简洁启动信息。"""
-    logger.info(f'EdgeDistillDet training started | root={root.resolve()}')
+    logger.info(f"EdgeDistillDet training started | root={root.resolve()}")
 
 
 def _project_root(config_path: Path) -> Path:
     return config_path.resolve().parent.parent
 
 
-def _load_config(config_path: Path) -> Dict[str, Any]:
+def _load_config(config_path: Path) -> dict[str, Any]:
     if not config_path.exists():
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     return expand_env_vars(raw) if isinstance(raw, dict) else {}
 
@@ -152,7 +159,7 @@ def _resolve_under_root(path_str: str, root: Path) -> Path:
     return p
 
 
-def _get_nested(cfg: Dict[str, Any], keys: list[str], default=None):
+def _get_nested(cfg: dict[str, Any], keys: list[str], default=None):
     node = cfg
     for key in keys:
         if not isinstance(node, dict):
@@ -163,7 +170,7 @@ def _get_nested(cfg: Dict[str, Any], keys: list[str], default=None):
     return node
 
 
-def _merge_advanced_training(train_cfg: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_advanced_training(train_cfg: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
     advanced_training = _get_nested(cfg, ["advanced", "training"]) or {}
     merged = dict(train_cfg or {})
     for key, value in advanced_training.items():
@@ -180,13 +187,13 @@ def _run_dir_from_checkpoint(ckpt: Path) -> Path:
     return ckpt.parent
 
 
-def _sync_from_args_yaml(run_dir: Path, train_cfg: Dict[str, Any], output_cfg: Dict[str, Any]) -> None:
+def _sync_from_args_yaml(run_dir: Path, train_cfg: dict[str, Any], output_cfg: dict[str, Any]) -> None:
     """用磁盘上真实 run 的 args.yaml 覆盖表单里可能过期的 output / data。"""
     args_yaml = run_dir / "args.yaml"
     if not args_yaml.is_file():
         return
     try:
-        with open(args_yaml, "r", encoding="utf-8") as f:
+        with open(args_yaml, encoding="utf-8") as f:
             disk = yaml.safe_load(f) or {}
     except Exception:
         return
@@ -200,7 +207,7 @@ def _sync_from_args_yaml(run_dir: Path, train_cfg: Dict[str, Any], output_cfg: D
         train_cfg["data_yaml"] = str(disk["data"])
 
 
-def _find_auto_resume(project: str, name: str, root: Path) -> Optional[Path]:
+def _find_auto_resume(project: str, name: str, root: Path) -> Path | None:
     run_dir = (root / project / name).resolve()
     for rel in ("weights/last.pt", "last.pt", "weights/best.pt", "best.pt"):
         p = run_dir / rel
@@ -212,29 +219,38 @@ def _find_auto_resume(project: str, name: str, root: Path) -> Optional[Path]:
 def _pre_cuda_gc():
     cleanup_gpu_resources()
 
+
 def _build_train_args(
-    train_cfg: Dict[str, Any],
-    output_cfg: Dict[str, Any],
-    resume_path: Optional[Path],
+    train_cfg: dict[str, Any],
+    output_cfg: dict[str, Any],
+    resume_path: Path | None,
     root: Path,
     allow_overwrite: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     data_yaml = str(_resolve_under_root(train_cfg.get("data_yaml", "coco128.yaml"), root))
 
     # 有害参数：这些会干扰 ultralytics
     harmful_args = {
-        "cls_pw", "export_path", "format", "source", "output_dir", "save_dir",
-        "mode", "task", "time",
-        "compute_provider", "cloud_api", "dataset_api", "data_yaml",
+        "cls_pw",
+        "export_path",
+        "format",
+        "source",
+        "output_dir",
+        "save_dir",
+        "mode",
+        "task",
+        "time",
+        "compute_provider",
+        "cloud_api",
+        "dataset_api",
+        "data_yaml",
     }
 
     ignored_harmful = sorted([key for key in (train_cfg or {}).keys() if key in harmful_args])
     if ignored_harmful:
-        logger.warning(
-            "training 中以下配置项在 train 阶段会被忽略: " + ", ".join(ignored_harmful)
-        )
+        logger.warning("training 中以下配置项在 train 阶段会被忽略: " + ", ".join(ignored_harmful))
 
-    train_args: Dict[str, Any] = {
+    train_args: dict[str, Any] = {
         "data": data_yaml,
         "epochs": int(train_cfg.get("epochs", 10)),
         "imgsz": int(train_cfg.get("imgsz", 640)),
@@ -247,8 +263,8 @@ def _build_train_args(
         "val": True,
         "plots": True,
         "save": True,
-        "conf": None,    # ← 新增：防止被覆盖为 0
-        "iou": 0.7,      # ← 新增：防止被覆盖为 0
+        "conf": None,  # ← 新增：防止被覆盖为 0
+        "iou": 0.7,  # ← 新增：防止被覆盖为 0
     }
 
     # 透传所有训练参数（只过滤有害参数）
@@ -275,12 +291,13 @@ def _build_train_args(
 
     return train_args
 
+
 def _to_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return bool(value)
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
@@ -288,9 +305,9 @@ def _to_bool(value: Any, default: bool = False) -> bool:
 
 
 def _setup_wandb_env(
-    wandb_cfg: Dict[str, Any],
-    output_cfg: Dict[str, Any],
-    resume_path: Optional[Path],
+    wandb_cfg: dict[str, Any],
+    output_cfg: dict[str, Any],
+    resume_path: Path | None,
 ) -> None:
     """
     配置 W&B 环境变量。
@@ -335,7 +352,7 @@ def _setup_wandb_env(
         os.environ["WANDB_NOTES"] = notes
 
     tags = wandb_cfg.get("tags")
-    if isinstance(tags, (list, tuple)):
+    if isinstance(tags, list | tuple):
         clean_tags = [str(t).strip() for t in tags if str(t).strip()]
         if clean_tags:
             os.environ["WANDB_TAGS"] = ",".join(clean_tags)
@@ -372,7 +389,7 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     if not Path(student_weight).exists():
         raise FileNotFoundError(f"学生权重不存在: {student_weight}")
 
-    resume_path: Optional[Path] = None
+    resume_path: Path | None = None
     resume_flag = (resume or "").strip()
 
     if resume_flag:
@@ -400,7 +417,18 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     if teacher_weight and not Path(teacher_weight).exists():
         raise FileNotFoundError(f"教师权重不存在: {teacher_weight}")
 
-    known_kd_keys = {"teacher_weight", "alpha_init", "T_max", "T_min", "warm_epochs", "w_kd", "w_focal", "w_feat", "scale_boost", "focal_gamma"}
+    known_kd_keys = {
+        "teacher_weight",
+        "alpha_init",
+        "T_max",
+        "T_min",
+        "warm_epochs",
+        "w_kd",
+        "w_focal",
+        "w_feat",
+        "scale_boost",
+        "focal_gamma",
+    }
     extra_kd_params = {k: v for k, v in distill_cfg.items() if k not in known_kd_keys and v is not None}
     AdaptiveKDTrainer.set_kd_params(
         teacher_path=teacher_weight,
@@ -427,7 +455,13 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
     project_raw = output_cfg.get("project", "runs")
     project_abs = str((root / project_raw).resolve())
     output_cfg_resolved = {**output_cfg, "project": project_abs}
-    train_args = _build_train_args(train_cfg, output_cfg_resolved, resume_path, root, allow_overwrite=allow_overwrite)
+    train_args = _build_train_args(
+        train_cfg,
+        output_cfg_resolved,
+        resume_path,
+        root,
+        allow_overwrite=allow_overwrite,
+    )
     os.environ.setdefault("ULTRALYTICS_VERBOSE", "True")
     os.environ.setdefault("DATAMODULE_WORKERS", "0")
     os.environ.setdefault("NUM_WORKERS", "0")
@@ -435,21 +469,15 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
 
     try:
         # 通过 model.train() 传入 trainer，确保 ultralytics 回调完整注册
-        results = student_model.train(
-            trainer=AdaptiveKDTrainer,
-            **train_args
-        )
- 
+        results = student_model.train(trainer=AdaptiveKDTrainer, **train_args)
+
     except Exception as e:
         msg = str(e).lower()
         if resume_path and ("nothing to resume" in msg or "finished, nothing to resume" in msg):
-            logger.warning('检测到 checkpoint 已训练完成，自动切换为新训练模式并重建学生模型')
+            logger.warning("检测到 checkpoint 已训练完成，自动切换为新训练模式并重建学生模型")
             train_args.pop("resume", None)
             student_model = YOLO(student_weight)
-            results = student_model.train(
-                trainer=AdaptiveKDTrainer,
-                **train_args
-            )
+            results = student_model.train(trainer=AdaptiveKDTrainer, **train_args)
         else:
             raise
 
@@ -472,13 +500,13 @@ def run_distill_training(config_path: str | Path, resume: str = "", allow_overwr
 
 def _maybe_auto_eval(
     root: Path,
-    train_cfg: Dict[str, Any],
-    output_cfg: Dict[str, Any],
-    train_args: Dict[str, Any],
+    train_cfg: dict[str, Any],
+    output_cfg: dict[str, Any],
+    train_args: dict[str, Any],
 ) -> None:
     if not output_cfg.get("auto_eval", True):
         return
-    run_dir = (Path(train_args["project"]) / train_args["name"]).resolve()    
+    run_dir = (Path(train_args["project"]) / train_args["name"]).resolve()
     best_pt = run_dir / "weights" / "best.pt"
     last_pt = run_dir / "weights" / "last.pt"
     model_to_eval = best_pt if best_pt.exists() else (last_pt if last_pt.exists() else None)
@@ -497,8 +525,8 @@ def _maybe_auto_eval(
                 imgsz=int(train_cfg.get("imgsz", 640)),
                 batch=int(train_cfg.get("batch", 16)),
                 verbose=False,
-                project=str(run_dir),   # ← 指向 runs/distill/exp1/
-                name="val",             # ← 子目录名
+                project=str(run_dir),  # ← 指向 runs/distill/exp1/
+                name="val",  # ← 子目录名
                 exist_ok=True,
             )
         if hasattr(eval_results, "box") and eval_results.box is not None:
@@ -527,14 +555,8 @@ def _maybe_auto_eval(
                 }
             eval_data = {
                 "model": str(model_to_eval),
-                "map50": float(getattr(eval_results.box, "map50", 0) or 0)
-                if hasattr(eval_results, "box")
-                and eval_results.box is not None
-                else None,
-                "map50_95": float(getattr(eval_results.box, "map", 0) or 0)
-                if hasattr(eval_results, "box")
-                and eval_results.box is not None
-                else None,
+                "map50": float(getattr(eval_results.box, "map50", 0) or 0) if hasattr(eval_results, "box") and eval_results.box is not None else None,
+                "map50_95": float(getattr(eval_results.box, "map", 0) or 0) if hasattr(eval_results, "box") and eval_results.box is not None else None,
             }
             if per_class_data:
                 eval_data["per_class"] = per_class_data
@@ -556,7 +578,7 @@ def _maybe_auto_eval(
         pass
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description="EdgeDistillDet 蒸馏训练（唯一推荐入口）")
     parser.add_argument("--config", type=str, required=True, help="YAML 配置路径")
     parser.add_argument(

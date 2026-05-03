@@ -11,13 +11,13 @@ export function fetchAgentPrompts() {
 export function executeAgentTool({ tool, args = {} }) {
   return apiRequest("/api/agent/tools/execute", {
     method: "POST",
-    body: JSON.stringify({ tool, args })
+    body: JSON.stringify({ tool, args }),
   });
 }
 
 export function previewAgentPatch(body) {
   return apiRequest("/api/agent/patch/preview", {
     method: "POST",
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 }

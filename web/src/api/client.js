@@ -21,7 +21,10 @@ function createAbortController(signal, timeoutMs) {
   }
 
   if (timeoutMs > 0) {
-    const timeoutId = window.setTimeout(() => controller.abort(new DOMException("请求超时", "AbortError")), timeoutMs);
+    const timeoutId = window.setTimeout(
+      () => controller.abort(new DOMException("请求超时", "AbortError")),
+      timeoutMs,
+    );
     cleanups.push(() => window.clearTimeout(timeoutId));
   }
 
@@ -29,12 +32,17 @@ function createAbortController(signal, timeoutMs) {
     controller,
     cleanup() {
       cleanups.forEach((fn) => fn());
-    }
+    },
   };
 }
 
 function isRetryableStatus(status) {
-  return status === 408 || status === 425 || status === 429 || (status >= 500 && status < 600);
+  return (
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    (status >= 500 && status < 600)
+  );
 }
 
 export function addApiRequestInterceptor(interceptor) {
@@ -61,25 +69,38 @@ export async function apiRequest(url, options = {}) {
     retryDelayMs = 250,
     ...fetchOptions
   } = options;
-  const requestState = { url, options: { ...fetchOptions, headers: { "Content-Type": "application/json", ...headers }, signal } };
+  const requestState = {
+    url,
+    options: {
+      ...fetchOptions,
+      headers: { "Content-Type": "application/json", ...headers },
+      signal,
+    },
+  };
 
   for (const interceptor of requestInterceptors) {
     // Interceptors can mutate or replace the request descriptor.
     const nextRequest = await interceptor(requestState);
     if (nextRequest && typeof nextRequest === "object") {
       requestState.url = nextRequest.url || requestState.url;
-      requestState.options = { ...requestState.options, ...nextRequest.options };
+      requestState.options = {
+        ...requestState.options,
+        ...nextRequest.options,
+      };
     }
   }
 
   let lastError = null;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const { controller, cleanup } = createAbortController(requestState.options.signal, timeoutMs);
+    const { controller, cleanup } = createAbortController(
+      requestState.options.signal,
+      timeoutMs,
+    );
     try {
       const response = await fetch(requestState.url, {
         ...requestState.options,
-        signal: controller.signal
+        signal: controller.signal,
       });
 
       const data = await response.json();
@@ -92,18 +113,29 @@ export async function apiRequest(url, options = {}) {
 
       let nextData = data;
       for (const interceptor of responseInterceptors) {
-        const intercepted = await interceptor(nextData, { url: requestState.url, options: requestState.options, response });
+        const intercepted = await interceptor(nextData, {
+          url: requestState.url,
+          options: requestState.options,
+          response,
+        });
         if (intercepted !== undefined) nextData = intercepted;
       }
       return nextData;
     } catch (error) {
       lastError = error;
       for (const interceptor of errorInterceptors) {
-        const intercepted = await interceptor(error, { url: requestState.url, options: requestState.options, attempt });
+        const intercepted = await interceptor(error, {
+          url: requestState.url,
+          options: requestState.options,
+          attempt,
+        });
         if (intercepted !== undefined) lastError = intercepted;
       }
 
-      const canRetry = attempt < retries && error?.name !== "AbortError" && (error?.status == null || isRetryableStatus(error.status));
+      const canRetry =
+        attempt < retries &&
+        error?.name !== "AbortError" &&
+        (error?.status == null || isRetryableStatus(error.status));
       if (!canRetry) {
         throw lastError;
       }

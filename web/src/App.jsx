@@ -11,14 +11,32 @@ const AgentPanel = lazy(() => import("./features/agent/AgentPanel"));
 
 function App() {
   const [activeTab, setActiveTab] = useState("config-center");
-  const [theme, setTheme] = useState(() => window.localStorage.getItem("edgedistilldet-theme") || "light");
+  const [theme, setTheme] = useState(
+    () => window.localStorage.getItem("edgedistilldet-theme") || "light",
+  );
   const { toasts, push } = useToast();
   const navItems = [
-    { key: "config-center", icon: Settings2, label: "配置中心", desc: "统一管理训练、蒸馏、导出与推理参数" },
-    { key: "metrics", icon: Activity, label: "指标监控", desc: "查看训练曲线与关键性能指标" },
-    { key: "agent", icon: Bot, label: "Agent", desc: "通过智能助手分析与辅助调参" }
+    {
+      key: "config-center",
+      icon: Settings2,
+      label: "配置中心",
+      desc: "统一管理训练、蒸馏、导出与推理参数",
+    },
+    {
+      key: "metrics",
+      icon: Activity,
+      label: "指标监控",
+      desc: "查看训练曲线与关键性能指标",
+    },
+    {
+      key: "agent",
+      icon: Bot,
+      label: "Agent",
+      desc: "通过智能助手分析与辅助调参",
+    },
   ];
-  const activeNav = navItems.find((item) => item.key === activeTab) || navItems[0];
+  const activeNav =
+    navItems.find((item) => item.key === activeTab) || navItems[0];
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -52,7 +70,9 @@ function App() {
             {navItems.map((item) => (
               <Button
                 key={item.key}
-                className={`sidebar-nav-btn ${activeTab === item.key ? "active" : ""}`}
+                className={`sidebar-nav-btn ${
+                  activeTab === item.key ? "active" : ""
+                }`}
                 onClick={() => setActiveTab(item.key)}
                 variant="ghost"
                 legacy={false}
@@ -69,10 +89,18 @@ function App() {
               size="sm"
               className="theme-toggle"
               title="切换明暗主题"
-              onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
+              onClick={() =>
+                setTheme((prev) => (prev === "light" ? "dark" : "light"))
+              }
             >
-              {theme === "light" ? <Sun size={14} className="icon-sun" /> : <Moon size={14} className="icon-moon" />}
-              <span className="theme-toggle-label">{theme === "light" ? "浅色模式" : "深色模式"}</span>
+              {theme === "light" ? (
+                <Sun size={14} className="icon-sun" />
+              ) : (
+                <Moon size={14} className="icon-moon" />
+              )}
+              <span className="theme-toggle-label">
+                {theme === "light" ? "浅色模式" : "深色模式"}
+              </span>
             </Button>
           </div>
         </aside>
@@ -88,9 +116,19 @@ function App() {
             </div>
           </header>
 
-          <Suspense fallback={<div className="tab-panels console-panels"><div className="panel-loading">正在加载面板...</div></div>}>
+          <Suspense
+            fallback={
+              <div className="tab-panels console-panels">
+                <div className="panel-loading">正在加载面板...</div>
+              </div>
+            }
+          >
             <div className="tab-panels console-panels">
-              <TrainingPanel toast={push} active={activeTab === "config-center"} view={activeTab} />
+              <TrainingPanel
+                toast={push}
+                active={activeTab === "config-center"}
+                view={activeTab}
+              />
               <MetricsPanel toast={push} active={activeTab === "metrics"} />
               <AgentPanel toast={push} active={activeTab === "agent"} />
             </div>
@@ -101,7 +139,13 @@ function App() {
       <div id="toast-container" className="toast-container">
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast ${toast.type}`}>
-            {toast.type === "success" ? <Activity size={16} /> : toast.type === "error" ? <Bot size={16} /> : <Settings2 size={16} />}
+            {toast.type === "success" ? (
+              <Activity size={16} />
+            ) : toast.type === "error" ? (
+              <Bot size={16} />
+            ) : (
+              <Settings2 size={16} />
+            )}
             <span>{toast.message}</span>
           </div>
         ))}

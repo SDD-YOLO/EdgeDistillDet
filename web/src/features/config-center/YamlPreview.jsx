@@ -6,18 +6,29 @@ function toYaml(value, indent = 0) {
   if (Array.isArray(value)) {
     if (value.length === 0) return "[]";
     return value
-      .map((item) => `${spaces}- ${typeof item === "object" ? `\n${toYaml(item, indent + 1)}` : String(item)}`)
+      .map(
+        (item) =>
+          `${spaces}- ${
+            typeof item === "object"
+              ? `\n${toYaml(item, indent + 1)}`
+              : String(item)
+          }`,
+      )
       .join("\n");
   }
   if (typeof value !== "object") {
     return String(value);
   }
   return Object.entries(value)
-    .filter(([, nested]) => nested !== null && nested !== undefined && nested !== "")
+    .filter(
+      ([, nested]) => nested !== null && nested !== undefined && nested !== "",
+    )
     .map(([key, nested]) => {
       if (typeof nested === "object" && !Array.isArray(nested)) {
         const nestedYaml = toYaml(nested, indent + 1);
-        return `${spaces}${key}:\n${nestedYaml ? `${nestedYaml}\n` : ""}`.trimEnd();
+        return `${spaces}${key}:\n${
+          nestedYaml ? `${nestedYaml}\n` : ""
+        }`.trimEnd();
       }
       if (Array.isArray(nested)) {
         const nestedYaml = toYaml(nested, indent + 1);

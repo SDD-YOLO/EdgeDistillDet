@@ -3,34 +3,34 @@
 /* Auto-split from styles.css: components/dialog.css */
 
 .md3-dialog-headline {
-    font-size: 22px;
-    line-height: 28px;
-    font-weight: 400;
-    letter-spacing: 0;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 400;
+  letter-spacing: 0;
 }
 
 .md3-dialog-supporting {
-    font-size: 14px;
-    line-height: 20px;
-    letter-spacing: 0.25px;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: 0.25px;
 }
 
 .md-dialog-support {
-    margin: 0 0 12px;
-    font-size: 13px;
-    color: var(--md-on-surface-variant);
-    line-height: 1.45;
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+  line-height: 1.45;
 }
 
 .md-dialog-pre {
-    margin: 0 0 16px;
-    padding: 12px;
-    max-height: 42vh;
-    overflow: auto;
-    font-size: 11px;
-    line-height: 1.4;
-    background: var(--md-surface-variant);
-    color: var(--md-on-surface);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--md-outline-variant);
+  margin: 0 0 16px;
+  padding: 12px;
+  max-height: 42vh;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--md-surface-variant);
+  color: var(--md-on-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--md-outline-variant);
 }

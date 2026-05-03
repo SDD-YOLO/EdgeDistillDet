@@ -16,14 +16,23 @@
 // 只含这些字段的 JSON 不应触发 distill_config 审批
 // ─────────────────────────────────────────────
 const AGENT_CONNECTION_KEYS = new Set([
-  "api_url", "apiUrl",
-  "base_url", "baseUrl",
+  "api_url",
+  "apiUrl",
+  "base_url",
+  "baseUrl",
   "agent_api_url",
-  "endpoint", "endpoint_id", "endpointId",
-  "model", "api_model", "apiModel",
-  "api_key", "apiKey",
-  "token", "authorization",
-  "provider", "region",
+  "endpoint",
+  "endpoint_id",
+  "endpointId",
+  "model",
+  "api_model",
+  "apiModel",
+  "api_key",
+  "apiKey",
+  "token",
+  "authorization",
+  "provider",
+  "region",
 ]);
 
 // distill_config 的顶层 section 键名
@@ -41,7 +50,8 @@ const DISTILL_SECTION_KEYS = ["distillation", "training", "output", "wandb"];
  * @returns {boolean}
  */
 function isAgentConnectionPayload(parsed) {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return false;
   const keys = Object.keys(parsed);
   if (keys.length === 0) return false;
 
@@ -51,8 +61,9 @@ function isAgentConnectionPayload(parsed) {
       (k) =>
         typeof parsed[k] === "object" &&
         parsed[k] !== null &&
-        !Array.isArray(parsed[k])
-    ) || (typeof parsed.patch === "object" && parsed.patch !== null);
+        !Array.isArray(parsed[k]),
+    ) ||
+    (typeof parsed.patch === "object" && parsed.patch !== null);
 
   if (hasDistillSection) return false;
 
@@ -67,7 +78,8 @@ function isAgentConnectionPayload(parsed) {
  * @returns {object | null}
  */
 function distillPatchFromObject(parsed) {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return null;
   if (isAgentConnectionPayload(parsed)) return null;
 
   // 明确包含 patch 字段
@@ -155,7 +167,9 @@ export function extractPatchFromResult(result, text) {
     return distillPatchFromObject(result.patch) ? result.patch : null;
   }
   if (result?.suggested_patch && typeof result.suggested_patch === "object") {
-    return distillPatchFromObject(result.suggested_patch) ? result.suggested_patch : null;
+    return distillPatchFromObject(result.suggested_patch)
+      ? result.suggested_patch
+      : null;
   }
 
   const raw = typeof text === "string" ? text.trim() : "";
@@ -217,8 +231,8 @@ export function formatChangeSummaryForChat(summary) {
 
   const lines = paths.map(({ path, kind, before, after }) => {
     const b = before === undefined ? "（缺失）" : JSON.stringify(before);
-    const a = after  === undefined ? "（缺失）" : JSON.stringify(after);
-    if (kind === "added")   return `- ${path}: （新增）→ ${a}`;
+    const a = after === undefined ? "（缺失）" : JSON.stringify(after);
+    if (kind === "added") return `- ${path}: （新增）→ ${a}`;
     if (kind === "removed") return `- ${path}: ${b} → （删除）`;
     return `- ${path}: ${b} → ${a}`;
   });
@@ -254,7 +268,11 @@ export function summarizeToolResultForTrace(toolName, execResult) {
   const name = toolName || execResult.tool;
 
   if (name === "agent.preview_patch" && execResult.change_summary?.stats) {
-    return { status, tool: name, change_items: execResult.change_summary.stats.changed };
+    return {
+      status,
+      tool: name,
+      change_items: execResult.change_summary.stats.changed,
+    };
   }
 
   if (name === "agent.apply_patch_with_approval" && execResult.config) {
@@ -262,12 +280,21 @@ export function summarizeToolResultForTrace(toolName, execResult) {
   }
 
   if (name === "agent.rollback_run_config") {
-    return { status, tool: name, rolled_back_to_version: execResult.rolled_back_to_version };
+    return {
+      status,
+      tool: name,
+      rolled_back_to_version: execResult.rolled_back_to_version,
+    };
   }
 
   // 通用截断
   const MAX_CHARS = 1200;
   const raw = JSON.stringify(execResult);
-  if (raw.length <= MAX_CHARS) return { status, tool: name ?? "?", body: execResult };
-  return { status, tool: name ?? "?", truncated: `${raw.slice(0, MAX_CHARS)}…` };
+  if (raw.length <= MAX_CHARS)
+    return { status, tool: name ?? "?", body: execResult };
+  return {
+    status,
+    tool: name ?? "?",
+    truncated: `${raw.slice(0, MAX_CHARS)}…`,
+  };
 }

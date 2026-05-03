@@ -17,9 +17,7 @@ def _yaml_module():
     try:
         import yaml  # type: ignore
     except ModuleNotFoundError as error:
-        raise ModuleNotFoundError(
-            "PyYAML is required for config file load/save operations"
-        ) from error
+        raise ModuleNotFoundError("PyYAML is required for config file load/save operations") from error
     return yaml
 
 
@@ -28,9 +26,9 @@ def _w_feat_to_scalar(value) -> float:
         return 0.0
     if isinstance(value, bool):
         return 1.0 if value else 0.0
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         if not value:
             return 0.0
         return float(sum(float(item) for item in value) / len(value))
@@ -61,7 +59,7 @@ def load_config(config_path: Path) -> dict | None:
     if not config_path.exists():
         return None
     yaml = _yaml_module()
-    with open(config_path, "r", encoding="utf-8") as file_obj:
+    with open(config_path, encoding="utf-8") as file_obj:
         data = yaml.safe_load(file_obj) or {}
     data = expand_env_vars(data)
     if isinstance(data, dict):
@@ -89,7 +87,10 @@ def save_config(config_dir: Path, name: str, config: dict) -> tuple[str, int]:
 
 def get_recent_or_default(config_dir: Path, default_name: str = "distill_config.yaml") -> dict:
     if _last_saved_config is not None:
-        return {"name": _last_saved_config["name"], "config": _last_saved_config["config"]}
+        return {
+            "name": _last_saved_config["name"],
+            "config": _last_saved_config["config"],
+        }
     default_path = config_dir / default_name
     return {"name": default_name, "config": load_config(default_path) or {}}
 

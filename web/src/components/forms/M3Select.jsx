@@ -1,14 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 
-export function M3Select({ value, onChange, options, disabled, className = "", ariaLabel = "选择项" }) {
+export function M3Select({
+  value,
+  onChange,
+  options,
+  disabled,
+  className = "",
+  ariaLabel = "选择项",
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const normalizedValue = value == null ? "" : String(value);
-  const normalizedOptions = Array.isArray(options) ? options.map((opt) => ({ ...opt, value: String(opt.value) })) : [];
+  const normalizedOptions = Array.isArray(options)
+    ? options.map((opt) => ({ ...opt, value: String(opt.value) }))
+    : [];
   const selected =
     normalizedValue === ""
       ? undefined
-      : normalizedOptions.find((opt) => opt.value === normalizedValue) || normalizedOptions[0];
+      : normalizedOptions.find((opt) => opt.value === normalizedValue) ||
+        normalizedOptions[0];
 
   useEffect(() => {
     if (!open) return undefined;
@@ -30,7 +40,12 @@ export function M3Select({ value, onChange, options, disabled, className = "", a
   }, [open]);
 
   return (
-    <div ref={rootRef} className={`m3-select ${open ? "open" : ""} ${disabled ? "disabled" : ""} ${className}`.trim()}>
+    <div
+      ref={rootRef}
+      className={`m3-select ${open ? "open" : ""} ${
+        disabled ? "disabled" : ""
+      } ${className}`.trim()}
+    >
       <button
         type="button"
         className="m3-select-trigger md-input"
@@ -54,14 +69,18 @@ export function M3Select({ value, onChange, options, disabled, className = "", a
               type="button"
               role="option"
               aria-selected={opt.value === normalizedValue}
-              className={`m3-select-option ${opt.value === normalizedValue ? "selected" : ""}`}
+              className={`m3-select-option ${
+                opt.value === normalizedValue ? "selected" : ""
+              }`}
               onClick={() => {
                 onChange(opt.value);
                 setOpen(false);
               }}
             >
               <span>{opt.label}</span>
-              {opt.value === normalizedValue ? <span className="material-icons">check</span> : null}
+              {opt.value === normalizedValue ? (
+                <span className="material-icons">check</span>
+              ) : null}
             </button>
           ))}
         </div>

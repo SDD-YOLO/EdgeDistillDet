@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchMetricsBySource, fetchMetricsList } from "../../../api/metricsApi";
+import {
+  fetchMetricsBySource,
+  fetchMetricsList,
+} from "../../../api/metricsApi";
 
 export function useMetricsData({ toast, autoRefresh = false }) {
   const [sources, setSources] = useState([]);
@@ -18,7 +21,7 @@ export function useMetricsData({ toast, autoRefresh = false }) {
     queryFn: fetchMetricsList,
     staleTime: 30000,
     refetchOnWindowFocus: false,
-    retry: 2
+    retry: 2,
   });
 
   useEffect(() => {
@@ -32,7 +35,9 @@ export function useMetricsData({ toast, autoRefresh = false }) {
       return;
     }
 
-    const nextSource = available.some((it) => it.path === source) ? source : (available[0]?.path || "");
+    const nextSource = available.some((it) => it.path === source)
+      ? source
+      : available[0]?.path || "";
     if (nextSource !== source) {
       setSource(nextSource);
     }
@@ -47,7 +52,7 @@ export function useMetricsData({ toast, autoRefresh = false }) {
     refetchInterval: autoRefresh ? 30000 : false,
     refetchIntervalInBackground: false,
     retry: 2,
-    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000)
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
   });
 
   useEffect(() => {
@@ -75,39 +80,49 @@ export function useMetricsData({ toast, autoRefresh = false }) {
     toast(metricsQuery.error?.message || "请求失败", "error");
   }, [metricsQuery.error, metricsQuery.isError, toast]);
 
-  const loadMetricsData = useCallback(async (sourcePath, silent = false) => {
-    if (!sourcePath) return;
-    if (sourcePath !== source) {
-      setSource(sourcePath);
-    }
-    setRefreshToken((prev) => prev + 1);
-    if (!silent) {
-      await Promise.resolve();
-    }
-  }, [source]);
-
-  const refreshSources = useCallback(async (showToast = false) => {
-    try {
-      const { data } = await sourcesQuery.refetch();
-      const available = Array.isArray(data?.csv_metrics) ? data.csv_metrics.filter((x) => x.has_results) : [];
-      setSources(available);
-      if (!available.length) {
-        setHasData(false);
-        setChartSeriesState(null);
-        if (showToast) toast("暂无训练结果可展示", "info");
-        return;
-      }
-
-      const nextSource = available.some((it) => it.path === source) ? source : (available[0]?.path || "");
-      if (nextSource && nextSource !== source) {
-        setSource(nextSource);
+  const loadMetricsData = useCallback(
+    async (sourcePath, silent = false) => {
+      if (!sourcePath) return;
+      if (sourcePath !== source) {
+        setSource(sourcePath);
       }
       setRefreshToken((prev) => prev + 1);
-      if (showToast) toast("指标来源已刷新", "success");
-    } catch (error) {
-      toast(error.message, "error");
-    }
-  }, [source, sourcesQuery, toast]);
+      if (!silent) {
+        await Promise.resolve();
+      }
+    },
+    [source],
+  );
+
+  const refreshSources = useCallback(
+    async (showToast = false) => {
+      try {
+        const { data } = await sourcesQuery.refetch();
+        const available = Array.isArray(data?.csv_metrics)
+          ? data.csv_metrics.filter((x) => x.has_results)
+          : [];
+        setSources(available);
+        if (!available.length) {
+          setHasData(false);
+          setChartSeriesState(null);
+          if (showToast) toast("暂无训练结果可展示", "info");
+          return;
+        }
+
+        const nextSource = available.some((it) => it.path === source)
+          ? source
+          : available[0]?.path || "";
+        if (nextSource && nextSource !== source) {
+          setSource(nextSource);
+        }
+        setRefreshToken((prev) => prev + 1);
+        if (showToast) toast("指标来源已刷新", "success");
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    },
+    [source, sourcesQuery, toast],
+  );
 
   return {
     sources,
@@ -119,6 +134,6 @@ export function useMetricsData({ toast, autoRefresh = false }) {
     chartSeriesState,
     rawSeriesRef,
     refreshSources,
-    loadMetricsData
+    loadMetricsData,
   };
 }

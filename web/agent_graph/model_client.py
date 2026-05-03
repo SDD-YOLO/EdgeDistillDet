@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 
 import requests
 
@@ -106,7 +107,12 @@ def invoke_chat_completion(
     except json.JSONDecodeError:
         payload = {"reply": raw}
     reply, reasoning = _extract_text_and_reasoning(payload)
-    return {"status": "ok", "reply": reply, "reasoning": reasoning or None, "raw": payload}
+    return {
+        "status": "ok",
+        "reply": reply,
+        "reasoning": reasoning or None,
+        "raw": payload,
+    }
 
 
 def stream_chat_completion(
@@ -158,7 +164,7 @@ def stream_chat_completion(
             if resp.status_code >= 400:
                 raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
             for raw_line in resp.iter_lines(decode_unicode=False):
-                if isinstance(raw_line, (bytes, bytearray)):
+                if isinstance(raw_line, bytes | bytearray):
                     try:
                         line = raw_line.decode("utf-8").strip()
                     except UnicodeDecodeError:

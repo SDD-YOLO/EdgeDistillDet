@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from web.services.cache import csv_cache, result_manifest_cache
 from web.services.cache.csv_cache import load_csv_summary_cached
-from web.services.cache.result_manifest_cache import load_cached_metrics_index, store_metrics_index
+from web.services.cache.result_manifest_cache import (
+    load_cached_metrics_index,
+    store_metrics_index,
+)
 
 
 def test_csv_summary_cache_refreshes_when_file_changes(tmp_path, monkeypatch):

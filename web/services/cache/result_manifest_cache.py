@@ -8,7 +8,6 @@ from threading import RLock
 
 from web.core.paths import BASE_DIR
 
-
 DB_PATH = BASE_DIR / "data" / "metrics_cache.sqlite3"
 _SCHEMA_LOCK = RLock()
 _SCHEMA_READY = False
@@ -102,9 +101,7 @@ def load_cached_metrics_index(max_age_seconds: int = 30) -> list[dict] | None:
     try:
         _ensure_schema()
         with _connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM result_manifest_cache ORDER BY updated_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM result_manifest_cache ORDER BY updated_at DESC").fetchall()
     except Exception:
         return None
 
@@ -134,7 +131,10 @@ def load_cached_metrics_index(max_age_seconds: int = 30) -> list[dict] | None:
                 return None
             result_stat = result_path.stat()
             run_stat = run_dir.stat()
-            if _entry_signature(entry) != (int(result_stat.st_mtime_ns), int(run_stat.st_mtime_ns)):
+            if _entry_signature(entry) != (
+                int(result_stat.st_mtime_ns),
+                int(run_stat.st_mtime_ns),
+            ):
                 return None
         except Exception:
             return None

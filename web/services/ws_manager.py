@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-from typing import Set, List
 
 from fastapi import WebSocket
 
@@ -17,8 +16,8 @@ class AsyncConnectionManager:
     """
 
     def __init__(self):
-        self.active_connections: Set[WebSocket] = set()
-        self.message_cache: List[dict] = []
+        self.active_connections: set[WebSocket] = set()
+        self.message_cache: list[dict] = []
         self.cache_max_size = 200
         self.queue: asyncio.Queue = asyncio.Queue()
         self._task: asyncio.Task | None = None
@@ -65,7 +64,11 @@ class AsyncConnectionManager:
         await websocket.accept()
         self.active_connections.add(websocket)
         logger.info("WS client connected (%d)", len(self.active_connections))
-        welcome = {"type": "welcome", "timestamp": time.time(), "data": {"cached_messages": len(self.message_cache)}}
+        welcome = {
+            "type": "welcome",
+            "timestamp": time.time(),
+            "data": {"cached_messages": len(self.message_cache)},
+        }
         await websocket.send_json(welcome)
         # replay recent
         for msg in self.message_cache[-20:]:
@@ -91,7 +94,7 @@ class AsyncConnectionManager:
     def _cache_message(self, message: dict):
         self.message_cache.append({**message, "_ts": time.time()})
         if len(self.message_cache) > self.cache_max_size:
-            self.message_cache = self.message_cache[-(self.cache_max_size // 2):]
+            self.message_cache = self.message_cache[-(self.cache_max_size // 2) :]
 
 
 # Singleton manager used by routes and training callbacks

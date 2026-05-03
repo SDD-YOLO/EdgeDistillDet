@@ -4,7 +4,7 @@ import { useResumeState } from "./useResumeState";
 import { fetchResumeCandidates } from "../../../api/trainApi";
 
 vi.mock("../../../api/trainApi", () => ({
-  fetchResumeCandidates: vi.fn()
+  fetchResumeCandidates: vi.fn(),
 }));
 
 describe("useResumeState", () => {
@@ -15,8 +15,13 @@ describe("useResumeState", () => {
   it("loads resume candidates and updates the selected candidate", async () => {
     fetchResumeCandidates.mockResolvedValueOnce({
       candidates: [
-        { display_name: "exp1", project: "runs", name: "exp1", checkpoint: "runs/exp1/weights/best.pt" }
-      ]
+        {
+          display_name: "exp1",
+          project: "runs",
+          name: "exp1",
+          checkpoint: "runs/exp1/weights/best.pt",
+        },
+      ],
     });
     const toast = vi.fn();
     const { result } = renderHook(() => useResumeState({ toast }));
@@ -32,7 +37,7 @@ describe("useResumeState", () => {
       display_name: "exp1",
       project: "runs",
       name: "exp1",
-      checkpoint: "runs/exp1/weights/best.pt"
+      checkpoint: "runs/exp1/weights/best.pt",
     });
     expect(result.current.resumeListProjectRef.current).toBe("runs");
   });
@@ -46,7 +51,10 @@ describe("useResumeState", () => {
       await result.current.refreshResumeCandidates("runs", true);
     });
 
-    expect(toast).toHaveBeenCalledWith("刷新续训列表失败: network down", "error");
+    expect(toast).toHaveBeenCalledWith(
+      "刷新续训列表失败: network down",
+      "error",
+    );
     expect(result.current.resumeCandidates).toEqual([]);
   });
 });

@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, Callable, Generator
+from collections.abc import Callable, Generator
+from typing import Any
 
 from web.agent_rag import retrieve_hybrid
 
-from .graph import build_agentic_rag_graph, build_model_graph, build_tool_graph
+from .graph import build_agentic_rag_graph, build_tool_graph
 from .model_client import invoke_chat_completion
 from .types import GraphState
 
@@ -62,19 +63,7 @@ def _extract_last_user_message(messages: list[dict[str, Any]]) -> str:
 
 
 def _build_agentic_system_prompt(base_prompt: str | None) -> str:
-    control_prompt = (
-        "你是一个 Agentic RAG 助手。你可以在每一步自主选择：\n"
-        "1) 检索（action=retrieve）\n"
-        "2) 调用工具（action=tool）\n"
-        "3) 直接回答（action=final）\n"
-        "输出必须是 JSON 对象，格式之一：\n"
-        '{"action":"retrieve","query":"...","top_k":5}\n'
-        '{"action":"tool","tool":"agent.get_context","args":{"run_id":"default"}}\n'
-        '{"action":"final","reply":"给用户的最终答复","reasoning":"可选"}\n'
-        "若你引导用户到「批准修改训练配置」或需写入配置，须先以 action=tool 调用 agent.preview_patch 拿到 approval；禁止在从未调用过 preview 时仅在 final 中写去批准。\n"
-        "当你修改 distillation.w_feat 时，必须使用数值标量（int/float），禁止输出数组/列表。\n"
-        "如果工具返回需要审批（approval_token），不要自动执行 apply，改为告知用户在审批区执行。"
-    )
+    control_prompt = '你是一个 Agentic RAG 助手。你可以在每一步自主选择：\n1) 检索（action=retrieve）\n2) 调用工具（action=tool）\n3) 直接回答（action=final）\n输出必须是 JSON 对象，格式之一：\n{"action":"retrieve","query":"...","top_k":5}\n{"action":"tool","tool":"agent.get_context","args":{"run_id":"default"}}\n{"action":"final","reply":"给用户的最终答复","reasoning":"可选"}\n若你引导用户到「批准修改训练配置」或需写入配置，须先以 action=tool 调用 agent.preview_patch 拿到 approval；禁止在从未调用过 preview 时仅在 final 中写去批准。\n当你修改 distillation.w_feat 时，必须使用数值标量（int/float），禁止输出数组/列表。\n如果工具返回需要审批（approval_token），不要自动执行 apply，改为告知用户在审批区执行。'
     base = str(base_prompt or "").strip()
     if not base:
         return control_prompt
@@ -103,7 +92,12 @@ def _plan_once(payload: dict[str, Any], state: GraphState) -> dict[str, Any]:
         action = "retrieve"
     if action not in {"retrieve", "tool", "final"}:
         action = "final"
-    out: dict[str, Any] = {"status": "ok", "action": action, "reply": reply, "reasoning": reasoning}
+    out: dict[str, Any] = {
+        "status": "ok",
+        "action": action,
+        "reply": reply,
+        "reasoning": reasoning,
+    }
     if action == "retrieve":
         out["query"] = str(parsed.get("query") or _extract_last_user_message(messages))
         out["top_k"] = int(parsed.get("top_k") or 5)
@@ -179,7 +173,9 @@ def invoke_model_graph(payload: dict[str, Any]) -> dict[str, Any]:
 
         def _executor(tool: str, args: dict[str, Any], state: GraphState) -> Any:
             # 非流式调用也复用 tools graph，保持审批语义一致。
-            from web.services.backend_agent import _execute_tool  # local import to avoid circular
+            from web.services.backend_agent import (
+                _execute_tool,  # local import to avoid circular
+            )
 
             return _execute_tool(tool, args, state)
 
@@ -191,6 +187,7 @@ def invoke_model_graph(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return {"status": "error", "error": str(exc), "reply": ""}
 
+
 def _build_continuation_hint(called_tools: list[str], tool_result: dict) -> str:
     called = set(called_tools)
 
@@ -200,21 +197,13 @@ def _build_continuation_hint(called_tools: list[str], tool_result: dict) -> str:
         pass
 
     if "agent.get_context" in called and "agent.preview_patch" not in called:
-        return (
-            "你已获取配置与训练指标数据。"
-            "现在必须：1) 用自然语言输出完整的调参分析与建议值；"
-            "2) 紧接着以 action=tool 调用 agent.preview_patch 将建议打包进审批流程。"
-            "禁止直接输出 action=final 而不调用 preview_patch。"
-        )
+        return "你已获取配置与训练指标数据。现在必须：1) 用自然语言输出完整的调参分析与建议值；2) 紧接着以 action=tool 调用 agent.preview_patch 将建议打包进审批流程。禁止直接输出 action=final 而不调用 preview_patch。"
 
     if "agent.preview_patch" in called:
-        return (
-            "配置预览已完成，审批票据已签发。"
-            "请以 action=final 输出简短确认，提示用户在审批区点击「让 agent 执行」。"
-            "禁止再次调用任何工具。"
-        )
+        return "配置预览已完成，审批票据已签发。请以 action=final 输出简短确认，提示用户在审批区点击「让 agent 执行」。禁止再次调用任何工具。"
 
     return "请继续。若需工具则输出 action=tool；若已有足够信息则输出 action=final。"
+
 
 def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, None]:
     reply_full = ""
@@ -226,7 +215,9 @@ def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, N
         state_messages = list(payload.get("messages") or [])
         step = 0
 
-        from web.services.backend_agent import _execute_tool  # local import to avoid circular
+        from web.services.backend_agent import (
+            _execute_tool,  # local import to avoid circular
+        )
 
         while step < max_steps:
             step += 1
@@ -248,7 +239,11 @@ def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, N
                 "event_type": "model_output",
                 "timestamp": int(time.time() * 1000),
                 "step": step,
-                "payload": {"reply": step_reply, "reasoning": step_reasoning, "action": action},
+                "payload": {
+                    "reply": step_reply,
+                    "reasoning": step_reasoning,
+                    "action": action,
+                },
             }
             trace.append(model_event)
             yield f"data: {json.dumps(model_event, ensure_ascii=False)}\n\n"
@@ -308,11 +303,7 @@ def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, N
                     f"[tool_observation:{tool}]\n{json.dumps(tool_result, ensure_ascii=False)}",
                 )
                 # ← 加这段：注入续行指令
-                called_so_far = [
-                    ev["payload"]["tool"]
-                    for ev in trace
-                    if ev.get("event_type") == "tool_end"
-                ]
+                called_so_far = [ev["payload"]["tool"] for ev in trace if ev.get("event_type") == "tool_end"]
                 hint = _build_continuation_hint(called_so_far, tool_result)
                 state_messages = _append_observation_message(
                     state_messages,
@@ -337,7 +328,11 @@ def invoke_model_graph_stream(payload: dict[str, Any]) -> Generator[str, None, N
         yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'t': 'done', 'reply': _sanitize_blocked_reply_text(reply_full), 'reasoning': reasoning_full, 'events': trace}, ensure_ascii=False)}\n\n"
     except Exception as exc:
-        err = {"event_type": "error", "timestamp": int(time.time() * 1000), "payload": {"message": str(exc)}}
+        err = {
+            "event_type": "error",
+            "timestamp": int(time.time() * 1000),
+            "payload": {"message": str(exc)},
+        }
         yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
         # 兼容旧前端
         err = {"t": "error", "message": str(exc)}

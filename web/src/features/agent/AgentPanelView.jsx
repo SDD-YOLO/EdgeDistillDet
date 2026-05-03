@@ -4,20 +4,23 @@ import remarkGfm from "remark-gfm";
 import { TextField } from "../../components/forms/TextField";
 import { Button } from "../../components/ui/button";
 import { AGENT_QUICK_PROMPTS } from "./constants/agentPrompts";
-import { sanitizeBlockedCommandHints, softenAgentBubbleText } from "./utils/agentTextUtils";
+import {
+  sanitizeBlockedCommandHints,
+  softenAgentBubbleText,
+} from "./utils/agentTextUtils";
 
 function MarkdownText({ text, className = "" }) {
   let value = String(text || "");
-  
+
   // 安全处理：将可能残留的字面量 \n 转为真正换行
   value = value
     .replace(/\\n/g, "\n")
     .replace(/\\t/g, "\t")
     .replace(/\\\\/g, "\\");
-  
+
   // Markdown 硬换行（两个空格 + 换行）
   value = value.replace(/\n/g, "  \n");
-    return (
+  return (
     <ReactMarkdown
       className={`agent-markdown ${className}`.trim()}
       remarkPlugins={[remarkGfm]}
@@ -35,7 +38,7 @@ function MarkdownText({ text, className = "" }) {
             <pre className="agent-md-code-block">
               <code {...props}>{children}</code>
             </pre>
-          )
+          ),
       }}
     >
       {value}
@@ -67,20 +70,29 @@ function ChatBubbleBody({
       .trim();
 
   const rawText = content ?? "";
-  const text = role === "agent" ? softenAgentBubbleText(rawText, !!streaming) : rawText;
-  const tools = Array.isArray(toolsUsed)
-    ? toolsUsed.filter(Boolean)
-    : [];
+  const text =
+    role === "agent" ? softenAgentBubbleText(rawText, !!streaming) : rawText;
+  const tools = Array.isArray(toolsUsed) ? toolsUsed.filter(Boolean) : [];
   const rounds = Array.isArray(traceRounds) ? traceRounds : [];
   const modelLabel = String(modelName || "").trim();
 
   // 仅显示真实工具回合：存在工具名或存在 JSON 代码块
   const toolRounds = rounds.filter(
-    (r) => !!r?.tool?.name || (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0)
+    (r) =>
+      !!r?.tool?.name ||
+      (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0),
   );
   const hasToolRounds = toolRounds.length > 0;
-  const showStreamingPlaceholder = role === "agent" && !!streaming && !hasToolRounds && !String(text || "").trim();
-  const showToolStreamingPlaceholder = role === "agent" && !!streaming && hasToolRounds && !String(text || "").trim();
+  const showStreamingPlaceholder =
+    role === "agent" &&
+    !!streaming &&
+    !hasToolRounds &&
+    !String(text || "").trim();
+  const showToolStreamingPlaceholder =
+    role === "agent" &&
+    !!streaming &&
+    hasToolRounds &&
+    !String(text || "").trim();
 
   useEffect(() => {
     if (role !== "agent") return;
@@ -89,7 +101,8 @@ function ChatBubbleBody({
     if (!listEl) return;
     traceAutoFollowRef.current = true;
     const onTraceScroll = () => {
-      const distance = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+      const distance =
+        listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
       traceAutoFollowRef.current = distance < 60;
     };
     listEl.addEventListener("scroll", onTraceScroll, { passive: true });
@@ -119,7 +132,15 @@ function ChatBubbleBody({
       // 完成后：强制滚到底部展示最终结果
       listEl.scrollTop = listEl.scrollHeight;
     }
-  }, [role, hasToolRounds, streaming, toolRounds.length, traceRounds, bubbleIndex, traceExpanded]);
+  }, [
+    role,
+    hasToolRounds,
+    streaming,
+    toolRounds.length,
+    traceRounds,
+    bubbleIndex,
+    traceExpanded,
+  ]);
 
   useEffect(() => {
     if (role !== "agent") return;
@@ -137,7 +158,9 @@ function ChatBubbleBody({
   if (showStreamingPlaceholder) {
     return (
       <div className="agent-bubble-simple" ref={bubbleRef}>
-        {modelLabel ? <div className="agent-model-label">模型：{modelLabel}</div> : null}
+        {modelLabel ? (
+          <div className="agent-model-label">模型：{modelLabel}</div>
+        ) : null}
         <div className="agent-answer-content">处理中...</div>
       </div>
     );
@@ -149,7 +172,9 @@ function ChatBubbleBody({
       <div className="agent-bubble-nested" ref={bubbleRef}>
         {/* Outer bubble - white background for final answer */}
         <div className="agent-answer-bubble-outer">
-          {modelLabel ? <div className="agent-model-label">模型：{modelLabel}</div> : null}
+          {modelLabel ? (
+            <div className="agent-model-label">模型：{modelLabel}</div>
+          ) : null}
           {/* Tool trace details with JSON code blocks */}
           <details
             className="agent-trace-details-nested"
@@ -160,7 +185,8 @@ function ChatBubbleBody({
               if (e.currentTarget.open) {
                 requestAnimationFrame(() => {
                   if (traceListRef.current) {
-                    traceListRef.current.scrollTop = traceListRef.current.scrollHeight;
+                    traceListRef.current.scrollTop =
+                      traceListRef.current.scrollHeight;
                   }
                 });
               }
@@ -172,16 +198,27 @@ function ChatBubbleBody({
             </summary>
             <ol className="agent-trace-list-nested" ref={traceListRef}>
               {toolRounds.map((r, tidx) => (
-                <li key={`trace-${tidx}-${r.round}`} className="agent-trace-item-nested">
+                <li
+                  key={`trace-${tidx}-${r.round}`}
+                  className="agent-trace-item-nested"
+                >
                   <div className="agent-trace-round-title">第 {r.round} 轮</div>
                   <div className="agent-trace-reply-snippet">
-                    {typeof r.reply === "string" ? sanitizeTraceText(r.reply).slice(0, 2000) : ""}
+                    {typeof r.reply === "string"
+                      ? sanitizeTraceText(r.reply).slice(0, 2000)
+                      : ""}
                   </div>
-                  {Array.isArray(r.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0 ? (
+                  {Array.isArray(r.jsonCodeBlocks) &&
+                  r.jsonCodeBlocks.length > 0 ? (
                     <div className="agent-trace-json-blocks">
-                      <div className="agent-trace-tool-label">JSON 代码块（{r.jsonCodeBlocks.length}）</div>
+                      <div className="agent-trace-tool-label">
+                        JSON 代码块（{r.jsonCodeBlocks.length}）
+                      </div>
                       {r.jsonCodeBlocks.map((b, bidx) => (
-                        <pre key={`trace-json-${tidx}-${bidx}`} className="agent-trace-pre-nested">
+                        <pre
+                          key={`trace-json-${tidx}-${bidx}`}
+                          className="agent-trace-pre-nested"
+                        >
                           {sanitizeTraceText(b)}
                         </pre>
                       ))}
@@ -190,9 +227,13 @@ function ChatBubbleBody({
                   <div className="agent-trace-tool">
                     {r.tool?.name ? (
                       <>
-                        <span className="agent-trace-tool-label">工具: {r.tool.name}</span>
+                        <span className="agent-trace-tool-label">
+                          工具: {r.tool.name}
+                        </span>
                         <pre className="agent-trace-pre-nested">
-                          {sanitizeTraceText(JSON.stringify(r.toolResultSummary ?? {}, null, 2))}
+                          {sanitizeTraceText(
+                            JSON.stringify(r.toolResultSummary ?? {}, null, 2),
+                          )}
                         </pre>
                       </>
                     ) : null}
@@ -219,7 +260,9 @@ function ChatBubbleBody({
   // Simple answer bubble (no reasoning)
   return (
     <div className="agent-bubble-simple" ref={bubbleRef}>
-      {modelLabel ? <div className="agent-model-label">模型：{modelLabel}</div> : null}
+      {modelLabel ? (
+        <div className="agent-model-label">模型：{modelLabel}</div>
+      ) : null}
       {tools.length > 0 ? (
         <div className="agent-bubble-tools" role="list" aria-label="已使用工具">
           {tools.map((name) => (
@@ -265,7 +308,7 @@ function AgentPanelView({
   input,
   setInput,
   resizeChatInput,
-  send
+  send,
 }) {
   const latestAgentIndex = (() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -281,16 +324,34 @@ function AgentPanelView({
   const exportIconRef = useRef(null);
 
   return (
-    <div className={`tab-panel console-module-panel ${active ? "active" : ""}`} id="panel-agent" aria-hidden={!active}>
+    <div
+      className={`tab-panel console-module-panel ${active ? "active" : ""}`}
+      id="panel-agent"
+      aria-hidden={!active}
+    >
       <div className="agent-layout">
         <div className="agent-sidebar">
-          <h3 className="sidebar-title"><span className="material-icons">hub</span>连接与工具</h3>
+          <h3 className="sidebar-title">
+            <span className="material-icons">hub</span>连接与工具
+          </h3>
           <div className="agent-settings-card md3-surface-container">
             <h4>外部 API 配置</h4>
             <div className="form-row stacked-row">
-              <TextField label="Agent API 地址" value={apiUrl} onChange={setApiUrl} />
-              <TextField label="API Token (可选)" value={apiKey} onChange={setApiKey} />
-              <TextField label="模型名 / Endpoint ID" value={apiModel} onChange={setApiModel} />
+              <TextField
+                label="Agent API 地址"
+                value={apiUrl}
+                onChange={setApiUrl}
+              />
+              <TextField
+                label="API Token (可选)"
+                value={apiKey}
+                onChange={setApiKey}
+              />
+              <TextField
+                label="模型名 / Endpoint ID"
+                value={apiModel}
+                onChange={setApiModel}
+              />
             </div>
             <div className="launch-actions" style={{ marginTop: 12 }}>
               <Button variant="secondary" onClick={saveConfig}>
@@ -302,8 +363,12 @@ function AgentPanelView({
             </div>
           </div>
           <div className="agent-common-tools md3-surface-container">
-            <h4 className="tools-title"><span className="material-icons">build</span>常用工具</h4>
-            <p className="tools-desc">点击后将对应问句发送到对话，并自动请求 Agent。</p>
+            <h4 className="tools-title">
+              <span className="material-icons">build</span>常用工具
+            </h4>
+            <p className="tools-desc">
+              点击后将对应问句发送到对话，并自动请求 Agent。
+            </p>
             <div className="tools-actions" style={{ flexWrap: "wrap" }}>
               {AGENT_QUICK_PROMPTS.map((p) => (
                 <Button
@@ -324,7 +389,9 @@ function AgentPanelView({
         <div className="agent-main">
           <div className="agent-chat-panel">
             <div className="chat-header">
-              <h3><span className="material-icons">chat</span>对话</h3>
+              <h3>
+                <span className="material-icons">chat</span>对话
+              </h3>
               <div className="chat-controls">
                 <Button
                   type="button"
@@ -336,18 +403,38 @@ function AgentPanelView({
                   onClick={onExportSession}
                   aria-label="导出会话"
                 >
-                  <span ref={exportIconRef} className="material-icons">download</span>
+                  <span ref={exportIconRef} className="material-icons">
+                    download
+                  </span>
                 </Button>
-                <Button size="icon" variant="outline" className="btn-icon-sm" onClick={onClearMessages}>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="btn-icon-sm"
+                  onClick={onClearMessages}
+                >
                   <span className="material-icons">delete_sweep</span>
                 </Button>
               </div>
             </div>
-            <div id="agent-chat-messages" ref={chatMessagesRef} className="chat-messages">
+            <div
+              id="agent-chat-messages"
+              ref={chatMessagesRef}
+              className="chat-messages"
+            >
               {messages.map((msg, index) => (
-                <div key={msg._messageId || `${msg.role}-${index}`} className={`chat-message ${msg.role}`}>
-                  <div className={`message-avatar ${msg.role === "agent" ? "agent-avatar" : "user-avatar"}`}>
-                    <span className="material-icons">{msg.role === "agent" ? "smart_toy" : "person"}</span>
+                <div
+                  key={msg._messageId || `${msg.role}-${index}`}
+                  className={`chat-message ${msg.role}`}
+                >
+                  <div
+                    className={`message-avatar ${
+                      msg.role === "agent" ? "agent-avatar" : "user-avatar"
+                    }`}
+                  >
+                    <span className="material-icons">
+                      {msg.role === "agent" ? "smart_toy" : "person"}
+                    </span>
                   </div>
                   <div className="message-content">
                     <ChatBubbleBody
@@ -361,9 +448,14 @@ function AgentPanelView({
                       traceRounds={msg.traceRounds}
                       traceOpen={msg.traceOpen}
                       bubbleIndex={index}
-                      isLatestAgentBubble={msg.role === "agent" && index === latestAgentIndex}
+                      isLatestAgentBubble={
+                        msg.role === "agent" && index === latestAgentIndex
+                      }
                       relayMayMissReasoning={
-                        msg.role === "agent" && relayReasoningHint && !msg.reasoningApi && !msg.kind
+                        msg.role === "agent" &&
+                        relayReasoningHint &&
+                        !msg.reasoningApi &&
+                        !msg.kind
                       }
                     />
                   </div>
@@ -386,15 +478,23 @@ function AgentPanelView({
                 role="region"
                 aria-labelledby="agent-approval-dialog-title"
               >
-                <h2 id="agent-approval-dialog-title" className="md-dialog-title md3-dialog-headline">
+                <h2
+                  id="agent-approval-dialog-title"
+                  className="md-dialog-title md3-dialog-headline"
+                >
                   批准修改训练配置？
                 </h2>
                 <p className="md-dialog-support md3-dialog-supporting">
-                  确认后请使用下方按钮让 Agent 调用工具写入 configs/distill_config.yaml 并刷新训练配置表单。
+                  确认后请使用下方按钮让 Agent 调用工具写入
+                  configs/distill_config.yaml 并刷新训练配置表单。
                 </p>
-                {approvalChangeSummary && Array.isArray(approvalChangeSummary.paths) && approvalChangeSummary.paths.length > 0 ? (
+                {approvalChangeSummary &&
+                Array.isArray(approvalChangeSummary.paths) &&
+                approvalChangeSummary.paths.length > 0 ? (
                   <div className="agent-approval-diff-wrap">
-                    <h3 className="agent-approval-diff-title">变更摘要（服务端核对）</h3>
+                    <h3 className="agent-approval-diff-title">
+                      变更摘要（服务端核对）
+                    </h3>
                     <table className="agent-approval-diff-table">
                       <thead>
                         <tr>
@@ -410,10 +510,18 @@ function AgentPanelView({
                             <td className="agent-diff-path">{row.path}</td>
                             <td>{row.kind || "—"}</td>
                             <td>
-                              <code>{row.before === undefined ? "（缺失）" : JSON.stringify(row.before)}</code>
+                              <code>
+                                {row.before === undefined
+                                  ? "（缺失）"
+                                  : JSON.stringify(row.before)}
+                              </code>
                             </td>
                             <td>
-                              <code>{row.after === undefined ? "（缺失）" : JSON.stringify(row.after)}</code>
+                              <code>
+                                {row.after === undefined
+                                  ? "（缺失）"
+                                  : JSON.stringify(row.after)}
+                              </code>
                             </td>
                           </tr>
                         ))}
@@ -426,7 +534,11 @@ function AgentPanelView({
                   </p>
                 )}
                 <div className="md-dialog-actions md3-dialog-actions agent-approval-actions">
-                  <Button type="button" variant="ghost" onClick={onCloseApproval}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={onCloseApproval}
+                  >
                     取消
                   </Button>
                   <Button
@@ -436,7 +548,8 @@ function AgentPanelView({
                     onClick={sendAgentExecuteApproval}
                     disabled={loading || !approvalToken}
                   >
-                    <span className="material-icons">smart_toy</span>让 agent 执行
+                    <span className="material-icons">smart_toy</span>让 agent
+                    执行
                   </Button>
                 </div>
               </div>

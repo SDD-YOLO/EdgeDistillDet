@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 try:
     from langgraph.graph import END, START, StateGraph
@@ -47,6 +48,7 @@ except Exception:
 
         def compile(self):
             return _CompiledMiniGraph(self._nodes, self._edges, self._cond_edges)
+
 
 from .types import GraphState
 
@@ -161,7 +163,10 @@ def build_agentic_rag_graph(
             "response": output,
         }
         if tool:
-            updates["tool_call"] = {"tool": tool, "args": args if isinstance(args, dict) else {}}
+            updates["tool_call"] = {
+                "tool": tool,
+                "args": args if isinstance(args, dict) else {},
+            }
         return updates
 
     def retrieve_node(state: GraphState) -> GraphState:

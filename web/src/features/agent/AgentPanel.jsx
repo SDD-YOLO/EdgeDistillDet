@@ -1,18 +1,25 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { executeAgentTool, fetchAgentPrompts, fetchAgentTools, previewAgentPatch } from "../../api/agentApi";
+import {
+  executeAgentTool,
+  fetchAgentPrompts,
+  fetchAgentTools,
+  previewAgentPatch,
+} from "../../api/agentApi";
 import { fetchDistillConfig } from "../../api/configApi";
 import { broadcastDistillConfigUpdate } from "../../constants/distillConfigSync";
 import AgentPanelView from "./AgentPanelView";
-import { buildDisplayReplyAndReasoning, extractReplyAndReasoningFromPayload } from "../../utils/agentPayload";
+import {
+  buildDisplayReplyAndReasoning,
+  extractReplyAndReasoningFromPayload,
+} from "../../utils/agentPayload";
 import {
   extractPatchFromResult,
   hasConfigMutationAfter,
-  summarizeToolResultForTrace
+  summarizeToolResultForTrace,
 } from "../../utils/patchHelpers";
 import { extractToolCallFromText } from "../../utils/toolHelpers";
 import { requestAgentWithFallback } from "./agentRuntime";
 import { sanitizeBlockedCommandHints } from "./utils/agentTextUtils";
-
 
 const resolveModelName = (apiModel) => {
   const value = String(apiModel || "").trim();
@@ -20,7 +27,9 @@ const resolveModelName = (apiModel) => {
 };
 
 const isArkApiUrl = (apiUrl) => {
-  const text = String(apiUrl || "").trim().toLowerCase();
+  const text = String(apiUrl || "")
+    .trim()
+    .toLowerCase();
   return text.includes("ark.") && text.includes("/api/v");
 };
 
@@ -33,7 +42,13 @@ const extractAllFenceBodies = (text) => {
   const out = [];
   const re = /```([^\n`]*)\n?([\s\S]*?)```/g;
   let m;
-  while ((m = re.exec(raw)) !== null) out.push({ lang: String(m[1] || "").trim().toLowerCase(), body: String(m[2] || "") });
+  while ((m = re.exec(raw)) !== null)
+    out.push({
+      lang: String(m[1] || "")
+        .trim()
+        .toLowerCase(),
+      body: String(m[2] || ""),
+    });
   return out;
 };
 const extractJsonCodeBlocks = (text) => {
@@ -58,10 +73,10 @@ const extractJsonCodeBlocks = (text) => {
     const normalized = JSON.stringify(
       {
         tool: inlineToolCall.tool,
-        args: inlineToolCall.args || {}
+        args: inlineToolCall.args || {},
       },
       null,
-      2
+      2,
     );
     if (!out.includes(normalized)) out.push(normalized);
   }
@@ -91,23 +106,44 @@ function loadStoredAgentMessages() {
       if (!Array.isArray(rounds)) return rounds;
       return rounds.map((r) => {
         if (!r || typeof r !== "object") return r;
-        const reply = typeof r.reply === "string" ? sanitizeBlockedCommandHints(r.reply) : r.reply;
-        const reasoning = typeof r.reasoning === "string" ? sanitizeBlockedCommandHints(r.reasoning) : r.reasoning;
+        const reply =
+          typeof r.reply === "string"
+            ? sanitizeBlockedCommandHints(r.reply)
+            : r.reply;
+        const reasoning =
+          typeof r.reasoning === "string"
+            ? sanitizeBlockedCommandHints(r.reasoning)
+            : r.reasoning;
         const jsonCodeBlocks = Array.isArray(r.jsonCodeBlocks)
-          ? r.jsonCodeBlocks.map((b) => (typeof b === "string" ? sanitizeBlockedCommandHints(b) : b))
+          ? r.jsonCodeBlocks.map((b) =>
+              typeof b === "string" ? sanitizeBlockedCommandHints(b) : b,
+            )
           : r.jsonCodeBlocks;
         return { ...r, reply, reasoning, jsonCodeBlocks };
       });
     };
     const loaded = p.map((msg) => {
       if (!msg || typeof msg !== "object") return msg;
-      if (msg.role !== "agent") return { ...msg, _messageId: msg._messageId || nextMessageId() };
-      const content = typeof msg.content === "string" ? sanitizeBlockedCommandHints(msg.content) : msg.content;
+      if (msg.role !== "agent")
+        return { ...msg, _messageId: msg._messageId || nextMessageId() };
+      const content =
+        typeof msg.content === "string"
+          ? sanitizeBlockedCommandHints(msg.content)
+          : msg.content;
       const reasoningApi =
-        typeof msg.reasoningApi === "string" ? sanitizeBlockedCommandHints(msg.reasoningApi) : msg.reasoningApi;
+        typeof msg.reasoningApi === "string"
+          ? sanitizeBlockedCommandHints(msg.reasoningApi)
+          : msg.reasoningApi;
       const traceRounds = sanitizeTraceRounds(msg.traceRounds);
       // 历史消息恢复时统一清掉 streaming，避免旧会话残留状态干扰本轮加载占位与流式判定
-      return { ...msg, content, reasoningApi, traceRounds, streaming: false, _messageId: msg._messageId || nextMessageId() };
+      return {
+        ...msg,
+        content,
+        reasoningApi,
+        traceRounds,
+        streaming: false,
+        _messageId: msg._messageId || nextMessageId(),
+      };
     });
     const repaired = [];
     for (const msg of loaded) {
@@ -116,8 +152,9 @@ function loadStoredAgentMessages() {
         repaired.push({
           role: "agent",
           kind: "history_gap",
-          content: "（已修复）检测到历史会话中丢失了一条助手消息，这里为占位提示。",
-          _messageId: nextMessageId()
+          content:
+            "（已修复）检测到历史会话中丢失了一条助手消息，这里为占位提示。",
+          _messageId: nextMessageId(),
         });
       }
       repaired.push(msg);
@@ -126,11 +163,20 @@ function loadStoredAgentMessages() {
       if (m?.role !== "agent" || !Array.isArray(m?.traceRounds)) return acc;
       return (
         acc +
-        m.traceRounds.filter((r) => !!r?.tool?.name || (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0)).length
+        m.traceRounds.filter(
+          (r) =>
+            !!r?.tool?.name ||
+            (Array.isArray(r?.jsonCodeBlocks) && r.jsonCodeBlocks.length > 0),
+        ).length
       );
     }, 0);
-    const loadedStreamingCount = repaired.reduce((acc, m) => acc + (m?.role === "agent" && m?.streaming ? 1 : 0), 0);
-    const loadedTailRoles = repaired.slice(-4).map((m) => String(m?.role || ""));
+    const loadedStreamingCount = repaired.reduce(
+      (acc, m) => acc + (m?.role === "agent" && m?.streaming ? 1 : 0),
+      0,
+    );
+    const loadedTailRoles = repaired
+      .slice(-4)
+      .map((m) => String(m?.role || ""));
     return repaired;
   } catch {
     return [];
@@ -138,9 +184,15 @@ function loadStoredAgentMessages() {
 }
 
 function AgentPanel({ toast, active }) {
-  const [apiUrl, setApiUrl] = useState(() => window.localStorage.getItem("edge_distill_agent_api_url") || "");
-  const [apiKey, setApiKey] = useState(() => window.localStorage.getItem("edge_distill_agent_api_key") || "");
-  const [apiModel, setApiModel] = useState(() => window.localStorage.getItem("edge_distill_agent_api_model") || "");
+  const [apiUrl, setApiUrl] = useState(
+    () => window.localStorage.getItem("edge_distill_agent_api_url") || "",
+  );
+  const [apiKey, setApiKey] = useState(
+    () => window.localStorage.getItem("edge_distill_agent_api_key") || "",
+  );
+  const [apiModel, setApiModel] = useState(
+    () => window.localStorage.getItem("edge_distill_agent_api_model") || "",
+  );
   const [messages, setMessages] = useState(() => loadStoredAgentMessages());
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -174,7 +226,9 @@ function AgentPanel({ toast, active }) {
       const settleToBottom = (attempt = 0) => {
         box.scrollTop = box.scrollHeight;
         shouldStickToBottomRef.current = true;
-        const gap = Math.round(box.scrollHeight - box.scrollTop - box.clientHeight);
+        const gap = Math.round(
+          box.scrollHeight - box.scrollTop - box.clientHeight,
+        );
         if (gap <= 1 || attempt >= 3) return;
         window.requestAnimationFrame(() => {
           const latestBox = chatMessagesRef.current;
@@ -184,17 +238,26 @@ function AgentPanel({ toast, active }) {
       };
       settleToBottom();
       shouldStickToBottomRef.current = true;
-      const gapAfterScroll = Math.round(box.scrollHeight - box.scrollTop - box.clientHeight);
+      const gapAfterScroll = Math.round(
+        box.scrollHeight - box.scrollTop - box.clientHeight,
+      );
       window.requestAnimationFrame(() => {
         const finalBox = chatMessagesRef.current;
         if (!finalBox || !active) return;
-        const finalGap = Math.round(finalBox.scrollHeight - finalBox.scrollTop - finalBox.clientHeight);
+        const finalGap = Math.round(
+          finalBox.scrollHeight - finalBox.scrollTop - finalBox.clientHeight,
+        );
         if (finalGap > 1 && shouldStickToBottomRef.current) {
           const recoverSettle = (attempt = 0) => {
             const currentBox = chatMessagesRef.current;
-            if (!currentBox || !active || !shouldStickToBottomRef.current) return;
+            if (!currentBox || !active || !shouldStickToBottomRef.current)
+              return;
             currentBox.scrollTop = currentBox.scrollHeight;
-            const recoverGap = Math.round(currentBox.scrollHeight - currentBox.scrollTop - currentBox.clientHeight);
+            const recoverGap = Math.round(
+              currentBox.scrollHeight -
+                currentBox.scrollTop -
+                currentBox.clientHeight,
+            );
             if (recoverGap <= 1 || attempt >= 2) return;
             window.requestAnimationFrame(() => recoverSettle(attempt + 1));
           };
@@ -245,10 +308,12 @@ function AgentPanel({ toast, active }) {
     const borderTop = parseFloat(computed.borderTopWidth) || 0;
     const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
     const isBorderBox = computed.boxSizing === "border-box";
-    const maxHeight = lineHeight * 3 + paddingTop + paddingBottom + borderTop + borderBottom;
+    const maxHeight =
+      lineHeight * 3 + paddingTop + paddingBottom + borderTop + borderBottom;
     el.style.height = "auto";
     const postAutoScrollHeight = el.scrollHeight;
-    const requiredHeight = postAutoScrollHeight + (isBorderBox ? borderTop + borderBottom : 0);
+    const requiredHeight =
+      postAutoScrollHeight + (isBorderBox ? borderTop + borderBottom : 0);
     const appliedHeight = Math.min(requiredHeight, maxHeight);
     el.style.height = `${appliedHeight}px`;
     el.style.overflowY = requiredHeight > maxHeight ? "auto" : "hidden";
@@ -261,7 +326,10 @@ function AgentPanel({ toast, active }) {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(AGENT_CHAT_STORAGE_KEY, JSON.stringify(messages));
+      window.localStorage.setItem(
+        AGENT_CHAT_STORAGE_KEY,
+        JSON.stringify(messages),
+      );
     } catch {
       /* quota or private mode */
     }
@@ -270,8 +338,14 @@ function AgentPanel({ toast, active }) {
   const exportAgentSession = () => {
     try {
       const blob = new Blob(
-        [JSON.stringify({ exportedAt: new Date().toISOString(), messages }, null, 2)],
-        { type: "application/json" }
+        [
+          JSON.stringify(
+            { exportedAt: new Date().toISOString(), messages },
+            null,
+            2,
+          ),
+        ],
+        { type: "application/json" },
       );
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -287,7 +361,10 @@ function AgentPanel({ toast, active }) {
   const saveConfig = () => {
     window.localStorage.setItem("edge_distill_agent_api_url", apiUrl.trim());
     window.localStorage.setItem("edge_distill_agent_api_key", apiKey.trim());
-    window.localStorage.setItem("edge_distill_agent_api_model", apiModel.trim());
+    window.localStorage.setItem(
+      "edge_distill_agent_api_model",
+      apiModel.trim(),
+    );
     toast("Agent API 配置已保存", "success");
   };
 
@@ -295,7 +372,10 @@ function AgentPanel({ toast, active }) {
     let contract = null;
     let prompts = null;
     try {
-      [contract, prompts] = await Promise.all([fetchAgentTools(), fetchAgentPrompts()]);
+      [contract, prompts] = await Promise.all([
+        fetchAgentTools(),
+        fetchAgentPrompts(),
+      ]);
     } catch {
       try {
         contract = await fetchAgentTools();
@@ -305,16 +385,26 @@ function AgentPanel({ toast, active }) {
       prompts = null;
     }
     const toolList = Array.isArray(contract?.tools)
-      ? contract.tools.map((t) => `- ${t.name}: input=${JSON.stringify(t.input || {})}, output=${t.output || ""}`).join("\n")
+      ? contract.tools
+          .map(
+            (t) =>
+              `- ${t.name}: input=${JSON.stringify(t.input || {})}, output=${
+                t.output || ""
+              }`,
+          )
+          .join("\n")
       : "- agent.get_context\n- agent.preview_patch\n- agent.apply_patch_with_approval\n- agent.list_run_history\n- agent.rollback_run_config";
-    const yamlPrompt = typeof prompts?.chat_system_prompt === "string" ? prompts.chat_system_prompt : "";
+    const yamlPrompt =
+      typeof prompts?.chat_system_prompt === "string"
+        ? prompts.chat_system_prompt
+        : "";
     if (yamlPrompt.trim()) {
       return yamlPrompt.replaceAll("{{tool_list}}", toolList);
     }
     return [
       "你是训练参数优化 Agent，专注于 YOLO 蒸馏训练场景。",
       "## 可用工具",
-      toolList
+      toolList,
     ].join("\n");
   };
 
@@ -322,7 +412,7 @@ function AgentPanel({ toast, active }) {
     userText,
     maxRounds = 6,
     forceAllowMutationTools = false,
-    turnStartTs = Date.now()
+    turnStartTs = Date.now(),
   }) => {
     agentSlotIndexRef.current = -1;
     let missingSlotLogged = false;
@@ -356,8 +446,8 @@ function AgentPanel({ toast, active }) {
             toolsUsed: [],
             streaming: true,
             traceOpen: false,
-            modelName: resolvedModelName
-          }
+            modelName: resolvedModelName,
+          },
         ];
       });
     }
@@ -371,7 +461,7 @@ function AgentPanel({ toast, active }) {
           reply: "",
           reasoning: "",
           jsonCodeBlocks: [],
-          tool: null
+          tool: null,
         });
       }
       return roundMap.get(key);
@@ -381,35 +471,64 @@ function AgentPanel({ toast, active }) {
       ? ({ reply, reasoning, event }) => {
           if (event?.event_type === "model_output") {
             const step = event.step || 1;
-            const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+            const payload =
+              event.payload && typeof event.payload === "object"
+                ? event.payload
+                : {};
             const row = upsertRound(step);
             row.reply = String(payload.reply || reply || "");
             row.reasoning = String(payload.reasoning || reasoning || "");
             row.jsonCodeBlocks = extractJsonCodeBlocks(row.reply);
           } else if (event?.event_type === "tool_end") {
             const step = event.step || 1;
-            const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+            const payload =
+              event.payload && typeof event.payload === "object"
+                ? event.payload
+                : {};
             const row = upsertRound(step);
-            row.tool = { name: String(payload.tool || ""), args: payload.args || {} };
-            row.toolResultSummary = summarizeToolResultForTrace(payload.tool, payload.result);
+            row.tool = {
+              name: String(payload.tool || ""),
+              args: payload.args || {},
+            };
+            row.toolResultSummary = summarizeToolResultForTrace(
+              payload.tool,
+              payload.result,
+            );
             toolLogs.push({
-              call: { tool: String(payload.tool || ""), args: payload.args || {} },
-              result: normalizeToolExecutionResult(payload.result)
+              call: {
+                tool: String(payload.tool || ""),
+                args: payload.args || {},
+              },
+              result: normalizeToolExecutionResult(payload.result),
             });
           } else if (event?.event_type === "retrieval_hit") {
             const step = event.step || 1;
-            const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+            const payload =
+              event.payload && typeof event.payload === "object"
+                ? event.payload
+                : {};
             const row = upsertRound(step);
-            const retrievalJson = JSON.stringify({ retrieval: payload }, null, 2);
+            const retrievalJson = JSON.stringify(
+              { retrieval: payload },
+              null,
+              2,
+            );
             if (!row.jsonCodeBlocks.includes(retrievalJson)) {
               row.jsonCodeBlocks.push(retrievalJson);
             }
           }
-          const traceForUi = Array.from(roundMap.values()).sort((a, b) => a.round - b.round);
+          const traceForUi = Array.from(roundMap.values()).sort(
+            (a, b) => a.round - b.round,
+          );
           setMessages((prev) => {
             const next = [...prev];
             const idx = agentSlotIndexRef.current;
-            if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
+            if (
+              idx >= 0 &&
+              idx < next.length &&
+              next[idx].role === "agent" &&
+              next[idx].streaming
+            ) {
               next[idx] = {
                 ...next[idx],
                 content: reply || "",
@@ -417,7 +536,7 @@ function AgentPanel({ toast, active }) {
                 streaming: true,
                 traceRounds: traceForUi,
                 traceOpen: traceForUi.some((r) => !!r.tool?.name),
-                modelName: resolvedModelName
+                modelName: resolvedModelName,
               };
             } else if (!missingSlotLogged) {
               missingSlotLogged = true;
@@ -462,13 +581,15 @@ function AgentPanel({ toast, active }) {
         ragOptions: { mode: "hybrid", top_k: 5 },
         toolPolicy: {
           allow_mutation_tools: true,
-          allow_auto_apply: false
+          allow_auto_apply: false,
         },
-        maxSteps: Math.max(2, Number(maxRounds || 6))
+        maxSteps: Math.max(2, Number(maxRounds || 6)),
       });
       payload = result.payload;
       target = result.target;
-      const parsed = extractReplyAndReasoningFromPayload(payload?.reply || payload);
+      const parsed = extractReplyAndReasoningFromPayload(
+        payload?.reply || payload,
+      );
       reply = parsed.reply;
       const built = buildDisplayReplyAndReasoning(reply, parsed.reasoning);
       displayReply = built.displayReply;
@@ -478,7 +599,12 @@ function AgentPanel({ toast, active }) {
         setMessages((prev) => {
           const next = [...prev];
           const idx = agentSlotIndexRef.current;
-          if (idx >= 0 && idx < next.length && next[idx].role === "agent" && next[idx].streaming) {
+          if (
+            idx >= 0 &&
+            idx < next.length &&
+            next[idx].role === "agent" &&
+            next[idx].streaming
+          ) {
             next[idx] = { ...next[idx], streaming: false };
           }
           return next;
@@ -487,7 +613,9 @@ function AgentPanel({ toast, active }) {
       throw error;
     }
 
-    const finalTraceRounds = Array.from(roundMap.values()).sort((a, b) => a.round - b.round);
+    const finalTraceRounds = Array.from(roundMap.values()).sort(
+      (a, b) => a.round - b.round,
+    );
     const toolNames = toolLogs.map((t) => t.call.tool).filter(Boolean);
 
     if (prefersRelay && target?.kind === "backend-relay") {
@@ -503,7 +631,7 @@ function AgentPanel({ toast, active }) {
             traceOpen: finalTraceRounds.some((r) => !!r.tool?.name),
             modelName: payload?.model || resolvedModelName,
             streaming: false,
-            reasoningApi: displayReasoning || ""
+            reasoningApi: displayReasoning || "",
           };
         }
         return next;
@@ -518,15 +646,22 @@ function AgentPanel({ toast, active }) {
       target,
       toolLogs,
       streamedRelay: target?.kind === "backend-relay",
-      traceRounds: finalTraceRounds
+      traceRounds: finalTraceRounds,
     };
   };
 
   const applyPreviewResponseToUi = (preview, source) => {
-    const cs = preview.change_summary && typeof preview.change_summary === "object" ? preview.change_summary : null;
+    const cs =
+      preview.change_summary && typeof preview.change_summary === "object"
+        ? preview.change_summary
+        : null;
     const changedCount = Array.isArray(cs?.paths) ? cs.paths.length : 0;
     const hasApprovalToken = !!preview?.approval_token;
-    if (!hasApprovalToken || changedCount <= 0 || preview?.need_approval === false) {
+    if (
+      !hasApprovalToken ||
+      changedCount <= 0 ||
+      preview?.need_approval === false
+    ) {
       setApprovalOpen(false);
       setApprovalChangeSummary(null);
       setApprovalToken("");
@@ -536,8 +671,9 @@ function AgentPanel({ toast, active }) {
         ...prev,
         {
           role: "agent",
-          content: "当前没有检测到需要写入的参数改动。是否需要我提供一版参数修改方案？"
-        }
+          content:
+            "当前没有检测到需要写入的参数改动。是否需要我提供一版参数修改方案？",
+        },
       ]);
       toast("未检测到实际参数变更，已跳过参数写入流程。", "success");
       return;
@@ -551,7 +687,7 @@ function AgentPanel({ toast, active }) {
       source === "tool"
         ? "已通过工具触发审批预览，可在对话区「批准修改训练配置」中采纳。"
         : "已生成配置 patch 预览，可在对话区「批准修改训练配置」中采纳或让 Agent 执行。",
-      "success"
+      "success",
     );
   };
 
@@ -589,7 +725,14 @@ function AgentPanel({ toast, active }) {
       const preview = await previewAgentPatch({ patch });
       applyPreviewResponseToUi(preview, "markdown");
     } catch (error) {
-      setMessages((prev) => [...prev, { _messageId: nextMessageId(), role: "agent", content: `Patch 校验失败: ${error.message}` }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          _messageId: nextMessageId(),
+          role: "agent",
+          content: `Patch 校验失败: ${error.message}`,
+        },
+      ]);
       toast(`Patch 校验失败: ${error.message}`, "error");
     }
   };
@@ -614,16 +757,27 @@ function AgentPanel({ toast, active }) {
     setLoading(true);
     if (clearInput) setInput("");
     setMessages((prev) => {
-      return [...prev, { _messageId: nextMessageId(), role: "user", content: text }];
+      return [
+        ...prev,
+        { _messageId: nextMessageId(), role: "user", content: text },
+      ];
     });
     const turnStartTs = Date.now();
     try {
-      const { payload, reply, displayReply, displayReasoning, target, toolLogs, streamedRelay, traceRounds } =
-        await runAgentWithTools({
-          userText: text,
-          forceAllowMutationTools: allowMutationForThisTurn,
-          turnStartTs
-        });
+      const {
+        payload,
+        reply,
+        displayReply,
+        displayReasoning,
+        target,
+        toolLogs,
+        streamedRelay,
+        traceRounds,
+      } = await runAgentWithTools({
+        userText: text,
+        forceAllowMutationTools: allowMutationForThisTurn,
+        turnStartTs,
+      });
       const data = payload;
       if (!streamedRelay) {
         const names = toolLogs.map((t) => t.call.tool);
@@ -636,8 +790,8 @@ function AgentPanel({ toast, active }) {
             toolsUsed: names,
             modelName: resolveModelName(apiModel),
             ...(displayReasoning ? { reasoningApi: displayReasoning } : {}),
-            ...(traceRounds?.length ? { traceRounds } : {})
-          }
+            ...(traceRounds?.length ? { traceRounds } : {}),
+          },
         ]);
       }
       if (target.kind === "openai") {
@@ -648,17 +802,28 @@ function AgentPanel({ toast, active }) {
       /* 已成功 apply/rollback 时：不得再跑 syncApprovalFromToolLogs，否则会命中同一条 toolLogs 里更早的 preview_patch，再次打开对话区审批（死循环） */
       const configMutationDone = toolLogs.some(
         (t) =>
-          (t.call?.tool === "agent.apply_patch_with_approval" || t.call?.tool === "agent.rollback_run_config") &&
-          t.result?.status === "ok"
+          (t.call?.tool === "agent.apply_patch_with_approval" ||
+            t.call?.tool === "agent.rollback_run_config") &&
+          t.result?.status === "ok",
       );
       if (configMutationDone) {
         for (let i = toolLogs.length - 1; i >= 0; i -= 1) {
           const { call, result } = toolLogs[i];
           if (!result || result.status !== "ok") continue;
-          if (call?.tool === "agent.rollback_run_config" && result.config && typeof result.config === "object") {
+          if (
+            call?.tool === "agent.rollback_run_config" &&
+            result.config &&
+            typeof result.config === "object"
+          ) {
             const mt =
-              typeof result.file_mtime_ns === "number" ? { file_mtime_ns: result.file_mtime_ns } : {};
-            broadcastDistillConfigUpdate(result.config, "agent-chat-rollback", mt);
+              typeof result.file_mtime_ns === "number"
+                ? { file_mtime_ns: result.file_mtime_ns }
+                : {};
+            broadcastDistillConfigUpdate(
+              result.config,
+              "agent-chat-rollback",
+              mt,
+            );
             break;
           }
         }
@@ -667,9 +832,11 @@ function AgentPanel({ toast, active }) {
         if (!allowMutationForThisTurn) {
           const hasPatchLikeOutput = !!extractPatchFromResult(data, reply);
           const hasMutationToolInLogs = toolLogs.some((t) =>
-            ["agent.preview_patch", "agent.apply_patch_with_approval", "agent.rollback_run_config"].includes(
-              String(t.call?.tool || "")
-            )
+            [
+              "agent.preview_patch",
+              "agent.apply_patch_with_approval",
+              "agent.rollback_run_config",
+            ].includes(String(t.call?.tool || "")),
           );
           if (hasPatchLikeOutput || hasMutationToolInLogs) {
             setMessages((prev) => [
@@ -677,8 +844,9 @@ function AgentPanel({ toast, active }) {
               {
                 _messageId: nextMessageId(),
                 role: "agent",
-                content: "当前请求未明确要求修改参数，已跳过配置写入。是否需要我提供一版参数修改方案？"
-              }
+                content:
+                  "当前请求未明确要求修改参数，已跳过配置写入。是否需要我提供一版参数修改方案？",
+              },
             ]);
           }
         } else if (!syncApprovalFromToolLogs(toolLogs)) {
@@ -686,15 +854,27 @@ function AgentPanel({ toast, active }) {
         }
         if (!configMutationDone && allowMutationForThisTurn) {
           const replyText = String(reply || "");
-          const approvalCta = /批准修改训练配置|在对话区[「"']*批准|审批区|让\s*agent\s*执行|去审批|请.*批准|核对以下变更/.test(replyText);
-          const hasPreviewInLogs = toolLogs.some((t) => t.call?.tool === "agent.preview_patch");
+          const approvalCta =
+            /批准修改训练配置|在对话区[「"']*批准|审批区|让\s*agent\s*执行|去审批|请.*批准|核对以下变更/.test(
+              replyText,
+            );
+          const hasPreviewInLogs = toolLogs.some(
+            (t) => t.call?.tool === "agent.preview_patch",
+          );
           if (approvalCta && !hasPreviewInLogs) {
             await maybeHandlePatch(data, reply);
           }
         }
       }
     } catch (error) {
-      setMessages((prev) => [...prev, { _messageId: nextMessageId(), role: "agent", content: `请求失败: ${error.message}` }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          _messageId: nextMessageId(),
+          role: "agent",
+          content: `请求失败: ${error.message}`,
+        },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -713,7 +893,10 @@ function AgentPanel({ toast, active }) {
   const testAgentApi = async () => {
     if (!apiUrl.trim()) return toast("请先填写 Agent API 地址", "warning");
     if (isArkApiUrl(apiUrl) && !apiModel.trim()) {
-      toast("检测到方舟地址，请先填写「模型名 / Endpoint ID」（如 ep-xxxxxx）", "warning");
+      toast(
+        "检测到方舟地址，请先填写「模型名 / Endpoint ID」（如 ep-xxxxxx）",
+        "warning",
+      );
       return;
     }
     try {
@@ -724,7 +907,7 @@ function AgentPanel({ toast, active }) {
         modelName: resolveModelName(apiModel),
         text: "ping",
         mode: "test",
-        systemPrompt: ""
+        systemPrompt: "",
       });
       toast(`Agent API 连接成功（${target.kind}）`, "success");
     } catch (error) {
@@ -753,8 +936,8 @@ function AgentPanel({ toast, active }) {
           approval_token: approvalToken,
           run_id: approvalRunId || "default",
           request_hash: approvalRequestHash || undefined,
-          operator: "agent-ui"
-        }
+          operator: "agent-ui",
+        },
       });
       const execResult = normalizeToolExecutionResult(rawExecResult);
       setApprovalOpen(false);
@@ -780,7 +963,11 @@ function AgentPanel({ toast, active }) {
         }
       }
       if (cfgToBroadcast && typeof cfgToBroadcast === "object") {
-        broadcastDistillConfigUpdate(cfgToBroadcast, "agent-ui-apply", mtimeExtra);
+        broadcastDistillConfigUpdate(
+          cfgToBroadcast,
+          "agent-ui-apply",
+          mtimeExtra,
+        );
       }
     } catch (error) {
       toast(`执行失败: ${error.message}`, "error");

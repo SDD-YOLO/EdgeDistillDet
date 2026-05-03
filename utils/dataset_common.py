@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List
-
 
 SIZE_BINS = {
     "tiny": (0, 16 * 16),
@@ -41,11 +39,11 @@ def size_category(area_px: float) -> str:
     return "large"
 
 
-def parse_label(label_path: str, width: int, height: int) -> List[Dict]:
-    items: List[Dict] = []
+def parse_label(label_path: str, width: int, height: int) -> list[dict]:
+    items: list[dict] = []
     if not os.path.exists(label_path):
         return items
-    with open(label_path, "r", encoding="utf-8") as file_obj:
+    with open(label_path, encoding="utf-8") as file_obj:
         for line in file_obj:
             parts = line.strip().split()
             if len(parts) < 5:

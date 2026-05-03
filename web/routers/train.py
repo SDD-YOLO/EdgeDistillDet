@@ -6,9 +6,8 @@ from fastapi.responses import JSONResponse
 from web.schemas import DisplayStartRequest, ExportStartRequest, TrainStartRequest
 from web.services import display_service, export_service, train_service
 
-from utils.device_detect import list_all_devices
-
 router = APIRouter()
+
 
 @router.get("/api/output/check")
 def output_check(project: str = Query("runs")):
@@ -79,9 +78,7 @@ def start_export(payload: ExportStartRequest):
 def start_export_help():
     return JSONResponse(
         status_code=405,
-        content={
-            "detail": "Use POST to /api/export/start with JSON body. Example: {'format':'onnx','export_path':'./test.onnx','weight':'models/yolov8n.pt'}"
-        },
+        content={"detail": "Use POST to /api/export/start with JSON body. Example: {'format':'onnx','export_path':'./test.onnx','weight':'models/yolov8n.pt'}"},
     )
 
 
