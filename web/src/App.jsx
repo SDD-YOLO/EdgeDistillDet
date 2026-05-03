@@ -1,9 +1,11 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Activity, Bot, Moon, Settings2, Sun } from "lucide-react";
 import newLogoDark from "../static/new_logo-dark.png";
 import newLogoLight from "../static/new_logo-light.png";
 import { Button } from "./components/ui/button";
 import { useToast } from "./hooks/useToast";
+import { CONFIG_GROUPS } from "./constants/configGroups";
+import { useTrainingPanelController } from "./features/training/hooks/useTrainingPanelController";
 
 const TrainingPanel = lazy(() => import("./features/training/TrainingPanel"));
 const MetricsPanel = lazy(() => import("./features/metrics/MetricsPanel"));
@@ -37,6 +39,17 @@ function App() {
   ];
   const activeNav =
     navItems.find((item) => item.key === activeTab) || navItems[0];
+
+  const controller = useTrainingPanelController({ toast: push });
+  const [configActiveGroup, setConfigActiveGroup] = useState(
+    CONFIG_GROUPS[0]?.id || "",
+  );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState(() =>
+    CONFIG_GROUPS.filter((g) => g.priority === "high").map((g) => g.id),
+  );
+
+  const allGroupIds = useMemo(() => CONFIG_GROUPS.map((group) => group.id), []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -73,7 +86,9 @@ function App() {
                 className={`sidebar-nav-btn ${
                   activeTab === item.key ? "active" : ""
                 }`}
-                onClick={() => setActiveTab(item.key)}
+                onClick={() => {
+                  setActiveTab(item.key);
+                }}
                 variant="ghost"
                 legacy={false}
               >
@@ -114,6 +129,118 @@ function App() {
                 <p>{activeNav.desc}</p>
               </div>
             </div>
+            {activeTab === "config-center" ? (
+              <div className="config-center-toolbar-inline">
+                <Button
+                  variant="ghost"
+                  onClick={controller.startTraining}
+                  disabled={controller.running}
+                >
+                  <span className="material-icons">play_arrow</span>
+                  开始训练
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={controller.stopTraining}
+                  disabled={!controller.running}
+                >
+                  <span className="material-icons">stop</span>
+                  停止训练
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await controller.saveConfig();
+                      push("配置已保存", "success");
+                    } catch (error) {
+                      push(error.message, "error");
+                    }
+                  }}
+                  disabled={controller.running}
+                >
+                  <span className="material-icons">save</span>
+                  保存配置
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={controller.loadConfigFromFile}
+                  disabled={controller.running}
+                >
+                  <span className="material-icons">file_open</span>
+                  加载配置
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={controller.resetForm}
+                  disabled={controller.running}
+                >
+                  <span className="material-icons">restart_alt</span>
+                  重置表单
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={controller.startInference}
+                  disabled={controller.inferRunning}
+                >
+                  <span className="material-icons">visibility</span>
+                  开始推理
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={controller.stopInference}
+                  disabled={!controller.inferRunning}
+                >
+                  <span className="material-icons">stop</span>
+                  停止推理
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={controller.startExport}
+                  disabled={controller.exportRunning}
+                >
+                  <span className="material-icons">file_upload</span>
+                  开始导出
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={controller.stopExport}
+                  disabled={!controller.exportRunning}
+                >
+                  <span className="material-icons">stop</span>
+                  停止导出
+                </Button>
+                <div className="config-toolbar-search inline">
+                  <input
+                    className="md-input"
+                    placeholder="搜索参数（名称、键值、说明）..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                  <div className="config-toolbar-actions compact">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setExpandedGroups(allGroupIds)}
+                    >
+                      展开全部
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setExpandedGroups([])}
+                    >
+                      折叠全部
+                    </Button>
+                  </div>
+                </div>
+                <div className="config-toolbar-hint inline">
+                  {controller.renderedHint ||
+                    controller.runHint ||
+                    "统一管理所有训练、蒸馏、导出与推理配置。"}
+                </div>
+              </div>
+            ) : null}
           </header>
 
           <Suspense
@@ -128,6 +255,13 @@ function App() {
                 toast={push}
                 active={activeTab === "config-center"}
                 view={activeTab}
+                groups={CONFIG_GROUPS}
+                configActiveGroup={configActiveGroup}
+                onConfigNavigate={(g) => setConfigActiveGroup(g)}
+                controller={controller}
+                searchQuery={searchQuery}
+                expandedGroups={expandedGroups}
+                setExpandedGroups={setExpandedGroups}
               />
               <MetricsPanel toast={push} active={activeTab === "metrics"} />
               <AgentPanel toast={push} active={activeTab === "agent"} />

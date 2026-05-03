@@ -1,0 +1,306 @@
+/* Styles for config center (nav + group card headers + layout) */
+
+.main-grid,
+.config-center-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.config-center-left,
+.config-center-main {
+  min-width: 0;
+}
+
+.config-center-left {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.config-center-main {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.config-center-main .config-group-card {
+  width: 100%;
+}
+
+.config-group-card {
+  color: var(--md-on-surface);
+  min-width: 0;
+}
+
+.config-group-header,
+.config-group-header strong,
+.config-group-header small,
+.config-group-header .group-count,
+.config-field-card,
+.config-field-card .config-field-hint,
+.config-field-card .form-group label,
+.config-field-card .md-field-label,
+.config-field-card .md-input,
+.config-field-card .md-select,
+.config-field-card .m3-select-value {
+  color: var(--md-on-surface);
+}
+
+.config-field-card .config-field-hint,
+.config-group-header small,
+.config-group-header .group-count {
+  color: var(--md-on-surface-variant);
+}
+
+.config-group-header strong,
+.config-group-header small,
+.config-group-header .group-count,
+.config-field-card .config-field-hint,
+.config-field-card .form-group label,
+.config-field-card .md-field-label {
+  line-height: 1.25;
+}
+
+.config-group-header strong,
+.config-nav-item .config-nav-item-text strong {
+  font-weight: 700;
+}
+
+.config-group-header small,
+.config-nav-item .config-nav-item-text small,
+.config-field-card .config-field-hint {
+  font-weight: 500;
+}
+
+.config-field-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.config-field-card {
+  min-width: 0;
+}
+
+.config-field-card .form-group {
+  gap: 8px;
+}
+
+.config-field-card .md-field {
+  align-items: stretch;
+}
+
+.config-field-card .md-input,
+.config-field-card .md-select,
+.config-field-card .m3-select-trigger {
+  color: var(--md-on-surface);
+}
+
+.config-field-card .md-field-label {
+  color: var(--md-on-surface-variant);
+  letter-spacing: 0.02em;
+}
+
+.config-center-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.config-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.config-toolbar-actions.compact {
+  gap: 8px;
+}
+
+.config-toolbar-search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.config-toolbar-search .md-input {
+  flex: 1 1 320px;
+  min-width: 220px;
+}
+
+.config-toolbar-hint {
+  color: var(--md-on-surface-variant);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Config group header should look like unified buttons */
+.config-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  gap: 12px;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.config-group-header .group-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-group-header .group-header-left .material-icons {
+  color: var(--md-primary);
+}
+
+.config-group-header:hover {
+  background: var(--md-surface-container-low);
+  border-color: var(--md-outline-variant);
+}
+
+.config-group-header:focus {
+  outline: none;
+  box-shadow: var(--shadow-1);
+}
+
+/* Config navigation (left panel) - unify button styles */
+.config-nav-panel {
+  padding: 0;
+}
+
+.config-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.config-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--md-on-surface);
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.config-nav-item .material-icons {
+  color: var(--md-primary);
+  font-size: 20px;
+}
+
+.config-nav-item .config-nav-item-text strong {
+  display: block;
+  font-size: 14px;
+}
+
+.config-nav-item .config-nav-item-text small {
+  display: block;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+
+.config-nav-item:hover {
+  background: var(--md-surface-container-low);
+  border-color: var(--md-outline-variant);
+}
+
+.config-nav-item.active {
+  background: var(--md-surface-container-high);
+  border-color: color-mix(in srgb, var(--md-primary) 12%, transparent);
+  box-shadow: var(--shadow-1);
+}
+
+.config-nav-badge {
+  margin-left: auto;
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.config-group-selector {
+  display: flex;
+  justify-content: stretch;
+  align-self: start;
+}
+
+.config-group-selector .config-nav-panel {
+  width: 100%;
+}
+
+.config-center-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.config-center-shell > :is(.config-group-selector, .config-center-layout) {
+  min-width: 0;
+}
+
+.config-center-toolbar-inline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.config-center-toolbar-inline .btn-content {
+  white-space: nowrap;
+}
+
+.config-center-toolbar-inline .config-toolbar-search.inline {
+  flex: 1 1 360px;
+  min-width: 260px;
+}
+
+.config-center-toolbar-inline .config-toolbar-hint.inline {
+  flex-basis: 100%;
+  margin-top: 4px;
+}
+
+.config-center-toolbar-inline .config-toolbar-actions.compact {
+  margin-left: auto;
+}
+
+@media (max-width: 1400px) {
+  .config-field-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1080px) {
+  .config-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .config-field-grid {
+    grid-template-columns: 1fr;
+  }
+}

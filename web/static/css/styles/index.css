@@ -12,5 +12,6 @@
 @import "./components/dialog.css";
 @import "./components/toast.css";
 @import "./components/log.css";
+@import "./components/config-center.css";
 @import "./animations.css";
 @import "./responsive.css";

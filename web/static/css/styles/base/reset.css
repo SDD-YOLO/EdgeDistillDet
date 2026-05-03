@@ -248,6 +248,9 @@ body {
   background: var(--md-surface-container-low);
   box-shadow: var(--shadow-1);
   padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .console-page-meta {
@@ -839,6 +842,8 @@ body {
 .log-card {
   padding: 16px;
 }
+
+/* Config-center related styles moved to components/config-center.css */
 
 .form-grid {
   display: grid;

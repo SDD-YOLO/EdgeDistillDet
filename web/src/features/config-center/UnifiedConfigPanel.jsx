@@ -1,8 +1,5 @@
-import { useMemo, useState } from "react";
-import { Button } from "../../components/ui/button";
+import { useEffect, useMemo } from "react";
 import { ParameterField } from "../../components/forms/ParameterField";
-import ConfigNav from "./ConfigNav";
-import YamlPreview from "./YamlPreview";
 
 export default function UnifiedConfigPanel({
   groups,
@@ -10,33 +7,21 @@ export default function UnifiedConfigPanel({
   getValue,
   setValue,
   pickLocalPath,
-  previewPayload,
   running,
-  isResumeMode,
-  renderedHint,
-  runHint,
-  onSave,
-  onLoad,
-  onReset,
-  onStartTraining,
-  onStopTraining,
-  onStartDisplay,
-  onStopDisplay,
-  onStartExport,
-  onStopExport,
-  trainingRunning,
-  displayRunning,
-  exportRunning,
+  activeGroup,
+  searchQuery,
+  expandedGroups,
+  setExpandedGroups,
 }) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [expandedGroups, setExpandedGroups] = useState(() =>
-    groups.filter((g) => g.priority === "high").map((g) => g.id),
-  );
+  const visibleGroups = useMemo(() => {
+    if (!activeGroup) return groups;
+    return groups.filter((group) => group.id === activeGroup);
+  }, [groups, activeGroup]);
 
   const filteredGroups = useMemo(() => {
-    if (!searchQuery?.trim()) return groups;
+    if (!searchQuery?.trim()) return visibleGroups;
     const query = searchQuery.toLowerCase();
-    return groups
+    return visibleGroups
       .map((group) => ({
         ...group,
         params: (group.params || []).filter((param) => {
@@ -49,13 +34,13 @@ export default function UnifiedConfigPanel({
         }),
       }))
       .filter((group) => group.params.length > 0);
-  }, [groups, searchQuery]);
+  }, [visibleGroups, searchQuery]);
 
   const highlightedKeys = useMemo(() => {
     if (!searchQuery?.trim()) return new Set();
     const query = searchQuery.toLowerCase();
     return new Set(
-      groups
+      visibleGroups
         .flatMap((group) => group.params || [])
         .filter((param) => {
           const label = String(param.label || "").toLowerCase();
@@ -67,7 +52,7 @@ export default function UnifiedConfigPanel({
         })
         .map((param) => param.path || param.key),
     );
-  }, [groups, searchQuery]);
+  }, [visibleGroups, searchQuery]);
 
   const toggleGroup = (groupId) => {
     setExpandedGroups((prev) =>
@@ -77,8 +62,14 @@ export default function UnifiedConfigPanel({
     );
   };
 
-  const expandAll = () => setExpandedGroups(groups.map((group) => group.id));
-  const collapseAll = () => setExpandedGroups([]);
+  useEffect(() => {
+    if (!activeGroup) return;
+    setExpandedGroups((prev) =>
+      prev.includes(activeGroup) ? prev : [...prev, activeGroup],
+    );
+    const el = document.getElementById(`config-group-${activeGroup}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [activeGroup, setExpandedGroups]);
 
   const handleBrowse = async (param) => {
     const title = `选择${param.label}`;
@@ -92,118 +83,7 @@ export default function UnifiedConfigPanel({
   };
 
   return (
-    <section className="config-center-layout">
-      <aside className="config-center-left">
-        <div className="config-card config-center-toolbar">
-          <div className="card-header">配置中心</div>
-          <div className="config-toolbar-actions">
-            <Button
-              variant="default"
-              className="btn-start"
-              onClick={onStartTraining}
-              disabled={
-                trainingRunning || running || (isResumeMode && !trainingRunning)
-              }
-            >
-              <span className="material-icons">play_arrow</span>
-              开始训练
-            </Button>
-            <Button
-              variant="destructive"
-              className="btn-stop"
-              onClick={onStopTraining}
-              disabled={!trainingRunning}
-            >
-              <span className="material-icons">stop</span>
-              停止训练
-            </Button>
-            <Button variant="outline" onClick={onSave} disabled={running}>
-              <span className="material-icons">save</span>
-              保存配置
-            </Button>
-            <Button variant="ghost" onClick={onLoad} disabled={running}>
-              <span className="material-icons">file_open</span>
-              加载配置
-            </Button>
-            <Button variant="ghost" onClick={onReset} disabled={running}>
-              <span className="material-icons">restart_alt</span>
-              重置表单
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onStartDisplay}
-              disabled={displayRunning}
-            >
-              <span className="material-icons">visibility</span>
-              开始推理
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={onStopDisplay}
-              disabled={!displayRunning}
-            >
-              <span className="material-icons">stop</span>
-              停止推理
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onStartExport}
-              disabled={exportRunning}
-            >
-              <span className="material-icons">file_upload</span>
-              开始导出
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={onStopExport}
-              disabled={!exportRunning}
-            >
-              <span className="material-icons">stop</span>
-              停止导出
-            </Button>
-          </div>
-          <div className="config-toolbar-search">
-            <input
-              className="md-input"
-              placeholder="搜索参数（名称、键值、说明）..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            <div className="config-toolbar-actions compact">
-              <Button size="sm" variant="outline" onClick={expandAll}>
-                展开全部
-              </Button>
-              <Button size="sm" variant="outline" onClick={collapseAll}>
-                折叠全部
-              </Button>
-            </div>
-          </div>
-          <div className="config-toolbar-hint">
-            {renderedHint ||
-              runHint ||
-              "统一管理所有训练、蒸馏、导出与推理配置。"}
-          </div>
-        </div>
-
-        <ConfigNav
-          groups={filteredGroups}
-          activeGroup={
-            filteredGroups.find((g) => expandedGroups.includes(g.id))?.id ||
-            filteredGroups[0]?.id ||
-            ""
-          }
-          onNavigate={(groupId) => {
-            const el = document.getElementById(`config-group-${groupId}`);
-            if (el) {
-              el.scrollIntoView({ behavior: "smooth", block: "start" });
-              setExpandedGroups((prev) =>
-                prev.includes(groupId) ? prev : [...prev, groupId],
-              );
-            }
-          }}
-        />
-      </aside>
-
+    <section className="main-grid config-center-layout">
       <div className="config-center-main">
         {filteredGroups.map((group) => {
           const isOpen = expandedGroups.includes(group.id);
@@ -272,10 +152,6 @@ export default function UnifiedConfigPanel({
             </article>
           );
         })}
-      </div>
-
-      <div className="config-center-right">
-        <YamlPreview payload={previewPayload} />
       </div>
     </section>
   );

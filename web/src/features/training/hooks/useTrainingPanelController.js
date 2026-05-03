@@ -423,6 +423,59 @@ export function useTrainingPanelController({ toast }) {
     }
   }, [running, setLogs, setRunning, toast]);
 
+  useEffect(() => {
+    const handler = (ev) => {
+      const act = ev.detail?.action;
+      switch (act) {
+        case "startTraining":
+          startTraining();
+          break;
+        case "stopTraining":
+          stopTraining();
+          break;
+        case "saveConfig":
+          saveConfig();
+          break;
+        case "loadConfig":
+          loadConfigFromFile();
+          break;
+        case "resetForm":
+          resetForm();
+          break;
+        case "startDisplay":
+          startInference();
+          break;
+        case "stopDisplay":
+          stopInference();
+          break;
+        case "startExport":
+          startExport();
+          break;
+        case "stopExport":
+          stopExport();
+          break;
+        case "expandAll":
+        case "collapseAll":
+          // UI-only controls handled by the config panel; ignore here.
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener("config:action", handler);
+    return () => window.removeEventListener("config:action", handler);
+  }, [
+    startTraining,
+    stopTraining,
+    saveConfig,
+    loadConfigFromFile,
+    resetForm,
+    startInference,
+    stopInference,
+    startExport,
+    stopExport,
+  ]);
+
   return {
     form,
     setForm,

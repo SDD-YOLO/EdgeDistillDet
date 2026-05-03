@@ -431,3 +431,7 @@ P3 长期 Docker 容器化、结构化日志、完整测试覆盖、监控告警
 `pyproject.toml` 修改 拆分 optional-dependencies
 `core/distillation/` 新增 训练回调推送指标
 `web/src/features/metrics/` 优化 前端状态管理和 API 调用
+
+[ ]控制台中配置和运行控制台的拆分
+[ ]运行配置header的错位bug
+[ ]新增一个运行日志的tab标签
