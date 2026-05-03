@@ -10,15 +10,12 @@ const MetricsPanel = lazy(() => import("./features/metrics/MetricsPanel"));
 const AgentPanel = lazy(() => import("./features/agent/AgentPanel"));
 
 function App() {
-  const [activeTab, setActiveTab] = useState("training");
+  const [activeTab, setActiveTab] = useState("config-center");
   const [theme, setTheme] = useState(() => window.localStorage.getItem("edgedistilldet-theme") || "light");
   const { toasts, push } = useToast();
   const navItems = [
-    { key: "training", icon: Settings2, label: "训练配置", desc: "配置蒸馏参数并启动训练流程" },
-    { key: "advanced", icon: Settings2, label: "高级参数配置", desc: "集中配置训练与蒸馏高级参数" },
+    { key: "config-center", icon: Settings2, label: "配置中心", desc: "统一管理训练、蒸馏、导出与推理参数" },
     { key: "metrics", icon: Activity, label: "指标监控", desc: "查看训练曲线与关键性能指标" },
-    { key: "display", icon: Settings2, label: "可视化推理", desc: "配置推理与结果展示参数" },
-    { key: "export", icon: Settings2, label: "导出模型", desc: "配置模型导出" },
     { key: "agent", icon: Bot, label: "Agent", desc: "通过智能助手分析与辅助调参" }
   ];
   const activeNav = navItems.find((item) => item.key === activeTab) || navItems[0];
@@ -93,7 +90,7 @@ function App() {
 
           <Suspense fallback={<div className="tab-panels console-panels"><div className="panel-loading">正在加载面板...</div></div>}>
             <div className="tab-panels console-panels">
-              <TrainingPanel toast={push} active={activeTab === "training" || activeTab === "advanced" || activeTab === "display" || activeTab === "export"} view={activeTab} />
+              <TrainingPanel toast={push} active={activeTab === "config-center"} view={activeTab} />
               <MetricsPanel toast={push} active={activeTab === "metrics"} />
               <AgentPanel toast={push} active={activeTab === "agent"} />
             </div>

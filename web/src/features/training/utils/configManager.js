@@ -6,7 +6,7 @@ import {
   DISPLAY_ADVANCED_SECTIONS,
   EXPORT_ADVANCED_SECTIONS,
   TRAINING_ADVANCED_SECTIONS
-} from "../../../constants/advancedParameterCatalog";
+} from "../../../constants/configGroups";
 
 export function normalizeWandbForUi(wandb) {
   if (!wandb || typeof wandb !== "object") return wandb;

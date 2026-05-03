@@ -11,6 +11,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# 兼容 `python web/app.py` 直接启动
+WEB_DIR = Path(__file__).resolve().parent
+BASE_DIR = WEB_DIR.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -20,12 +26,6 @@ import uvicorn
 import time
 
 from core.logging import get_logger, init_logging
-
-# 兼容 `python web/app.py` 直接启动
-WEB_DIR = Path(__file__).resolve().parent
-BASE_DIR = WEB_DIR.parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
 
 from web.core.paths import STATIC_DIR, TEMPLATE_FILE
 from web.core.settings import get_bind_host, get_bind_port, get_cors_middleware_kwargs

@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import torch
-
 
 def safe_scalar(value) -> float:
     """安全标量转换，兼容标量/任意维度张量/异常值。"""
@@ -17,9 +15,13 @@ def safe_scalar(value) -> float:
         return 0.0
     if isinstance(value, (int, float)):
         return float(value)
-    if torch.is_tensor(value):
+    try:
+        import torch
+    except Exception:
+        torch = None
+    if torch is not None and torch.is_tensor(value):
         if value.numel() == 0:
-            return 0.0
+          return 0.0
         if value.numel() == 1:
             return value.detach().item()
         return value.detach().mean().item()
